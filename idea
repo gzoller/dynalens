@@ -1,0 +1,112 @@
+Idea: Supprt a "language" to get/set field values of a case class
+
+{
+  "setEqual": { "field": "age", "value": 47 }
+}
+
+or
+
+{
+  "if": {
+    "equals": { "field": "name", "value": "Greg" },
+    "then": { "setEqual": { "field": "age", "value": 50 } },
+    "else": { "setEqual": { "field": "age", "value": 30 } }
+  }
+}
+
+
+For updating, use a Scala 3 macro w/Quotes to invoke a copy() to update a param value
+
+import scala.deriving.*
+import scala.compiletime.{erasedValue, summonInline, constValue}
+import scala.quoted.*
+
+inline def updateField[T](obj: T, fieldName: String, value: Any): T =
+  ${ updateFieldImpl('obj, 'fieldName, 'value) }
+
+def updateFieldImpl[T: Type](obj: Expr[T], fieldName: Expr[String], value: Expr[Any])(using Quotes): Expr[T] = {
+  import quotes.reflect.*
+
+  val tpe = TypeRepr.of[T]
+  val cls = tpe.classSymbol.get
+
+  val fields = cls.caseFields.map(_.name)
+
+  val idx = fields.indexOf(fieldName.valueOrAbort)
+  if idx == -1 then
+    report.error(s"No field ${fieldName.valueOrAbort} in ${cls.name}")
+    '{ $obj }
+
+  val copyMethod = cls.methodMember("copy").head
+  val args = fields.map { name =>
+    if name == fieldName.valueOrAbort then
+      value.asExprOf[Any]
+    else
+      Select.unique(obj.asTerm, name).asExpr
+  }
+
+  Apply(Select.unique(obj.asTerm, "copy"), args.map(_.asTerm)).asExprOf[T]
+}
+
+
+inline def getField[T](obj: T, fieldName: String): Any =
+  ${ getFieldImpl('obj, 'fieldName) }
+
+def getFieldImpl[T: Type](obj: Expr[T], fieldName: Expr[String])(using Quotes): Expr[Any] = {
+  import quotes.reflect.*
+
+  val tpe = TypeRepr.of[T]
+  val sym = tpe.typeSymbol
+
+  val fieldNameStr = fieldName.valueOrAbort
+  val fieldSym = sym.caseFields.find(_.name == fieldNameStr)
+    .getOrElse(report.errorAndAbort(s"Field '$fieldNameStr' not found in ${sym.name}"))
+
+  val fieldValue = Select.unique(obj.asTerm, fieldNameStr)
+  fieldValue.asExpr
+}
+
+
+Other parts:
+
+def coerceTo(expectedType: TypeRepr, raw: String): Any =
+  expectedType match
+    case t if t =:= TypeRepr.of[Int] => raw.toInt
+    case t if t =:= TypeRepr.of[Boolean] => raw.toBoolean
+    case t if t =:= TypeRepr.of[Double] => raw.toDouble
+    case t if t =:= TypeRepr.of[String] => raw
+    case _ => throw new Exception(s"Unsupported type: $expectedType")
+
+
+trait FieldAccessor[T, F]:
+  def name: String
+  def get(t: T): F
+  def set(t: T, f: F): T
+
+val personAccessors: Map[String, FieldAccessor[Person, _]] =
+  Map(
+    "name" -> FieldAccessor[Person, String]("name", _.name, (p, v) => p.copy(name = v)),
+    "age"  -> FieldAccessor[Person, Int]("age", _.age, (p, v) => p.copy(age = v))
+  )
+
+case class FieldMeta[T](
+  name: String,
+  rtype: RType,
+  getter: T => Any,
+  setter: (T, Any) => T
+)
+
+// Macro to build field cache
+def buildFieldMap[T: Type]: Map[String, FieldMeta[T]] =
+  val rtype = RType.of[T].asInstanceOf[ScalaCaseClassRType]  // assuming case class
+  rtype.fields.map { field =>
+    val name = field.name
+    val fieldRType = field.fieldType
+    val getter: T => Any = (t: T) =>
+      Reflector.readField(t, name)  // from your lib — assume works
+
+    val setter: (T, Any) => T = (t, value) =>
+      Reflector.setFieldViaCopy(t, name, value)  // again, from your lib
+
+    name -> FieldMeta(name, fieldRType, getter, setter)
+  }.toMap
