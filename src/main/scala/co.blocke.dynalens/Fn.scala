@@ -229,26 +229,24 @@ case class NotEqualFn(left: Fn[Any], right: Fn[Any]) extends Fn[Boolean]:
         case (lVal, rVal) => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
     } yield result
 
-case class OpFn[I, J](
-                       left: Fn[I],
-                       right: Fn[J],
-                       op: (I, J) => Boolean
-                     ) extends Fn[Boolean]:
+case class NotFn(inner: Fn[Boolean]) extends Fn[Boolean]:
+  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[Any, DynaLensError, Boolean] =
+    inner.resolve(ctx).map(b => !b)
+
+case class AndFn(left: Fn[Boolean], right: Fn[Boolean]) extends Fn[Boolean]:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[Any, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
-    } yield op(l, r)
+    } yield l && r
 
-def and(a: Fn[Boolean], b: Fn[Boolean]): Fn[Boolean] =
-  OpFn(a, b, _ && _)
-
-def or(a: Fn[Boolean], b: Fn[Boolean]): Fn[Boolean] =
-  OpFn(a, b, _ || _)
-
-def not(inner: Fn[Boolean]): Fn[Boolean] = new Fn[Boolean]:
+case class OrFn(left: Fn[Boolean], right: Fn[Boolean]) extends Fn[Boolean]:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[Any, DynaLensError, Boolean] =
-    inner.resolve(ctx).map(b => !b)
+    for {
+      l <- left.resolve(ctx)
+      r <- right.resolve(ctx)
+    } yield l || r
+
 
 case class StartsWithFn(left: Fn[String], right: Fn[String]) extends Fn[Boolean]:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[Any, DynaLensError, Boolean] =

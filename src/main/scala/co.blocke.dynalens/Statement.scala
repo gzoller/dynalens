@@ -79,24 +79,3 @@ case class UpdateStmt[R](
             } yield ctx.updated("this", (updatedObj, dynalens))
           case None =>
             ZIO.fail(DynaLensError(s"Unable to update: no 'this' context found for path $path"))
-
-
-/*
-
-Case:  If statement in top-level block (main program)
-
-   if foo then blah  // statement--updates ctx
-
-Case: If fn
-
-   val foo = if blah then bar else wow  // returns value
-
-Case: In map fn if last (or only) statement
-
-   if foo then bar else blah   // if fn
-
-Case: In map fn if NOT last (or only) statement (eg inside a BlockFn given to map)
-
-   if foo then bar else blah   // if statement
-
-*/

@@ -1,6 +1,7 @@
 
 Things to do:
 
-[ ] - Support ZIO rather than exceptions for errors. This code will run in prod and cannot "explode". Errors must be civil.
-
-[ ] - Invent Function hierarchy for map()
+[*] - And/Or/Not
+[ ] - String functions (mutators)
+[ ] - String comparators (Fn[Boolean])
+[ ] - Implement filter functions for lists (mutates ctx)
