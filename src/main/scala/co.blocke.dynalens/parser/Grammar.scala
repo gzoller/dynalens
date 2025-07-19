@@ -28,8 +28,19 @@ object Grammar {
   def stringLiteral[$: P]: P[String] =
     P("\"" ~/ CharsWhile(_ != '"').! ~ "\"") ~ WS.?
 
+  def literalWithMethods[$: P]: P[Fn[Any]] =
+    P(stringLiteral ~ method.rep).map {
+      case (str, methods) =>
+        val base: Fn[Any] = ConstantFn(str)
+        methodChain(base, methods)
+    }
+
   def path[$: P]: P[String] = {
-    def dotField = P("." ~/ identifier).map("." + _)
+    def dotField[$: P]: P[String] =
+      P(&("." ~ identifier ~ "(").!.?).flatMap {
+        case Some(_) => Fail
+        case None    => P("." ~/ identifier).map("." + _)
+      }
     def arrayIndex = P("[" ~/ CharsWhileIn("0-9").! ~ "]").map("[" + _ + "]")
     def arrayAll = P("[" ~ "]").map(_ => "[]")
     def segment = P(arrayAll | arrayIndex | dotField)
@@ -60,7 +71,18 @@ object Grammar {
     }
 
   def getFn[$: P]: P[Fn[Any]] =
-    P(path).map(GetFn(_))
+    P(path ~ method.rep).map {
+      case (basePath, methods) =>
+        val base = GetFn(basePath)
+        methodChain(base, methods)
+    }
+  def methodChain(base: Fn[Any], calls: Seq[(String, List[Fn[Any]])]): Fn[Any] =
+    calls.foldLeft(base) {
+      case (recv, (name, args)) =>
+        stringMethods.get(name) match
+          case Some(f) => f(recv, args)
+          case None    => throw new RuntimeException(s"Unknown method: $name")
+    }
 
   def parensFn[$: P]: P[Fn[Any]] =
     P("(" ~/ expr ~ ")" ~ WS)
@@ -69,7 +91,42 @@ object Grammar {
     P(ifFn | constantFn | getFn | parensFn | blockExpr)
 
   def leafExpr[$: P]: P[Fn[Any]] =
-    P(blockExpr | ifFn | constantFn | getFn | parensFn) ~ WS0
+    P(
+      blockExpr |
+      mapFwdFn |
+      mapRevFn |
+      ifFn |
+      literalWithMethods |
+      constantFn |
+      getFn |
+      parensFn
+    ) ~ WS0
+
+  case class ToStringFn(input: Fn[Any]) extends Fn[String]:
+    def resolve(ctx: Map[String, (Any, DynaLens[?])]) =
+      input.resolve(ctx).map {
+        case null => ""
+        case v => v.toString
+      }
+
+  def stringyExpr[$: P]: P[Fn[Any]] =
+    P {
+      literalWithMethods | getFn.map(g => ToStringFn(g).asInstanceOf[Fn[Any]])
+    }
+
+  def stringConcat[$: P]: P[Fn[Any]] =
+    P(valueExpr.rep(min = 1, sep = WS0 ~ "::" ~ WS0)).map {
+      case single :: Nil => single
+      case many          => ConcatFn(many.map(_.asInstanceOf[Fn[Any]]).toList).asInstanceOf[Fn[Any]]
+    }
+
+  def expr[$: P]: P[Fn[Any]] = P(stringConcat)
+
+  def filterStmt[$: P]: P[Statement] =
+    P(path ~ ".filter(" ~/ boolExpr ~ ")").map {
+      case (p, predicate) =>
+        MapStmt(p, FilterFn(predicate))
+    }
 
   def mulDiv[$: P]: P[Fn[Any]] =
     P(leafExpr ~ (WS0 ~ CharIn("*\\/").! ~ WS0 ~ leafExpr).rep).map {
@@ -127,8 +184,6 @@ object Grammar {
 
   def boolExpr[$: P]: P[Fn[Boolean]] = orExpr
 
-  def expr[$: P]: P[Fn[Any]] = valueExpr
-
   def updateOrMapStmt[$: P]: P[Statement] =
     P(path ~ "=" ~ WS ~ expr).map {
       case (p, v) =>
@@ -141,7 +196,9 @@ object Grammar {
     }
 
   def stmt[$: P]: P[Statement] =
-    P(WS.? ~ (ifStmt | valStmt | updateOrMapStmt | blockStmt) ~ WS.?)
+    P(WS.? ~ (updateOrMapStmt | filterStmt | ifStmt | valStmt | blockStmt) ~ WS.?)
+//  def stmt[$: P]: P[Statement] =
+//    P(WS.? ~ (filterStmt | ifStmt | valStmt | updateOrMapStmt | blockStmt) ~ WS.?)
 
   def blockExpr[$: P]: P[Fn[Any]] =
     P("{" ~/ WS.? ~ stmt.rep ~ expr ~ WS.? ~ "}").map {
@@ -159,4 +216,70 @@ object Grammar {
 
   def comment[$: P]: P[Unit] =
     P("#" ~ CharsWhile(_ != '\n', min = 0) ~ ("\n" | End))
+
+  def mapFwdFn[$: P]: P[Fn[Any]] =
+    P("mapFwd(" ~/ stringLiteral.map(MapFwdFn.apply) ~ ")")
+
+  def mapRevFn[$: P]: P[Fn[Any]] =
+    P("mapRev(" ~/ stringLiteral.map(MapRevFn.apply) ~ ")")
+
+  def method[$: P]: P[(String, List[Fn[Any]])] =
+    P("." ~/ identifier ~ "(" ~/ expr.rep(sep = ","./) ~ ")")
+      .map { case (name, args) => (name, args.toList) }
+
+  val stringMethods: Map[String, (Fn[Any], List[Fn[Any]]) => Fn[Any]] = Map(
+    "startsWith" -> { (recv, args) =>
+      args.headOption match {
+        case Some(a) => StartsWithFn(recv.asInstanceOf[Fn[String]], a.asInstanceOf[Fn[String]]).asInstanceOf[Fn[Any]]
+        case None => throw new RuntimeException("startsWith() requires two String arguments")
+      }
+    },
+    "endsWith" -> { (recv, args) =>
+      args.headOption match {
+        case Some(a) => EndsWithFn(recv.asInstanceOf[Fn[String]], a.asInstanceOf[Fn[String]]).asInstanceOf[Fn[Any]]
+        case None => throw new RuntimeException("endsWith() requires two String arguments")
+      }
+    },
+    "contains" -> { (recv, args) =>
+      args.headOption match {
+        case Some(a) => ContainsFn(recv.asInstanceOf[Fn[String]], a.asInstanceOf[Fn[String]]).asInstanceOf[Fn[Any]]
+        case None => throw new RuntimeException("contains() requires two String arguments")
+      }
+    },
+    "equalsIgnoreCase" -> { (recv, args) =>
+      args.headOption match {
+        case Some(a) => EqualsIgnoreCaseFn(recv.asInstanceOf[Fn[String]], a.asInstanceOf[Fn[String]]).asInstanceOf[Fn[Any]]
+        case None => throw new RuntimeException("equalsIgnoreCase() requires two String arguments")
+      }
+    },
+    "matchesRegex" -> { (recv, args) =>
+      args.headOption match {
+        case Some(a) => MatchesRegexFn(recv.asInstanceOf[Fn[String]], a.asInstanceOf[Fn[String]]).asInstanceOf[Fn[Any]]
+        case None => throw new RuntimeException("matchesRegex() requires two String arguments")
+      }
+    },
+    "len"         -> { (recv, _) => LengthFn( recv ).asInstanceOf[Fn[Any]] },
+    "toUpperCase" -> { (recv, _) => ToUpperFn( recv ).asInstanceOf[Fn[Any]] },
+    "toLowerCase" -> { (recv, _) => ToLowerFn( recv ).asInstanceOf[Fn[Any]] },
+    "trim"        -> { (recv, _) => TrimFn( recv ).asInstanceOf[Fn[Any]] },
+    "interpolate" -> { (recv, _) =>
+      val varMap = recv match
+        case ConstantFn(s: String) =>
+          TemplateUtils.extractVariables(s).map(v => v -> GetFn(v)).toMap
+        case _ =>
+          Map.empty[String, Fn[Any]] // template is not a constant, so defer resolution
+      InterpolateFn(recv, varMap).asInstanceOf[Fn[Any]]
+    },
+    "substr"      -> { (recv, args) =>
+      args.headOption match {
+        case Some(a) => SubstringFn(recv, a.asInstanceOf[Fn[Int]], args.lift(1).map(_.asInstanceOf[Fn[Int]])).asInstanceOf[Fn[Any]]
+        case None => throw new RuntimeException("substr() requires at least 1 Int argument")
+      }
+    },
+    "replace"     -> { (recv, args) =>
+      if args.length != 2 then
+        throw new RuntimeException("replace() requires 2 arguments")
+      ReplaceFn(recv, args(0), args(1)).asInstanceOf[Fn[Any]]
+    }
+  )
 }

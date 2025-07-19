@@ -7,7 +7,7 @@ import zio.test.Assertion.*
 object SimpleFnsSpec extends ZIOSpecDefault:
 
   val testCtx: Map[String, (Any, DynaLens[?])] = Map(
-    "this" -> ("hello", null),
+    "top" -> ("hello", null),
     "s1" -> ("world", null),
     "num" -> (5, null),
     "x" -> (10, null),
@@ -38,7 +38,7 @@ object SimpleFnsSpec extends ZIOSpecDefault:
       } yield assertTrue(result == 7)
     },
     test("ConcatFn should concatenate strings") {
-      val fn = ConcatFn(List(GetFn("this"), GetFn("s1")))
+      val fn = ConcatFn(List(GetFn("top"), GetFn("s1")))
       for {
         result <- fn.resolve(testCtx)
       } yield assertTrue(result == "helloworld")
@@ -50,7 +50,7 @@ object SimpleFnsSpec extends ZIOSpecDefault:
       } yield assertTrue(result == "WORLD")
     },
     test("SubstringFn should extract substring") {
-      val fn = SubstringFn(GetFn("this"), ConstantFn(1), Some(ConstantFn(4)))
+      val fn = SubstringFn(GetFn("top"), ConstantFn(1), Some(ConstantFn(4)))
       for {
         result <- fn.resolve(testCtx)
       } yield assertTrue(result == "ell")
@@ -62,4 +62,4 @@ object SimpleFnsSpec extends ZIOSpecDefault:
         result <- fn.resolve(badCtx).either
       } yield assertTrue(result.isLeft)
     }
-  )
+  ).provide(BiMapRegistry.layer(EmptyBiMapRegistry))

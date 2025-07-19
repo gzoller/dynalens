@@ -16,11 +16,3 @@ object Parser:
       case f: Parsed.Failure      => throw new RuntimeException(f.trace().longMsg)
     }
   }
-
-  inline def run[T]( script: BlockStmt, target: T ): ZIO[Any,DynaLensError,(T,Map[String,(Any,DynaLens[?])])] =
-    val ar = dynalens[T]
-    val ctx = Map("this" -> (target,ar))
-    for {
-      resultCtx <- script.resolve(ctx)  // Map[String, (Any, Assignr[?])]
-      (resultObj, _) = resultCtx("this")
-    } yield (resultObj.asInstanceOf[T], resultCtx)

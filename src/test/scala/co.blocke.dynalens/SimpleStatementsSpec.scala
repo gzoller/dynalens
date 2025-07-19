@@ -22,9 +22,9 @@ object SimpleStatementsSpec extends ZIOSpecDefault:
     test("MapStmt should update object field") {
       val stmt = MapStmt("qty", ConstantFn(5))
       for {
-        ctx <- ZIO.succeed(Map("this" -> (sampleItem, rootAssignr)))
+        ctx <- ZIO.succeed(Map("top" -> (sampleItem, rootAssignr)))
         newCtx <- stmt.resolve(ctx)
-      } yield assertTrue(newCtx("this")._1.asInstanceOf[Item].qty == 5)
+      } yield assertTrue(newCtx("top")._1.asInstanceOf[Item].qty == 5)
     },
     test("IfStmt true branch executes") {
       val stmt = IfStmt(
@@ -33,9 +33,9 @@ object SimpleStatementsSpec extends ZIOSpecDefault:
         Some(BlockStmt(List(UpdateStmt("qty", ConstantFn(3)))))
       )
       for {
-        ctx <- ZIO.succeed(Map("this" -> (sampleItem, rootAssignr)))
+        ctx <- ZIO.succeed(Map("top" -> (sampleItem, rootAssignr)))
         newCtx <- stmt.resolve(ctx)
-      } yield assertTrue(newCtx("this")._1.asInstanceOf[Item].qty == 7)
+      } yield assertTrue(newCtx("top")._1.asInstanceOf[Item].qty == 7)
     },
     test("IfStmt false branch executes") {
       val stmt = IfStmt(
@@ -44,8 +44,8 @@ object SimpleStatementsSpec extends ZIOSpecDefault:
         Some(BlockStmt(List(UpdateStmt("qty", ConstantFn(3)))))
       )
       for {
-        ctx <- ZIO.succeed(Map("this" -> (sampleItem, rootAssignr)))
+        ctx <- ZIO.succeed(Map("top" -> (sampleItem, rootAssignr)))
         newCtx <- stmt.resolve(ctx)
-      } yield assertTrue(newCtx("this")._1.asInstanceOf[Item].qty == 3)
+      } yield assertTrue(newCtx("top")._1.asInstanceOf[Item].qty == 3)
     }
-  )
+  ).provide(BiMapRegistry.layer(EmptyBiMapRegistry))

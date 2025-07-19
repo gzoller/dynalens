@@ -26,9 +26,9 @@ object ComplexSpec extends ZIOSpecDefault:
         )
       )
       for {
-        ctx <- ZIO.succeed(Map("this" -> (order, orderAssignr)))
+        ctx <- ZIO.succeed(Map("top" -> (order, orderAssignr)))
         result <- script.resolve(ctx)
-      } yield assertTrue(result.get("this").map(_._1) == Some(Order("ORD-1",Pack("P1",2,List(Shipment("S1",List(Item("A",42,7), Item("B",42,7)),2), Shipment("S2",List(Item("C",42,7)),2))))))
+      } yield assertTrue(result.get("top").map(_._1) == Some(Order("ORD-1",Pack("P1",2,List(Shipment("S1",List(Item("A",42,7), Item("B",42,7)),2), Shipment("S2",List(Item("C",42,7)),2))))))
     },
     test("Nested BlockFn with conditional logic") {
       val script = BlockStmt(
@@ -42,13 +42,13 @@ object ComplexSpec extends ZIOSpecDefault:
         )
       )
       for {
-        ctx <- ZIO.succeed(Map("this" -> (order, orderAssignr)))
+        ctx <- ZIO.succeed(Map("top" -> (order, orderAssignr)))
         result <- script.resolve(ctx)
-      } yield assertTrue(result.get("this").map(_._1) == Some(Order("ORD-1",Pack("P1",2,List(Shipment("S1",List(Item("A",99,7), Item("B",99,7)),2), Shipment("S2",List(Item("C",99,7)),2))))))
+      } yield assertTrue(result.get("top").map(_._1) == Some(Order("ORD-1",Pack("P1",2,List(Shipment("S1",List(Item("A",99,7), Item("B",99,7)),2), Shipment("S2",List(Item("C",99,7)),2))))))
     },
     test("Failing GetFn should error") {
       for {
         result <- GetFn("notThere").resolve(Map.empty).either
       } yield assertTrue(result.isLeft)
     }
-  )
+  ).provide(BiMapRegistry.layer(EmptyBiMapRegistry))

@@ -1,7 +1,0 @@
-
-Things to do:
-
-[*] - And/Or/Not
-[ ] - String functions (mutators)
-[ ] - String comparators (Fn[Boolean])
-[ ] - Implement filter functions for lists (mutates ctx)

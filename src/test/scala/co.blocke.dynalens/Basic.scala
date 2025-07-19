@@ -88,7 +88,7 @@ object Basic extends ZIOSpecDefault:
       val inst = Shipment("abc", List(Item("a", 5), Item("b", 2), Item("c", 100)))
       val ar = dynalens[Shipment]
       for {
-        v <- ar.map("items[].qty", MultiplyFn(ConstantFn(3),MapParamFn()), inst)
+        v <- ar.map("items[].qty", MultiplyFn(ConstantFn(3),GetFn("this")), inst)
       } yield assertTrue(v == Shipment("abc", List(Item("a", 15), Item("b", 6), Item("c", 300))))
     },
     test("Map with Get function must work") {
@@ -105,4 +105,4 @@ object Basic extends ZIOSpecDefault:
         v <- ar.map("items[].qty", GetFn("items[].num"), inst)
       } yield assertTrue(v == Shipment("abc", List(Item("a", 7), Item("b", 7), Item("c", 7))))
     }
-  )
+  ).provide(BiMapRegistry.layer(EmptyBiMapRegistry))

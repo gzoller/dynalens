@@ -27,6 +27,25 @@ case class DynaLens[T](
   import DynaLens.*
   type ThisT = T
 
+  // Run a compiled lens script
+  inline def run[T](
+                     script: BlockStmt,
+                     target: T,
+                     registry: _BiMapRegistry = EmptyBiMapRegistry
+                   ): ZIO[Any, DynaLensError, (T, Map[String, (Any, DynaLens[?])])] =
+    actualRun(script, target).provide(BiMapRegistry.layer(registry))
+
+  private inline def actualRun[T](
+                                   script: BlockStmt,
+                                   target: T
+                                 ): ZIO[_BiMapRegistry, DynaLensError, (T, Map[String, (Any, DynaLens[?])])] =
+    val ctx = Map("top" -> (target, this))
+    for {
+      resultCtx <- script.resolve(ctx)
+      (resultObj, _) = resultCtx("top")
+    } yield (resultObj.asInstanceOf[T], resultCtx)
+
+
   def get(path: String, obj: T): ZIO[Any, DynaLensError, Any] = {
     val parsed = parsePath(path)
 
@@ -53,7 +72,9 @@ case class DynaLens[T](
             ._get(f, current.asInstanceOf[currentLens.ThisT])
             .flatMap {
               case list: Seq[Any] =>
-                list.lift(i) match {
+                if i < 0 && rest == Nil then // return whole Seq
+                  ZIO.succeed(list)
+                else list.lift(i) match {
                   case Some(elem) =>
                     currentLens._registry.get(f) match {
                       case Some(elemLens) =>
@@ -122,7 +143,7 @@ case class DynaLens[T](
                         dynalens: DynaLens[?]
                       ): ZIO[Any, DynaLensError, mutable.Map[String, (Any, DynaLens[?])]] = {
 
-    val ctx = mutable.Map[String, (Any, DynaLens[?])]("this" -> (current, dynalens))
+    val ctx = mutable.Map[String, (Any, DynaLens[?])]("top" -> (current, dynalens))
 
     def step(
               path: List[PathElement],
@@ -150,28 +171,44 @@ case class DynaLens[T](
     step(path, dynalens).as(ctx)
   }
 
+  // Split path at Iterables to create sub-paths
+  private def splitIntoLevels(path: List[PathElement]): List[List[PathElement]] = {
+    val (levels, current) = path.foldLeft(List.empty[List[PathElement]] -> List.empty[PathElement]) {
+      case ((acc, current), pe@IndexedField(_, -1)) =>
+        (acc :+ (current :+ pe)) -> Nil
+      case ((acc, current), pe) =>
+        acc -> (current :+ pe)
+    }
+
+    (levels :+ current).filter(_.nonEmpty)
+  }
+
   def map[R](
               path: String,
               fn: Fn[R],
               obj: T,
               outerCtx: Map[String, (Any, DynaLens[?])] = Map.empty // <-- added outer context
-            ): ZIO[Any, DynaLensError, T] =
+            ): ZIO[_BiMapRegistry, DynaLensError, T] =
 
     def processPaths(
                       paths: List[List[PathElement]],
                       refObj: Any,
                       dynalens: DynaLens[?],
                       ctx: mutable.Map[String, (Any, DynaLens[?])]
-                    ): ZIO[Any, DynaLensError, Any] =
+                    ): ZIO[_BiMapRegistry, DynaLensError, Any] =
       paths match {
         case pathParts :: Nil =>
           val partialPath = Path.partialPath(pathParts)
           for {
             in <- dynalens.get(partialPath, refObj.asInstanceOf[dynalens.ThisT])
-            _ = ctx.put("__p_", (in, null)) // assign loop param variable
+            maybeLens = pathParts.last match {
+              case IndexedField(p, _) => dynalens._registry.get(p).getOrElse(null)
+              case Field(p) => null
+            }
+            _ = ctx.put("this", (in, maybeLens)) // assign loop param variable
             enrichedCtx = outerCtx ++ ctx.toMap // <-- merge loop context with outer context
             out <- fn.resolve(enrichedCtx)
-              .mapError(_ => DynaLensError(s"Map function input value of $in is of the wrong data type."))
+//              .mapError{ e => DynaLensError(s"Map function input value of $in is of the wrong data type.")}
             updated <- dynalens.update(partialPath, out, refObj.asInstanceOf[dynalens.ThisT])
           } yield updated
 
@@ -207,18 +244,6 @@ case class DynaLens[T](
       splitPaths = splitIntoLevels(parsed)
       updated <- processPaths(splitPaths, obj, this, ctx)
     } yield updated.asInstanceOf[T]
-
-  // Split path at Iterables to create sub-paths
-  private def splitIntoLevels(path: List[PathElement]): List[List[PathElement]] = {
-    val (levels, current) = path.foldLeft(List.empty[List[PathElement]] -> List.empty[PathElement]) {
-      case ((acc, current), pe@IndexedField(_, -1)) =>
-        (acc :+ (current :+ pe)) -> Nil
-      case ((acc, current), pe) =>
-        acc -> (current :+ pe)
-    }
-
-    (levels :+ current).filter(_.nonEmpty)
-  }
 
 
 object DynaLens:
@@ -262,7 +287,7 @@ object DynaLens:
 
         '{ DynaLens[T]($updateLambdaExpr, $getLambdaExpr, $registryExpr, $typeNameExpr) }
 
-      case _ => throw new Exception("Sorry, dynalens only supports Scala case classes")
+      case x => throw new Exception(s"Sorry, dynalens only supports Scala case classes but received ${x.name}")
     }
 
   private def generateGetLambda[T: Type](quotes: Quotes, classFields: List[FieldInfoRef]): Expr[(String, T) => ZIO[Any,DynaLensError,Any]] =
