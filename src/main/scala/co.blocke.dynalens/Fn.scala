@@ -607,3 +607,45 @@ case class MapRevFn(mapName: String) extends Fn[Any]:
         }
       case None =>
         ZIO.fail(DynaLensError(s"'this' is not defined in context"))
+
+case class FormatDateFn(dateExpr: Fn[Any], pattern: Fn[String]) extends Fn[Any] {
+  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    for {
+      d <- dateExpr.resolve(ctx)
+      p <- pattern.resolve(ctx)
+      result <- d match
+        case d: java.util.Date =>
+          ZIO.attempt {
+            val sdf = new java.text.SimpleDateFormat(p)
+            sdf.format(d)
+          }.mapError(e => DynaLensError(s"Error formatting date: ${e.getMessage}"))
+        case other =>
+          ZIO.fail(DynaLensError(s"Expected java.util.Date but got ${other.getClass.getName}"))
+    } yield result
+}
+
+case class ParseDateFn(strExpr: Fn[Any], pattern: Fn[String]) extends Fn[Any] {
+  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    for {
+      s <- strExpr.resolve(ctx)
+      p <- pattern.resolve(ctx)
+      result <- s match
+        case s: String =>
+          ZIO.attempt {
+            val sdf = new java.text.SimpleDateFormat(p)
+            sdf.parse(s)
+          }.mapError(e => DynaLensError(s"Date parse error: ${e.getMessage}"))
+        case other =>
+          ZIO.fail(DynaLensError(s"Expected String for toDate but got ${other.getClass.getName}"))
+    } yield result
+}
+
+case object NowFn extends Fn[Any] {
+  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ZIO.succeed(new java.util.Date())
+}
+
+case object UUIDFn extends Fn[Any] {
+  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ZIO.succeed(java.util.UUID.randomUUID())
+}

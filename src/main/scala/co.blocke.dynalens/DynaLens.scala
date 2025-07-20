@@ -1,19 +1,13 @@
 package co.blocke.dynalens
 
 import zio.*
-import scala.deriving.*
-import scala.compiletime.{constValue, erasedValue, summonInline}
 import scala.quoted.*
 import co.blocke.scala_reflection.reflect.ReflectOnType
 import co.blocke.scala_reflection.reflect.rtypeRefs.{FieldInfoRef, ScalaClassRef, SeqRef}
-import co.blocke.scala_reflection.{RType, TypedName}
-import scala.reflect.ClassTag
-
-import scala.annotation.tailrec
+import co.blocke.scala_reflection.TypedName
 import scala.collection.mutable
 
 import Path.*
-
 
 case class DynaLensError(msg: String)
 
@@ -24,18 +18,17 @@ case class DynaLens[T](
                         _registry: Map[String, DynaLens[?]],
                         _typeName: String
                      ):
-  import DynaLens.*
   type ThisT = T
 
   // Run a compiled lens script
-  inline def run[T](
+  inline def run(
                      script: BlockStmt,
                      target: T,
                      registry: _BiMapRegistry = EmptyBiMapRegistry
                    ): ZIO[Any, DynaLensError, (T, Map[String, (Any, DynaLens[?])])] =
     actualRun(script, target).provide(BiMapRegistry.layer(registry))
 
-  private inline def actualRun[T](
+  private inline def actualRun(
                                    script: BlockStmt,
                                    target: T
                                  ): ZIO[_BiMapRegistry, DynaLensError, (T, Map[String, (Any, DynaLens[?])])] =
@@ -45,6 +38,12 @@ case class DynaLens[T](
       (resultObj, _) = resultCtx("top")
     } yield (resultObj.asInstanceOf[T], resultCtx)
 
+  def runNoZIO(script: BlockStmt, target: T, registry: _BiMapRegistry = EmptyBiMapRegistry): Either[DynaLensError, (T, Map[String, (Any, DynaLens[?])])] =
+    Unsafe.unsafe { implicit unsafe =>
+      Runtime.default.unsafe.run(
+        run(script, target, registry).either
+      ).getOrThrow()
+    }
 
   def get(path: String, obj: T): ZIO[Any, DynaLensError, Any] = {
     val parsed = parsePath(path)
@@ -302,7 +301,7 @@ object DynaLens:
         _ => List(TypeRepr.of[String], tpe),
         _ => TypeRepr.of[ZIO[Any, DynaLensError, Any]]
       ),
-      (owner, params) => {
+      (_, params) => {
         val fieldParam = params(0).asInstanceOf[Term]
         val targetParam = params(1).asInstanceOf[Term]
 
@@ -342,7 +341,7 @@ object DynaLens:
 
     val methodType = MethodType(paramNames)(_ => paramTypes, _ => TypeRepr.of[ZIO[Any, DynaLensError, T]])
 
-    Lambda(methodSym, methodType, (owner, params) => {
+    Lambda(methodSym, methodType, (_, params) => {
       val fieldParam = params(0).asInstanceOf[Term] // field: String
       val valueParam = params(1).asInstanceOf[Term] // value: Any
       val targetParam = params(2).asInstanceOf[Term] // target: T

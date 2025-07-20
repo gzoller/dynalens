@@ -2,7 +2,6 @@ package co.blocke.dynalens
 
 import zio.*
 import zio.test.*
-import zio.test.Assertion.*
 
 object SimpleFnsSpec extends ZIOSpecDefault:
 

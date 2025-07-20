@@ -10,6 +10,8 @@ case class Shipment(id: String, items:List[Item], num: Int = 2)
 case class Pack(label: String, caseSize: Int, shipments: List[Shipment])
 case class Order(id: String, pack: Pack)
 
+case class Ticket(id: java.util.UUID, when: java.util.Date)
+
 // Utility fn for testing
 def toStringCtx(ctx: Map[String, (Any,DynaLens[?])]): String = {
   val sb = new StringBuffer()

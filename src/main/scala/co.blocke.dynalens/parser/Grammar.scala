@@ -2,7 +2,6 @@ package co.blocke.dynalens
 package parser
 
 import fastparse._, NoWhitespace._
-import fastparse.Parsed.{Success, Failure}
 
 object Grammar {
 
@@ -84,23 +83,35 @@ object Grammar {
           case None    => throw new RuntimeException(s"Unknown method: $name")
     }
 
+  def argList[$: P]: P[List[Fn[Any]]] =
+    P(literalExpr.rep(sep = P("," ~ WS0)).map(_.toList))
+  def methodExpr[$: P]: P[Fn[Any]] =
+    P(terminalExpr ~ ("." ~ identifier.! ~ "(" ~ argList ~ ")").rep).map {
+      case (base, calls) => methodChain(base, calls)
+    }
+
   def parensFn[$: P]: P[Fn[Any]] =
     P("(" ~/ expr ~ ")" ~ WS)
 
   def factor[$: P]: P[Fn[Any]] =
     P(ifFn | constantFn | getFn | parensFn | blockExpr)
 
-  def leafExpr[$: P]: P[Fn[Any]] =
+  def literalExpr[$: P]: P[Fn[Any]] =
+    P(literalWithMethods | constantFn | getFn)
+
+  def terminalExpr[$: P]: P[Fn[Any]] =
     P(
-      blockExpr |
+      standaloneFnExpr |
       mapFwdFn |
       mapRevFn |
       ifFn |
-      literalWithMethods |
       constantFn |
       getFn |
       parensFn
-    ) ~ WS0
+    )
+
+  def leafExpr[$: P]: P[Fn[Any]] =
+    P(blockExpr | methodExpr | literalWithMethods) ~ WS0
 
   case class ToStringFn(input: Fn[Any]) extends Fn[String]:
     def resolve(ctx: Map[String, (Any, DynaLens[?])]) =
@@ -197,8 +208,6 @@ object Grammar {
 
   def stmt[$: P]: P[Statement] =
     P(WS.? ~ (updateOrMapStmt | filterStmt | ifStmt | valStmt | blockStmt) ~ WS.?)
-//  def stmt[$: P]: P[Statement] =
-//    P(WS.? ~ (filterStmt | ifStmt | valStmt | updateOrMapStmt | blockStmt) ~ WS.?)
 
   def blockExpr[$: P]: P[Fn[Any]] =
     P("{" ~/ WS.? ~ stmt.rep ~ expr ~ WS.? ~ "}").map {
@@ -262,7 +271,7 @@ object Grammar {
     "toUpperCase" -> { (recv, _) => ToUpperFn( recv ).asInstanceOf[Fn[Any]] },
     "toLowerCase" -> { (recv, _) => ToLowerFn( recv ).asInstanceOf[Fn[Any]] },
     "trim"        -> { (recv, _) => TrimFn( recv ).asInstanceOf[Fn[Any]] },
-    "interpolate" -> { (recv, _) =>
+    "template"    -> { (recv, _) =>
       val varMap = recv match
         case ConstantFn(s: String) =>
           TemplateUtils.extractVariables(s).map(v => v -> GetFn(v)).toMap
@@ -280,6 +289,41 @@ object Grammar {
       if args.length != 2 then
         throw new RuntimeException("replace() requires 2 arguments")
       ReplaceFn(recv, args(0), args(1)).asInstanceOf[Fn[Any]]
+    },
+    "dateFmt" -> { (recv, args) =>
+      args.headOption match {
+        case Some(fmtFn) =>
+          FormatDateFn(recv, fmtFn.asInstanceOf[Fn[String]]) // recv should be Fn[java.util.Date]
+        case None => throw new RuntimeException("format() requires a pattern argument")
+      }
+    },
+    "toDate" -> { (recv, args) =>
+      args.headOption match {
+        case Some(fmtFn) =>
+          ParseDateFn(recv, fmtFn.asInstanceOf[Fn[String]]) // recv is string, returns Fn[Date]
+        case None => throw new RuntimeException("toDate() requires a pattern argument")
+      }
     }
+  )
+
+  val dateMethods: Map[String, (Fn[Any], List[Fn[Any]]) => Fn[Any]] = Map(
+    "dateFmt" -> { (recv, args) =>
+      args match {
+        case fmt :: Nil =>
+          FormatDateFn(recv, fmt.asInstanceOf[Fn[String]])
+        case _ =>
+          throw new RuntimeException("dateFmt() requires exactly one string argument")
+      }
+    }
+  )
+
+  def standaloneFnExpr[$: P]: P[Fn[Any]] =
+    P(StringIn("now", "uuid").! ~ "()").map { fnName =>
+      standaloneFns(fnName)
+    }
+
+  val standaloneFns: Map[String, Fn[Any]] = Map(
+    "now" -> NowFn,
+    "uuid" -> UUIDFn
   )
 }
