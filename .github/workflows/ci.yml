@@ -28,7 +28,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
-        scala: [3.5.2]
+        scala: [3.7.1]
         java: [temurin@21]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -108,12 +108,12 @@ jobs:
           echo "$HOME/.local/share/coursier/bin" >> $GITHUB_PATH
           sbt sbtVersion
 
-      - name: Download target directories (3.5.2)
+      - name: Download target directories (3.7.1)
         uses: actions/download-artifact@v4
         with:
-          name: target-${{ matrix.os }}-${{ matrix.java }}-3.5.2
+          name: target-${{ matrix.os }}-${{ matrix.java }}-3.7.1
 
-      - name: Inflate target directories (3.5.2)
+      - name: Inflate target directories (3.7.1)
         run: |
           tar xf targets.tar
           rm targets.tar

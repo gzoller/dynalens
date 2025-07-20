@@ -28,7 +28,7 @@ inThisBuild(List(
 ThisBuild / organization := "co.blocke"
 ThisBuild / scalaVersion := "3.7.1"
 ThisBuild / versionScheme := Some("semver-spec")
-ThisBuild / githubWorkflowScalaVersions := Seq("3.5.2")
+ThisBuild / githubWorkflowScalaVersions := Seq("3.7.1")
 ThisBuild / githubWorkflowJavaVersions := Seq(JavaSpec(Distribution.Temurin, "21"))
 ThisBuild / githubWorkflowOSes := Seq("ubuntu-latest", "windows-latest")
 ThisBuild / sonatypeCredentialHost := sonatypeCentralHost
