@@ -32,6 +32,7 @@ ThisBuild / version := "1.0.0-SNAPSHOT"  // <-- Comment this line out for real r
 ThisBuild / organization := "co.blocke"
 ThisBuild / scalaVersion := scala3Version
 ThisBuild / versionScheme := Some("early-semver")
+ThisBuild / headerLicense := Some(HeaderLicense.MIT("2025", "Greg Zoller"))
 
 // GitHub Actions setup
 ThisBuild / githubWorkflowScalaVersions := Seq(scala3Version)
