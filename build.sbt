@@ -29,7 +29,7 @@ inThisBuild(
   )
 )
 
-//ThisBuild / version := "1.0.0-SNAPSHOT" // <-- Comment this line out for real releases!
+ThisBuild / version := "1.0.0-SNAPSHOT" // <-- Comment this line out for real releases!
 
 ThisBuild / organization := "co.blocke"
 ThisBuild / scalaVersion := scala3Version
