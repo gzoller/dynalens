@@ -29,7 +29,7 @@ inThisBuild(
   )
 )
 
-ThisBuild / version := "1.0.0-SNAPSHOT" // <-- Comment this line out for real releases!
+//ThisBuild / version := "1.0.0-SNAPSHOT" // <-- Comment this line out for real releases!
 
 ThisBuild / organization := "co.blocke"
 ThisBuild / scalaVersion := scala3Version
@@ -100,7 +100,7 @@ ThisBuild / githubWorkflowJobSetup := Seq(
 
 ThisBuild / githubWorkflowPublish := Seq(
   WorkflowStep.Sbt(
-    List("+publishSigned"),
+    List("publishSigned"),
     env = Map(
       "PGP_PASSPHRASE" -> "${{ secrets.PGP_PASSPHRASE }}",
       "PGP_SECRET" -> "${{ secrets.PGP_SECRET }}",
