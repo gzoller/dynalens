@@ -13,7 +13,8 @@ What if there were a way to use a simple scripting language to apply changes to 
 
 ```scala  
 // Scala Business objects  
-case class Item(number: String, qty: Int, price: Double) case class Shipment(id: String, items:List[Item], shipMethod: Int)  
+case class Item(number: String, qty: Int, price: Double)
+case class Shipment(id: String, items:List[Item], shipMethod: Int)  
 ```  
 
 ```  
@@ -26,7 +27,8 @@ items[3].qty = shipMethod # value set from top-level
 The ability to change values can span multiple collections (lists). Let's add another couple layers of business object:
 
 ```scala  
-case class Pack(label: String, caseSize: Int, shipments: List[Shipment]) case class Order(id: String, pack: Pack)  
+case class Pack(label: String, caseSize: Int, shipments: List[Shipment])
+case class Order(id: String, pack: Pack)  
 ```  
 If Order is the top-most object we can still change all the qty values of all the items:
 ```  

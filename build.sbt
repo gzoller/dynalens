@@ -1,7 +1,10 @@
 import org.typelevel.sbt.gha.JavaSpec.Distribution
 import xerial.sbt.Sonatype.sonatypeCentralHost
+//import org.typelevel.sbt.gha._
+//import org.typelevel.sbt.gha.GenerativePlugin.autoImport._
 
 disablePlugins(TypelevelMimaPlugin) // we use our own versioning for now via gitflow-packager
+//enablePlugins(TypelevelCiReleasePlugin, GenerativePlugin)
 
 val scala3Version = "3.7.1"
 
@@ -29,9 +32,28 @@ ThisBuild / organization := "co.blocke"
 ThisBuild / scalaVersion := "3.7.1"
 ThisBuild / versionScheme := Some("semver-spec")
 ThisBuild / githubWorkflowScalaVersions := Seq("3.7.1")
+ThisBuild / githubWorkflowJavaVersions := Seq(org.typelevel.sbt.gha.JavaSpec(org.typelevel.sbt.gha.JavaSpec.Distribution.Temurin, "21"))
 ThisBuild / githubWorkflowJavaVersions := Seq(JavaSpec(Distribution.Temurin, "21"))
 ThisBuild / githubWorkflowOSes := Seq("ubuntu-latest", "windows-latest")
 ThisBuild / sonatypeCredentialHost := sonatypeCentralHost
+//ThisBuild / githubWorkflowGeneratedWorkflowYaml :=
+//  githubWorkflowGeneratedWorkflowYaml.value.map { yaml =>
+//    val permissionsBlock =
+//      """permissions:
+//        |  contents: write
+//        |  security-events: write
+//        |""".stripMargin
+//
+//    val lines = yaml.linesIterator.toList
+//    val updated = lines match {
+//      case head :: tail if head.trim.startsWith("name:") =>
+//        (head :: permissionsBlock.linesIterator.toList ::: tail).mkString("\n")
+//      case _ =>
+//        yaml
+//    }
+//
+//    updated
+//  }
 
 lazy val root = project
   .in(file("."))
