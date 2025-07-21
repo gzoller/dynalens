@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2025 Greg Zoller
+ * This software is licensed under the MIT License (see LICENSE file).
+ */
+
 package co.blocke.dynalens
 
 import zio._
