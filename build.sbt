@@ -3,7 +3,7 @@ import org.typelevel.sbt.gha.JavaSpec
 import org.typelevel.sbt.gha.JavaSpec.Distribution
 import org.typelevel.sbt.gha.Permissions
 
-enablePlugins(TypelevelSonatypePlugin, TypelevelCiReleasePlugin, TypelevelCiSigningPlugin)
+enablePlugins(TypelevelPlugin, TypelevelSonatypePlugin, TypelevelCiReleasePlugin, TypelevelCiSigningPlugin)
 
 val scala3Version = "3.7.1"
 
@@ -32,7 +32,6 @@ ThisBuild / version := "1.0.0-SNAPSHOT"  // <-- Comment this line out for real r
 ThisBuild / organization := "co.blocke"
 ThisBuild / scalaVersion := scala3Version
 ThisBuild / versionScheme := Some("early-semver")
-ThisBuild / headerLicense := Some(HeaderLicense.MIT("2025", "Greg Zoller"))
 
 // GitHub Actions setup
 ThisBuild / githubWorkflowScalaVersions := Seq(scala3Version)
@@ -55,6 +54,7 @@ lazy val root = project
     Compile / packageBin / mappings += {
       (baseDirectory.value / "plugin.properties") -> "plugin.properties"
     },
+    headerLicense := Some(HeaderLicense.MIT("2025", "Greg Zoller")),
     doc := null,
     Compile / doc / sources := Nil,
     libraryDependencies ++= Seq(
