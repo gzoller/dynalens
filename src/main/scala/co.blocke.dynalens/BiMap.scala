@@ -24,9 +24,9 @@ package co.blocke.dynalens
 import zio.*
 
 final class BiMap[A, B] private (
-                                  val forward: Map[A, B],
-                                  val reverse: Map[B, A]
-                                ) {
+    val forward: Map[A, B],
+    val reverse: Map[B, A]
+) {
   def getForward(a: A): Option[B] = forward.get(a)
   def getReverse(b: B): Option[A] = reverse.get(b)
 
@@ -51,19 +51,19 @@ object BiMap {
 }
 
 trait _BiMapRegistry {
-  def get(name: String): Option[BiMap[String,String]]
-  def register(name: String, bimap: BiMap[String,String]): _BiMapRegistry
+  def get(name: String): Option[BiMap[String, String]]
+  def register(name: String, bimap: BiMap[String, String]): _BiMapRegistry
 }
 
 // Repo of BiMaps by name
 class BiMapRegistry extends _BiMapRegistry {
-  private val maps = scala.collection.mutable.Map.empty[String, BiMap[String,String]]
+  private val maps = scala.collection.mutable.Map.empty[String, BiMap[String, String]]
 
-  def register(name: String, bimap: BiMap[String,String]): _BiMapRegistry =
+  def register(name: String, bimap: BiMap[String, String]): _BiMapRegistry =
     maps.put(name, bimap)
     this
 
-  def get(name: String): Option[BiMap[String,String]] =
+  def get(name: String): Option[BiMap[String, String]] =
     maps.get(name)
 }
 

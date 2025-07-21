@@ -22,12 +22,12 @@
 package co.blocke.dynalens
 package parser
 
-import fastparse._, NoWhitespace._
+import fastparse.*, NoWhitespace.*
 
 object Grammar {
 
-  def WS[$: P]: P[Unit] = P((CharsWhileIn(" \n\r\t") | comment).rep(1))  // WS required
-  def WS0[$: P]: P[Unit] = P((CharsWhileIn(" \n\r\t") | comment).rep)    // WS optional
+  def WS[$: P]: P[Unit] = P((CharsWhileIn(" \n\r\t") | comment).rep(1)) // WS required
+  def WS0[$: P]: P[Unit] = P((CharsWhileIn(" \n\r\t") | comment).rep) // WS optional
 
   def identifier[$: P]: P[String] =
     P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").?).! ~ WS.?
@@ -40,19 +40,19 @@ object Grammar {
         catch case _: NumberFormatException => throw new RuntimeException(s"Invalid double: $trimmed")
       else
         try ConstantFn(trimmed.toInt)
-        catch case _: NumberFormatException =>
-          try ConstantFn(trimmed.toLong)
-          catch case _: NumberFormatException => throw new RuntimeException(s"Invalid number: $trimmed")
+        catch
+          case _: NumberFormatException =>
+            try ConstantFn(trimmed.toLong)
+            catch case _: NumberFormatException => throw new RuntimeException(s"Invalid number: $trimmed")
     } ~ WS.?
 
   def stringLiteral[$: P]: P[String] =
     P("\"" ~/ CharsWhile(_ != '"').! ~ "\"") ~ WS.?
 
   def literalWithMethods[$: P]: P[Fn[Any]] =
-    P(stringLiteral ~ method.rep).map {
-      case (str, methods) =>
-        val base: Fn[Any] = ConstantFn(str)
-        methodChain(base, methods)
+    P(stringLiteral ~ method.rep).map { case (str, methods) =>
+      val base: Fn[Any] = ConstantFn(str)
+      methodChain(base, methods)
     }
 
   def path[$: P]: P[String] = {
@@ -64,14 +64,14 @@ object Grammar {
     def arrayIndex = P("[" ~/ CharsWhileIn("0-9").! ~ "]").map("[" + _ + "]")
     def arrayAll = P("[" ~ "]").map(_ => "[]")
     def segment = P(arrayAll | arrayIndex | dotField)
-    P(identifier ~ segment.rep(min = 0)).map {
-      case (head, tail) => tail.foldLeft(head)(_ + _)
+    P(identifier ~ segment.rep(min = 0)).map { case (head, tail) =>
+      tail.foldLeft(head)(_ + _)
     }
   }
 
   def booleanLiteral[$: P]: P[Fn[Any]] =
     P(StringIn("true", "false").!).map {
-      case "true" => ConstantFn(true)
+      case "true"  => ConstantFn(true)
       case "false" => ConstantFn(false)
     } ~ WS.?
 
@@ -79,36 +79,32 @@ object Grammar {
     P(booleanLiteral | number | stringLiteral.map(ConstantFn(_))) ~ WS.?
 
   def ifFn[$: P]: P[Fn[Any]] =
-    P("if" ~ WS ~ boolExpr ~ WS0 ~ "then" ~ WS0 ~ (expr | blockExpr) ~ (WS0 ~ "else" ~ WS0 ~ (expr | blockExpr))).map {
-      case (cond, thenBranch, elseBranch) =>
-        IfFn(cond, thenBranch, elseBranch)
+    P("if" ~ WS ~ boolExpr ~ WS0 ~ "then" ~ WS0 ~ (expr | blockExpr) ~ (WS0 ~ "else" ~ WS0 ~ (expr | blockExpr))).map { case (cond, thenBranch, elseBranch) =>
+      IfFn(cond, thenBranch, elseBranch)
     }
 
   def ifStmt[$: P]: P[Statement] =
-    P("if" ~ WS ~ boolExpr ~ WS0 ~ "then" ~ WS0 ~ (stmt | blockStmt) ~ (WS0 ~ "else" ~ WS0 ~ (stmt | blockStmt)).?).map {
-      case (cond, thenBranch, maybeElse) =>
-        IfStmt(cond, thenBranch, maybeElse)
+    P("if" ~ WS ~ boolExpr ~ WS0 ~ "then" ~ WS0 ~ (stmt | blockStmt) ~ (WS0 ~ "else" ~ WS0 ~ (stmt | blockStmt)).?).map { case (cond, thenBranch, maybeElse) =>
+      IfStmt(cond, thenBranch, maybeElse)
     }
 
   def getFn[$: P]: P[Fn[Any]] =
-    P(path ~ method.rep).map {
-      case (basePath, methods) =>
-        val base = GetFn(basePath)
-        methodChain(base, methods)
+    P(path ~ method.rep).map { case (basePath, methods) =>
+      val base = GetFn(basePath)
+      methodChain(base, methods)
     }
   def methodChain(base: Fn[Any], calls: Seq[(String, List[Fn[Any]])]): Fn[Any] =
-    calls.foldLeft(base) {
-      case (recv, (name, args)) =>
-        stringMethods.get(name) match
-          case Some(f) => f(recv, args)
-          case None    => throw new RuntimeException(s"Unknown method: $name")
+    calls.foldLeft(base) { case (recv, (name, args)) =>
+      stringMethods.get(name) match
+        case Some(f) => f(recv, args)
+        case None    => throw new RuntimeException(s"Unknown method: $name")
     }
 
   def argList[$: P]: P[List[Fn[Any]]] =
     P(literalExpr.rep(sep = P("," ~ WS0)).map(_.toList))
   def methodExpr[$: P]: P[Fn[Any]] =
-    P(terminalExpr ~ ("." ~ identifier.! ~ "(" ~ argList ~ ")").rep).map {
-      case (base, calls) => methodChain(base, calls)
+    P(terminalExpr ~ ("." ~ identifier.! ~ "(" ~ argList ~ ")").rep).map { case (base, calls) =>
+      methodChain(base, calls)
     }
 
   def parensFn[$: P]: P[Fn[Any]] =
@@ -123,12 +119,12 @@ object Grammar {
   def terminalExpr[$: P]: P[Fn[Any]] =
     P(
       standaloneFnExpr |
-      mapFwdFn |
-      mapRevFn |
-      ifFn |
-      constantFn |
-      getFn |
-      parensFn
+        mapFwdFn |
+        mapRevFn |
+        ifFn |
+        constantFn |
+        getFn |
+        parensFn
     )
 
   def leafExpr[$: P]: P[Fn[Any]] =
@@ -138,7 +134,7 @@ object Grammar {
     def resolve(ctx: Map[String, (Any, DynaLens[?])]) =
       input.resolve(ctx).map {
         case null => ""
-        case v => v.toString
+        case v    => v.toString
       }
 
   def stringyExpr[$: P]: P[Fn[Any]] =
@@ -155,29 +151,26 @@ object Grammar {
   def expr[$: P]: P[Fn[Any]] = P(stringConcat)
 
   def filterStmt[$: P]: P[Statement] =
-    P(path ~ ".filter(" ~/ boolExpr ~ ")").map {
-      case (p, predicate) =>
-        MapStmt(p, FilterFn(predicate))
+    P(path ~ ".filter(" ~/ boolExpr ~ ")").map { case (p, predicate) =>
+      MapStmt(p, FilterFn(predicate))
     }
 
   def mulDiv[$: P]: P[Fn[Any]] =
-    P(leafExpr ~ (WS0 ~ CharIn("*\\/").! ~ WS0 ~ leafExpr).rep).map {
-      case (left, rest) =>
-        rest.foldLeft(left) {
-          case (l, ("*", r)) => MultiplyFn(l, r)
-          case (l, ("/", r)) => DivideFn(l, r)
-          case (l, (op, _)) => throw new RuntimeException(s"Unsupported operator: $op")
-        }
+    P(leafExpr ~ (WS0 ~ CharIn("*\\/").! ~ WS0 ~ leafExpr).rep).map { case (left, rest) =>
+      rest.foldLeft(left) {
+        case (l, ("*", r)) => MultiplyFn(l, r)
+        case (l, ("/", r)) => DivideFn(l, r)
+        case (l, (op, _))  => throw new RuntimeException(s"Unsupported operator: $op")
+      }
     } ~ WS0
 
   def addSub[$: P]: P[Fn[Any]] =
-    P(mulDiv ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ mulDiv).rep).map {
-      case (left, rest) =>
-        rest.foldLeft(left) {
-          case (l, ("+", r)) => AddFn(l, r)
-          case (l, ("-", r)) => SubtractFn(l, r)
-          case (l, (op, _)) => throw new RuntimeException(s"Unsupported operator: $op")
-        }
+    P(mulDiv ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ mulDiv).rep).map { case (left, rest) =>
+      rest.foldLeft(left) {
+        case (l, ("+", r)) => AddFn(l, r)
+        case (l, ("-", r)) => SubtractFn(l, r)
+        case (l, (op, _))  => throw new RuntimeException(s"Unsupported operator: $op")
+      }
     } ~ WS0
 
   def valueExpr[$: P]: P[Fn[Any]] = addSub
@@ -191,11 +184,11 @@ object Grammar {
         (valueExpr ~ compOp ~ valueExpr).map {
           case (l, "==", r) => EqualFn(l, r)
           case (l, "!=", r) => NotEqualFn(l, r)
-          case (l, "<", r) => LessThanFn(l, r)
-          case (l, ">", r) => GreaterThanFn(l, r)
+          case (l, "<", r)  => LessThanFn(l, r)
+          case (l, ">", r)  => GreaterThanFn(l, r)
           case (l, "<=", r) => LessThanOrEqualFn(l, r)
           case (l, ">=", r) => GreaterThanOrEqualFn(l, r)
-          case (l, op, r) => throw new RuntimeException(s"Unsupported comparator: $op")
+          case (l, op, r)   => throw new RuntimeException(s"Unsupported comparator: $op")
         } |
         constantFn.collect { case ConstantFn(b: Boolean) => ConstantFn(b) } | // naked boolean constant
         getFn.map(_.asInstanceOf[Fn[Boolean]])
@@ -205,35 +198,33 @@ object Grammar {
     P("!" ~ WS0 ~ notExpr).map(NotFn(_)) | boolAtom
 
   def andExpr[$: P]: P[Fn[Boolean]] =
-    P(notExpr ~ (WS0 ~ "&&" ~ WS0 ~ notExpr).rep).map {
-      case (first, rest) => rest.foldLeft(first)(AndFn(_, _))
+    P(notExpr ~ (WS0 ~ "&&" ~ WS0 ~ notExpr).rep).map { case (first, rest) =>
+      rest.foldLeft(first)(AndFn(_, _))
     }
 
   def orExpr[$: P]: P[Fn[Boolean]] =
-    P(andExpr ~ (WS0 ~ "||" ~ WS0 ~ andExpr).rep).map {
-      case (first, rest) => rest.foldLeft(first)(OrFn(_, _))
+    P(andExpr ~ (WS0 ~ "||" ~ WS0 ~ andExpr).rep).map { case (first, rest) =>
+      rest.foldLeft(first)(OrFn(_, _))
     }
 
   def boolExpr[$: P]: P[Fn[Boolean]] = orExpr
 
   def updateOrMapStmt[$: P]: P[Statement] =
-    P(path ~ "=" ~ WS ~ expr).map {
-      case (p, v) =>
-        if p.contains("[]") then MapStmt(p, v) else UpdateStmt(p, v)
+    P(path ~ "=" ~ WS ~ expr).map { case (p, v) =>
+      if p.contains("[]") then MapStmt(p, v) else UpdateStmt(p, v)
     }
 
   def valStmt[$: P]: P[Statement] =
-    P("val" ~ WS ~ identifier ~ WS.? ~ "=" ~ WS.? ~ (expr | boolExpr)).map {
-      case (name, value) => ValStmt(name, value)
+    P("val" ~ WS ~ identifier ~ WS.? ~ "=" ~ WS.? ~ (expr | boolExpr)).map { case (name, value) =>
+      ValStmt(name, value)
     }
 
   def stmt[$: P]: P[Statement] =
     P(WS.? ~ (updateOrMapStmt | filterStmt | ifStmt | valStmt | blockStmt) ~ WS.?)
 
   def blockExpr[$: P]: P[Fn[Any]] =
-    P("{" ~/ WS.? ~ stmt.rep ~ expr ~ WS.? ~ "}").map {
-      case (stmts, finalFn) =>
-        BlockFn(stmts.toList, finalFn)
+    P("{" ~/ WS.? ~ stmt.rep ~ expr ~ WS.? ~ "}").map { case (stmts, finalFn) =>
+      BlockFn(stmts.toList, finalFn)
     }
 
   // Explicit block with `{}` — used in nested places
@@ -261,38 +252,38 @@ object Grammar {
     "startsWith" -> { (recv, args) =>
       args.headOption match {
         case Some(a) => StartsWithFn(recv.asInstanceOf[Fn[String]], a.asInstanceOf[Fn[String]]).asInstanceOf[Fn[Any]]
-        case None => throw new RuntimeException("startsWith() requires two String arguments")
+        case None    => throw new RuntimeException("startsWith() requires two String arguments")
       }
     },
     "endsWith" -> { (recv, args) =>
       args.headOption match {
         case Some(a) => EndsWithFn(recv.asInstanceOf[Fn[String]], a.asInstanceOf[Fn[String]]).asInstanceOf[Fn[Any]]
-        case None => throw new RuntimeException("endsWith() requires two String arguments")
+        case None    => throw new RuntimeException("endsWith() requires two String arguments")
       }
     },
     "contains" -> { (recv, args) =>
       args.headOption match {
         case Some(a) => ContainsFn(recv.asInstanceOf[Fn[String]], a.asInstanceOf[Fn[String]]).asInstanceOf[Fn[Any]]
-        case None => throw new RuntimeException("contains() requires two String arguments")
+        case None    => throw new RuntimeException("contains() requires two String arguments")
       }
     },
     "equalsIgnoreCase" -> { (recv, args) =>
       args.headOption match {
         case Some(a) => EqualsIgnoreCaseFn(recv.asInstanceOf[Fn[String]], a.asInstanceOf[Fn[String]]).asInstanceOf[Fn[Any]]
-        case None => throw new RuntimeException("equalsIgnoreCase() requires two String arguments")
+        case None    => throw new RuntimeException("equalsIgnoreCase() requires two String arguments")
       }
     },
     "matchesRegex" -> { (recv, args) =>
       args.headOption match {
         case Some(a) => MatchesRegexFn(recv.asInstanceOf[Fn[String]], a.asInstanceOf[Fn[String]]).asInstanceOf[Fn[Any]]
-        case None => throw new RuntimeException("matchesRegex() requires two String arguments")
+        case None    => throw new RuntimeException("matchesRegex() requires two String arguments")
       }
     },
-    "len"         -> { (recv, _) => LengthFn( recv ).asInstanceOf[Fn[Any]] },
-    "toUpperCase" -> { (recv, _) => ToUpperFn( recv ).asInstanceOf[Fn[Any]] },
-    "toLowerCase" -> { (recv, _) => ToLowerFn( recv ).asInstanceOf[Fn[Any]] },
-    "trim"        -> { (recv, _) => TrimFn( recv ).asInstanceOf[Fn[Any]] },
-    "template"    -> { (recv, _) =>
+    "len" -> { (recv, _) => LengthFn(recv).asInstanceOf[Fn[Any]] },
+    "toUpperCase" -> { (recv, _) => ToUpperFn(recv).asInstanceOf[Fn[Any]] },
+    "toLowerCase" -> { (recv, _) => ToLowerFn(recv).asInstanceOf[Fn[Any]] },
+    "trim" -> { (recv, _) => TrimFn(recv).asInstanceOf[Fn[Any]] },
+    "template" -> { (recv, _) =>
       val varMap = recv match
         case ConstantFn(s: String) =>
           TemplateUtils.extractVariables(s).map(v => v -> GetFn(v)).toMap
@@ -300,15 +291,14 @@ object Grammar {
           Map.empty[String, Fn[Any]] // template is not a constant, so defer resolution
       InterpolateFn(recv, varMap).asInstanceOf[Fn[Any]]
     },
-    "substr"      -> { (recv, args) =>
+    "substr" -> { (recv, args) =>
       args.headOption match {
         case Some(a) => SubstringFn(recv, a.asInstanceOf[Fn[Int]], args.lift(1).map(_.asInstanceOf[Fn[Int]])).asInstanceOf[Fn[Any]]
-        case None => throw new RuntimeException("substr() requires at least 1 Int argument")
+        case None    => throw new RuntimeException("substr() requires at least 1 Int argument")
       }
     },
-    "replace"     -> { (recv, args) =>
-      if args.length != 2 then
-        throw new RuntimeException("replace() requires 2 arguments")
+    "replace" -> { (recv, args) =>
+      if args.length != 2 then throw new RuntimeException("replace() requires 2 arguments")
       ReplaceFn(recv, args(0), args(1)).asInstanceOf[Fn[Any]]
     },
     "dateFmt" -> { (recv, args) =>

@@ -21,8 +21,8 @@
 
 package co.blocke.dynalens
 
-import zio._
-import zio.test._
+import zio.*
+import zio.test.*
 
 import DynaLens.*
 

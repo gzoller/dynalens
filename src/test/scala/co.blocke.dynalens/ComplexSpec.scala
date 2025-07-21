@@ -21,19 +21,24 @@
 
 package co.blocke.dynalens
 
-import zio._
-import zio.test._
+import zio.*
+import zio.test.*
 
 import DynaLens.*
 
 object ComplexSpec extends ZIOSpecDefault:
 
-  val order = Order("ORD-1",
-    Pack("P1", 2, List(
-      Shipment("S1", List(Item("A", 0), Item("B", 0))),
-      Shipment("S2", List(Item("C", 0)))
+  val order = Order(
+    "ORD-1",
+    Pack(
+      "P1",
+      2,
+      List(
+        Shipment("S1", List(Item("A", 0), Item("B", 0))),
+        Shipment("S2", List(Item("C", 0)))
+      )
     )
-  ))
+  )
 
   val orderAssignr = dynalens[Order]
 
@@ -48,7 +53,7 @@ object ComplexSpec extends ZIOSpecDefault:
       for {
         ctx <- ZIO.succeed(Map("top" -> (order, orderAssignr)))
         result <- script.resolve(ctx)
-      } yield assertTrue(result.get("top").map(_._1) == Some(Order("ORD-1",Pack("P1",2,List(Shipment("S1",List(Item("A",42,7), Item("B",42,7)),2), Shipment("S2",List(Item("C",42,7)),2))))))
+      } yield assertTrue(result.get("top").map(_._1) == Some(Order("ORD-1", Pack("P1", 2, List(Shipment("S1", List(Item("A", 42, 7), Item("B", 42, 7)), 2), Shipment("S2", List(Item("C", 42, 7)), 2))))))
     },
     test("Nested BlockFn with conditional logic") {
       val script = BlockStmt(
@@ -64,7 +69,7 @@ object ComplexSpec extends ZIOSpecDefault:
       for {
         ctx <- ZIO.succeed(Map("top" -> (order, orderAssignr)))
         result <- script.resolve(ctx)
-      } yield assertTrue(result.get("top").map(_._1) == Some(Order("ORD-1",Pack("P1",2,List(Shipment("S1",List(Item("A",99,7), Item("B",99,7)),2), Shipment("S2",List(Item("C",99,7)),2))))))
+      } yield assertTrue(result.get("top").map(_._1) == Some(Order("ORD-1", Pack("P1", 2, List(Shipment("S1", List(Item("A", 99, 7), Item("B", 99, 7)), 2), Shipment("S2", List(Item("C", 99, 7)), 2))))))
     },
     test("Failing GetFn should error") {
       for {

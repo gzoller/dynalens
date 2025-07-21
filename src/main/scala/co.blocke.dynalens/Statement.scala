@@ -38,41 +38,39 @@ case class MapStmt(path: String, fn: Fn[?]) extends Statement:
     ctx.get("top") match {
       case Some((root, topLens)) =>
         for {
-          mapped <- topLens.map(path, fn, root.asInstanceOf[topLens.ThisT], outerCtx = ctx)  // <-- pass ctx here
+          mapped <- topLens.map(path, fn, root.asInstanceOf[topLens.ThisT], outerCtx = ctx) // <-- pass ctx here
         } yield ctx.updated("top", (mapped, topLens))
       case None =>
         ZIO.fail(DynaLensError("Missing 'top' in context for map operation"))
     }
 
 case class IfStmt(
-                   condition: Fn[Boolean],
-                   thenBlock: Statement,
-                   elseBlock: Option[Statement] = None
-                 ) extends Statement {
+    condition: Fn[Boolean],
+    thenBlock: Statement,
+    elseBlock: Option[Statement] = None
+) extends Statement {
 
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]] =
     for {
       cond <- condition.resolve(ctx)
-      resultCtx <- if cond then
-        thenBlock.resolve(ctx)
-      else
-        elseBlock.map(_.resolve(ctx)).getOrElse(ZIO.succeed(ctx))
+      resultCtx <-
+        if cond then thenBlock.resolve(ctx)
+        else elseBlock.map(_.resolve(ctx)).getOrElse(ZIO.succeed(ctx))
     } yield resultCtx
 }
 
 case class BlockStmt(statements: List[Statement]) extends Statement:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]] =
-    statements.foldLeft(ZIO.succeed(ctx): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]]) {
-      (accZio, stmt) =>
-        accZio.flatMap { accCtx =>
-          stmt.resolve(accCtx)
-        }
+    statements.foldLeft(ZIO.succeed(ctx): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]]) { (accZio, stmt) =>
+      accZio.flatMap { accCtx =>
+        stmt.resolve(accCtx)
+      }
     }
 
 case class UpdateStmt[R](
-                               path: String,
-                               valueFn: Fn[R]
-                             ) extends Statement:
+    path: String,
+    valueFn: Fn[R]
+) extends Statement:
 
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]] =
     parsePath(path) match
@@ -102,4 +100,3 @@ case class UpdateStmt[R](
             } yield ctx.updated("top", (updatedObj, dynalens))
           case None =>
             ZIO.fail(DynaLensError(s"Unable to update: no 'top' context found for path $path"))
-

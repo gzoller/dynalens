@@ -21,15 +21,15 @@
 
 package co.blocke.dynalens
 
-import zio._
-import zio.test._
+import zio.*
+import zio.test.*
 
 import DynaLens.*
 import parser.Parser
 
 object Parsing extends ZIOSpecDefault:
 
-  def spec = suite("Parsing Tests") (
+  def spec = suite("Parsing Tests")(
     test("Simple val assignment script test") {
       val script =
         """
@@ -40,11 +40,11 @@ object Parsing extends ZIOSpecDefault:
       val expectedResult = """top -> Item(abc,2,5)
                              |x -> 42
                              |y -> 50""".stripMargin + "\n"
-      val inst = Item("abc",2,5)
+      val inst = Item("abc", 2, 5)
       val a = dynalens[Item]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
@@ -58,11 +58,11 @@ object Parsing extends ZIOSpecDefault:
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,2,5), Item(xyz,1,7)),1)
                              |x -> 17
                              |y -> 20""".stripMargin + "\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
@@ -73,13 +73,13 @@ object Parsing extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(items[].num,DivideFn(ConstantFn(99),ConstantFn(3)))))"""
       val expectedResult = "top -> Shipment(aaa,List(Item(abc,2,33), Item(xyz,1,33)),1)\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",2,33), Item("xyz",1,33)),1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 33), Item("xyz", 1, 33)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Update statement") {
       val script =
@@ -89,13 +89,13 @@ object Parsing extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(UpdateStmt(items[0].num,ConstantFn(1)), UpdateStmt(num,MultiplyFn(GetFn(num),ConstantFn(5)))))"""
       val expectedResult = "top -> Shipment(aaa,List(Item(abc,2,1), Item(xyz,1,7)),5)\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",2,1), Item("xyz",1,7)),5) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 1), Item("xyz", 1, 7)), 5) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Non-empty statement BlockFn") {
       val script =
@@ -108,13 +108,13 @@ object Parsing extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(UpdateStmt(items[0].num,BlockFn(List(ValStmt(z,ConstantFn(wow)), ValStmt(y,ConstantFn(1))),GetFn(y)))))"""
       val expectedResult = "top -> Shipment(aaa,List(Item(abc,2,1), Item(xyz,1,7)),1)\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",2,1), Item("xyz",1,7)),1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 1), Item("xyz", 1, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Empty statement BlockFn") {
       val script =
@@ -125,13 +125,13 @@ object Parsing extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(UpdateStmt(items[0].num,BlockFn(List(),ConstantFn(1)))))"""
       val expectedResult = "top -> Shipment(aaa,List(Item(abc,2,1), Item(xyz,1,7)),1)\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",2,1), Item("xyz",1,7)),1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 1), Item("xyz", 1, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("If statement-no else") {
       val script =
@@ -141,15 +141,16 @@ object Parsing extends ZIOSpecDefault:
           |  if items[1].num < 5 then
           |    items[1].num = 99
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(IfStmt(GreaterThanOrEqualFn(GetFn(items[0].num),ConstantFn(0)),UpdateStmt(items[0].num,ConstantFn(12)),None), IfStmt(LessThanFn(GetFn(items[1].num),ConstantFn(5)),UpdateStmt(items[1].num,ConstantFn(99)),None)))"""
+      val expectedCompiled =
+        """BlockStmt(List(IfStmt(GreaterThanOrEqualFn(GetFn(items[0].num),ConstantFn(0)),UpdateStmt(items[0].num,ConstantFn(12)),None), IfStmt(LessThanFn(GetFn(items[1].num),ConstantFn(5)),UpdateStmt(items[1].num,ConstantFn(99)),None)))"""
       val expectedResult = "top -> Shipment(aaa,List(Item(abc,2,12), Item(xyz,1,7)),1)\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",2,12), Item("xyz",1,7)),1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 12), Item("xyz", 1, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("If statement-with else") {
       val script =
@@ -163,16 +164,17 @@ object Parsing extends ZIOSpecDefault:
           |    items[1].num = z
           |  }
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(IfStmt(GreaterThanOrEqualFn(GetFn(items[0].num),ConstantFn(0)),UpdateStmt(items[0].num,ConstantFn(12)),None), IfStmt(LessThanFn(GetFn(items[1].num),ConstantFn(5)),UpdateStmt(items[1].num,ConstantFn(99)),Some(BlockStmt(List(ValStmt(z,ConstantFn(-1)), UpdateStmt(items[1].num,GetFn(z))))))))"""
+      val expectedCompiled =
+        """BlockStmt(List(IfStmt(GreaterThanOrEqualFn(GetFn(items[0].num),ConstantFn(0)),UpdateStmt(items[0].num,ConstantFn(12)),None), IfStmt(LessThanFn(GetFn(items[1].num),ConstantFn(5)),UpdateStmt(items[1].num,ConstantFn(99)),Some(BlockStmt(List(ValStmt(z,ConstantFn(-1)), UpdateStmt(items[1].num,GetFn(z))))))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,2,12), Item(xyz,1,-1)),1)
                              |z -> -1""".stripMargin + "\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",2,12), Item("xyz",1,-1)),1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 12), Item("xyz", 1, -1)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("If fn") {
       val script =
@@ -183,13 +185,13 @@ object Parsing extends ZIOSpecDefault:
       val expectedCompiled = """BlockStmt(List(ValStmt(z,IfFn(GreaterThanOrEqualFn(GetFn(items[0].num),ConstantFn(0)),ConstantFn(2),ConstantFn(3))), MapStmt(items[].qty,MultiplyFn(GetFn(items.qty),GetFn(z)))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,4,5), Item(xyz,2,7)),1)
                              |z -> 2""".stripMargin + "\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",4,5), Item("xyz",2,7)),1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 4, 5), Item("xyz", 2, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("If fn with blockFn") {
       val script =
@@ -202,13 +204,13 @@ object Parsing extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(items[].qty,IfFn(LessThanFn(GetFn(items.qty),ConstantFn(2)),ConstantFn(0),BlockFn(List(ValStmt(y,GetFn(items.num))),MultiplyFn(GetFn(y),ConstantFn(2)))))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,10,5), Item(xyz,0,7)),1)""" + "\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",10,5), Item("xyz",0,7)),1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 10, 5), Item("xyz", 0, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("And, or, and Not") {
       val script =
@@ -221,18 +223,19 @@ object Parsing extends ZIOSpecDefault:
           |  else
           |    num = x
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(ValStmt(x,IfFn(OrFn(AndFn(GreaterThanOrEqualFn(GetFn(items[0].num),ConstantFn(2)),NotFn(GreaterThanFn(GetFn(items[0].num),ConstantFn(10)))),EqualFn(GetFn(items[1].num),ConstantFn(8))),ConstantFn(7),ConstantFn(1))), ValStmt(y,ConstantFn(true)), ValStmt(z,NotFn(GetFn(y))), IfStmt(GetFn(z),UpdateStmt(num,ConstantFn(22)),Some(UpdateStmt(num,GetFn(x))))))"""
+      val expectedCompiled =
+        """BlockStmt(List(ValStmt(x,IfFn(OrFn(AndFn(GreaterThanOrEqualFn(GetFn(items[0].num),ConstantFn(2)),NotFn(GreaterThanFn(GetFn(items[0].num),ConstantFn(10)))),EqualFn(GetFn(items[1].num),ConstantFn(8))),ConstantFn(7),ConstantFn(1))), ValStmt(y,ConstantFn(true)), ValStmt(z,NotFn(GetFn(y))), IfStmt(GetFn(z),UpdateStmt(num,ConstantFn(22)),Some(UpdateStmt(num,GetFn(x))))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,2,5), Item(xyz,1,7)),7)
                              |x -> 7
                              |y -> true
                              |z -> false""".stripMargin + "\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),7) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 7) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("String functions work") {
       val script =
@@ -250,11 +253,11 @@ object Parsing extends ZIOSpecDefault:
                              |z -> FOOBAR
                              |q -> true
                              |""".stripMargin + "\n"
-      val inst = Item("abc",2,5)
+      val inst = Item("abc", 2, 5)
       val a = dynalens[Item]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && normalize(resultStr) == normalize(expectedResult) && compiledScript.toString == expectedCompiled)
     },
@@ -269,7 +272,8 @@ object Parsing extends ZIOSpecDefault:
           |  val q = "YooHoo"
           |  val r = q.replace("oo","aa")
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(ValStmt(x,ConstantFn(FooBar)), ValStmt(y,SubstringFn(GetFn(x),ConstantFn(3),None)), ValStmt(s,ConstantFn(1)), ValStmt(e,ConstantFn(3)), ValStmt(z,SubstringFn(GetFn(x),GetFn(s),Some(GetFn(e)))), ValStmt(q,ConstantFn(YooHoo)), ValStmt(r,ReplaceFn(GetFn(q),ConstantFn(oo),ConstantFn(aa)))))"""
+      val expectedCompiled =
+        """BlockStmt(List(ValStmt(x,ConstantFn(FooBar)), ValStmt(y,SubstringFn(GetFn(x),ConstantFn(3),None)), ValStmt(s,ConstantFn(1)), ValStmt(e,ConstantFn(3)), ValStmt(z,SubstringFn(GetFn(x),GetFn(s),Some(GetFn(e)))), ValStmt(q,ConstantFn(YooHoo)), ValStmt(r,ReplaceFn(GetFn(q),ConstantFn(oo),ConstantFn(aa)))))"""
       def normalize(str: String): Set[String] = str.trim.linesIterator.map(_.trim).filter(_.nonEmpty).toSet
       val expectedResult = """top -> Item(abc,2,5)
                              |x -> FooBar
@@ -280,11 +284,11 @@ object Parsing extends ZIOSpecDefault:
                              |q -> YooHoo
                              |r -> YaaHaa
                              |""".stripMargin + "\n"
-      val inst = Item("abc",2,5)
+      val inst = Item("abc", 2, 5)
       val a = dynalens[Item]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && normalize(resultStr) == normalize(expectedResult) && compiledScript.toString == expectedCompiled)
     },
@@ -303,11 +307,11 @@ object Parsing extends ZIOSpecDefault:
                              |y -> 12.45
                              |t -> Hello {x}, your balance is ${y}
                              |u -> Hello Mike, your balance is $12.45""".stripMargin + "\n"
-      val inst = Item("abc",2,5)
+      val inst = Item("abc", 2, 5)
       val a = dynalens[Item]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && normalize(resultStr) == normalize(expectedResult) && compiledScript.toString == expectedCompiled)
     },
@@ -320,7 +324,8 @@ object Parsing extends ZIOSpecDefault:
           |  val u = "Hello {x}, your balance is {y%.2f}".template()
           |  val q = "wow " :: y*2 :: number
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(ValStmt(x,ConstantFn(Mike)), ValStmt(y,ConstantFn(12.4)), ValStmt(z,ContainsFn(ConstantFn(Blip),ConstantFn(li))), ValStmt(u,InterpolateFn(ConstantFn(Hello {x}, your balance is {y%.2f}),Map(x -> GetFn(x), y -> GetFn(y)))), ValStmt(q,ConcatFn(List(ConstantFn(wow ), MultiplyFn(GetFn(y),ConstantFn(2)), GetFn(number))))))"""
+      val expectedCompiled =
+        """BlockStmt(List(ValStmt(x,ConstantFn(Mike)), ValStmt(y,ConstantFn(12.4)), ValStmt(z,ContainsFn(ConstantFn(Blip),ConstantFn(li))), ValStmt(u,InterpolateFn(ConstantFn(Hello {x}, your balance is {y%.2f}),Map(x -> GetFn(x), y -> GetFn(y)))), ValStmt(q,ConcatFn(List(ConstantFn(wow ), MultiplyFn(GetFn(y),ConstantFn(2)), GetFn(number))))))"""
       def normalize(str: String): Set[String] = str.trim.linesIterator.map(_.trim).filter(_.nonEmpty).toSet
       val expectedResult = """top -> Item(abc,2,5)
                              |x -> Mike
@@ -328,11 +333,11 @@ object Parsing extends ZIOSpecDefault:
                              |z -> true
                              |q -> wow 24.8abc
                              |u -> Hello Mike, your balance is 12.40""".stripMargin + "\n"
-      val inst = Item("abc",2,5)
+      val inst = Item("abc", 2, 5)
       val a = dynalens[Item]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && normalize(resultStr) == normalize(expectedResult) && compiledScript.toString == expectedCompiled)
     },
@@ -344,11 +349,11 @@ object Parsing extends ZIOSpecDefault:
       val expectedCompiled = """BlockStmt(List(ValStmt(x,InterpolateFn(ConstantFn(Thingy = {items[1].num%.3f}),Map(items[1].num -> GetFn(items[1].num))))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,2,5), Item(xyz,1,7)),1)
                              |x -> Thingy = 7.000""".stripMargin + "\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
@@ -362,11 +367,11 @@ object Parsing extends ZIOSpecDefault:
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,2,5), Item(xyz,1,7)),1)
                              |x -> 2
                              |y -> 6""".stripMargin + "\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
@@ -377,13 +382,13 @@ object Parsing extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(items[].qty,MultiplyFn(GetFn(this),ConstantFn(3)))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,6,5), Item(xyz,3,7)),1)""".stripMargin + "\n"
-      val inst = Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",6,5), Item("xyz",3,7)),1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 6, 5), Item("xyz", 3, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("filter must work") {
       val script =
@@ -392,18 +397,18 @@ object Parsing extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(items[],FilterFn(GreaterThanFn(GetFn(this.qty),ConstantFn(4))))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,9,5)),1)""".stripMargin + "\n"
-      val inst = Shipment("aaa",List(Item("abc",9,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 9, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      for{
+      for {
         compiledScript <- Parser.parseScript(script)
-        (x,newCtx) <- a.run(compiledScript, inst)
+        (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",9,5)),1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 9, 5)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("BiMap conversion must work") {
-      val numbers = Map("abc"->"p123", "xyz"->"p456")
+      val numbers = Map("abc" -> "p123", "xyz" -> "p456")
       val withRegistry = (new BiMapRegistry()).register("testmap", BiMap.fromMap(numbers))
-      val inst = Shipment("aaa",List(Item("abc",9,5), Item("xyz",1,7)),1)
+      val inst = Shipment("aaa", List(Item("abc", 9, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
 
       val scriptFwd =
@@ -420,16 +425,16 @@ object Parsing extends ZIOSpecDefault:
       val expectedCompiledRev = """BlockStmt(List(MapStmt(items[].number,MapRevFn(testmap))))"""
       val expectedResultRev = """top -> Shipment(aaa,List(Item(abc,9,5), Item(xyz,1,7)),1)""".stripMargin + "\n"
 
-      for{
+      for {
         compiledScriptFwd <- Parser.parseScript(scriptFwd)
         compiledScriptRev <- Parser.parseScript(scriptRev)
-        (f,newCtx) <- a.run(compiledScriptFwd, inst, withRegistry)
+        (f, newCtx) <- a.run(compiledScriptFwd, inst, withRegistry)
         resultStrFwd = toStringCtx(newCtx)
-        (r,newnewCtx) <- a.run(compiledScriptRev, f, withRegistry)
+        (r, newnewCtx) <- a.run(compiledScriptRev, f, withRegistry)
         resultStrRev = toStringCtx(newnewCtx)
       } yield assertTrue(
-        f == Shipment("aaa",List(Item("p123",9,5),Item("p456",1,7)),1) && resultStrFwd == expectedResultFwd && compiledScriptFwd.toString == expectedCompiledFwd &&
-        r == inst && resultStrRev == expectedResultRev && compiledScriptRev.toString == expectedCompiledRev
+        f == Shipment("aaa", List(Item("p123", 9, 5), Item("p456", 1, 7)), 1) && resultStrFwd == expectedResultFwd && compiledScriptFwd.toString == expectedCompiledFwd &&
+          r == inst && resultStrRev == expectedResultRev && compiledScriptRev.toString == expectedCompiledRev
       )
     },
     test("No-ZIO must work") {
@@ -439,19 +444,19 @@ object Parsing extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(items[],FilterFn(GreaterThanFn(GetFn(this.qty),ConstantFn(4))))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,9,5)),1)""" + "\n"
-      val inst = Shipment("aaa", List(Item("abc",9,5), Item("xyz",1,7)), 1)
+      val inst = Shipment("aaa", List(Item("abc", 9, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
       val result: Either[DynaLensError, (Shipment, Map[String, (Any, DynaLens[?])])] =
         for {
           compiled <- Parser.parseScriptNoZIO(script)
-          output   <- a.runNoZIO(compiled, inst)
+          output <- a.runNoZIO(compiled, inst)
         } yield output
 
       result match {
         case Right((updatedObj, ctx)) =>
           val ctxStr = toStringCtx(ctx)
           assertTrue(
-            updatedObj == Shipment("aaa", List(Item("abc",9,5)), 1),
+            updatedObj == Shipment("aaa", List(Item("abc", 9, 5)), 1),
             ctxStr == expectedResult
           )
         case Left(err) =>
@@ -468,7 +473,8 @@ object Parsing extends ZIOSpecDefault:
           |  when = "07-09-1972".toDate("MM-dd-yyyy")
           |""".stripMargin
 
-      val expectedCompiled = """BlockStmt(List(UpdateStmt(id,UUIDFn), ValStmt(old,FormatDateFn(GetFn(when),ConstantFn(MM-dd-yy))), ValStmt(new,FormatDateFn(NowFn,ConstantFn(MM-dd-yyyy))), UpdateStmt(when,ParseDateFn(ConstantFn(07-09-1972),ConstantFn(MM-dd-yyyy)))))"""
+      val expectedCompiled =
+        """BlockStmt(List(UpdateStmt(id,UUIDFn), ValStmt(old,FormatDateFn(GetFn(when),ConstantFn(MM-dd-yy))), ValStmt(new,FormatDateFn(NowFn,ConstantFn(MM-dd-yyyy))), UpdateStmt(when,ParseDateFn(ConstantFn(07-09-1972),ConstantFn(MM-dd-yyyy)))))"""
 
       val inst = Ticket(java.util.UUID.randomUUID(), new java.util.Date())
       val a = dynalens[Ticket]
@@ -478,23 +484,21 @@ object Parsing extends ZIOSpecDefault:
         (x, ctx) <- a.run(compiledScript, inst)
 
         // Extract actual values from ctx
-        idVal <- a.get("id",x)
+        idVal <- a.get("id", x)
         oldVal = ctx("old")._1
         newVal = ctx("new")._1
-        whenVal <- a.get("when",x)
+        whenVal <- a.get("when", x)
 
         // Reformat parsed `when` back to check correctness
         formattedWhen = new java.text.SimpleDateFormat("yyyy-MM-dd").format(whenVal.asInstanceOf[java.util.Date])
-      } yield {
-        assertTrue(
-          compiledScript.toString == expectedCompiled,
-          x.id != null,
-          idVal.isInstanceOf[java.util.UUID],
-          newVal.isInstanceOf[String],
-          newVal.toString.matches("""\d{2}-\d{2}-\d{4}"""),
-          oldVal.isInstanceOf[String],
-          formattedWhen == "1972-07-09"  // Confirm parsed date
-        )
-      }
+      } yield assertTrue(
+        compiledScript.toString == expectedCompiled,
+        x.id != null,
+        idVal.isInstanceOf[java.util.UUID],
+        newVal.isInstanceOf[String],
+        newVal.toString.matches("""\d{2}-\d{2}-\d{4}"""),
+        oldVal.isInstanceOf[String],
+        formattedWhen == "1972-07-09" // Confirm parsed date
+      )
     }
   )
