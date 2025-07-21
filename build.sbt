@@ -102,12 +102,13 @@ ThisBuild / githubWorkflowJobSetup := Seq(
 )
 
 ThisBuild / githubWorkflowPublish := Seq(
-  WorkflowStep.Sbt(List("ci-release"),
+  WorkflowStep.Sbt(
+    List("ci-release"),
     env = Map(
-      "PGP_PASSPHRASE"      -> "${{ secrets.PGP_PASSPHRASE }}",
-      "PGP_SECRET"          -> "${{ secrets.PGP_SECRET }}",
-      "SONATYPE_USERNAME"   -> "${{ secrets.SONATYPE_USERNAME }}",
-      "SONATYPE_PASSWORD"   -> "${{ secrets.SONATYPE_PASSWORD }}"
+      "PGP_PASSPHRASE" -> "${{ secrets.PGP_PASSPHRASE }}",
+      "PGP_SECRET" -> "${{ secrets.PGP_SECRET }}",
+      "SONATYPE_USERNAME" -> "${{ secrets.SONATYPE_USERNAME }}",
+      "SONATYPE_PASSWORD" -> "${{ secrets.SONATYPE_PASSWORD }}"
     )
   )
 )
