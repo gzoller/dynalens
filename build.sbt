@@ -1,4 +1,4 @@
-import org.typelevel.sbt.gha.GenerativePlugin.autoImport._
+import org.typelevel.sbt.gha.GenerativePlugin.autoImport.*
 import org.typelevel.sbt.gha.JavaSpec
 import org.typelevel.sbt.gha.JavaSpec.Distribution
 import org.typelevel.sbt.gha.Permissions
@@ -7,27 +7,29 @@ enablePlugins(TypelevelPlugin, TypelevelSonatypePlugin, TypelevelCiReleasePlugin
 
 val scala3Version = "3.7.1"
 
-inThisBuild(List(
-  organization := "co.blocke",
-  homepage := Some(url("https://github.com/gzoller/dynalens")),
-  licenses := List("MIT" -> url("https://opensource.org/licenses/MIT")),
-  scmInfo := Some(
-    ScmInfo(
-      url("https://github.com/gzoller/dynalens"),
-      "scm:git:git@github.com:gzoller/dynalens.git"
-    )
-  ),
-  developers := List(
-    Developer(
-      "gzoller",
-      "Greg Zoller",
-      "gzoller@blocke.co",
-      url("http://www.blocke.co")
+inThisBuild(
+  List(
+    organization := "co.blocke",
+    homepage := Some(url("https://github.com/gzoller/dynalens")),
+    licenses := List("MIT" -> url("https://opensource.org/licenses/MIT")),
+    scmInfo := Some(
+      ScmInfo(
+        url("https://github.com/gzoller/dynalens"),
+        "scm:git:git@github.com:gzoller/dynalens.git"
+      )
+    ),
+    developers := List(
+      Developer(
+        "gzoller",
+        "Greg Zoller",
+        "gzoller@blocke.co",
+        url("http://www.blocke.co")
+      )
     )
   )
-))
+)
 
-ThisBuild / version := "1.0.0-SNAPSHOT"  // <-- Comment this line out for real releases!
+ThisBuild / version := "1.0.0-SNAPSHOT" // <-- Comment this line out for real releases!
 
 ThisBuild / organization := "co.blocke"
 ThisBuild / scalaVersion := scala3Version
@@ -58,12 +60,12 @@ lazy val root = project
     doc := null,
     Compile / doc / sources := Nil,
     libraryDependencies ++= Seq(
-      "co.blocke"      %% "scala-reflection"     % "2.0.16",
-      "dev.zio"        %% "zio"                  % "2.1.19",
-      "com.lihaoyi"    %% "fastparse"            % "3.1.1",
-      "dev.zio"        %% "zio-test"             % "2.1.19" % Test,
-      "dev.zio"        %% "zio-test-sbt"         % "2.1.19" % Test,
-      "dev.zio"        %% "zio-test-magnolia"    % "2.1.19" % Test
+      "co.blocke" %% "scala-reflection" % "2.0.16",
+      "dev.zio" %% "zio" % "2.1.19",
+      "com.lihaoyi" %% "fastparse" % "3.1.1",
+      "dev.zio" %% "zio-test" % "2.1.19" % Test,
+      "dev.zio" %% "zio-test-sbt" % "2.1.19" % Test,
+      "dev.zio" %% "zio-test-magnolia" % "2.1.19" % Test
     )
   )
 
@@ -100,10 +102,10 @@ ThisBuild / githubWorkflowPublish := Seq(
   WorkflowStep.Sbt(
     List("+publishSigned"),
     env = Map(
-      "PGP_PASSPHRASE"      -> "${{ secrets.PGP_PASSPHRASE }}",
-      "PGP_SECRET"          -> "${{ secrets.PGP_SECRET }}",
-      "SONATYPE_PASSWORD"   -> "${{ secrets.SONATYPE_PASSWORD }}",
-      "SONATYPE_USERNAME"   -> "${{ secrets.SONATYPE_USERNAME }}"
+      "PGP_PASSPHRASE" -> "${{ secrets.PGP_PASSPHRASE }}",
+      "PGP_SECRET" -> "${{ secrets.PGP_SECRET }}",
+      "SONATYPE_PASSWORD" -> "${{ secrets.SONATYPE_PASSWORD }}",
+      "SONATYPE_USERNAME" -> "${{ secrets.SONATYPE_USERNAME }}"
     )
   )
 )
