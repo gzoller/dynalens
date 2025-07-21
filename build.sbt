@@ -59,6 +59,8 @@ lazy val root = project
     Compile / packageBin / mappings += {
       (baseDirectory.value / "plugin.properties") -> "plugin.properties"
     },
+//    publishTo := None,
+//    publishArtifact := false,
     headerLicense := Some(HeaderLicense.MIT("2025", "Greg Zoller")),
     doc := null,
     Compile / doc / sources := Nil,
