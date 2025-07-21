@@ -29,7 +29,7 @@ inThisBuild(
   )
 )
 
-ThisBuild / version := "1.0.0-SNAPSHOT" // <-- Comment this line out for real releases!
+//ThisBuild / version := "1.0.0-SNAPSHOT" // <-- Comment this line out for real releases!
 
 ThisBuild / organization := "co.blocke"
 ThisBuild / scalaVersion := scala3Version
@@ -59,6 +59,8 @@ lazy val root = project
     Compile / packageBin / mappings += {
       (baseDirectory.value / "plugin.properties") -> "plugin.properties"
     },
+//    publishTo := None,
+//    publishArtifact := false,
     headerLicense := Some(HeaderLicense.MIT("2025", "Greg Zoller")),
     doc := null,
     Compile / doc / sources := Nil,
