@@ -446,22 +446,22 @@ object Parsing extends ZIOSpecDefault:
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,9,5)),1)""" + "\n"
       val inst = Shipment("aaa", List(Item("abc", 9, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
-      val result: Either[DynaLensError, (Shipment, Map[String, (Any, DynaLens[?])])] =
+
+      val result: Either[DynaLensError, ((Shipment, Map[String, (Any, DynaLens[?])]), BlockStmt)] =
         for {
           compiled <- Parser.parseScriptNoZIO(script)
-          output <- a.runNoZIO(compiled, inst)
-        } yield output
+          output   <- a.runNoZIO(compiled, inst)
+        } yield (output, compiled)
 
       result match {
-        case Right((updatedObj, ctx)) =>
+        case Right(((updatedObj, ctx), comp)) =>
           val ctxStr = toStringCtx(ctx)
-          assertTrue(
-            updatedObj == Shipment("aaa", List(Item("abc", 9, 5)), 1),
-            ctxStr == expectedResult
-          )
-        case Left(err) =>
-          assertTrue(false) // fail the test
-            .label(s"DynaLens failed with error: ${err.msg}")
+          assertTrue(updatedObj == Shipment("aaa", List(Item("abc", 9, 5)), 1))
+          assertTrue(ctxStr == expectedResult)
+          assertTrue(comp.toString == expectedCompiled)
+
+        case Left(err: DynaLensError) =>
+          assertTrue(false).label(s"DynaLens failed with error: ${err.msg}")
       }
     },
     test("Date and UUID functions must work") {
