@@ -1,9 +1,10 @@
-import org.typelevel.sbt.gha.GenerativePlugin.autoImport._
-import org.typelevel.sbt.gha.JavaSpec
 import org.typelevel.sbt.gha.JavaSpec.Distribution
+//import xerial.sbt.Sonatype.sonatypeCentralHost
 import org.typelevel.sbt.gha.Permissions
 
-enablePlugins(TypelevelSonatypePlugin, TypelevelCiReleasePlugin, TypelevelCiSigningPlugin)
+//disablePlugins(TypelevelMimaPlugin) // we use our own versioning for now via gitflow-packager
+enablePlugins(TypelevelCiReleasePlugin)
+disablePlugins(TypelevelMimaPlugin)
 
 val scala3Version = "3.7.1"
 
@@ -27,35 +28,28 @@ inThisBuild(List(
   )
 ))
 
-ThisBuild / version := "1.0.0-SNAPSHOT"  // <-- Comment this line out for real releases!
-
 ThisBuild / organization := "co.blocke"
-ThisBuild / scalaVersion := scala3Version
-ThisBuild / versionScheme := Some("early-semver")
-
-// GitHub Actions setup
-ThisBuild / githubWorkflowScalaVersions := Seq(scala3Version)
+ThisBuild / scalaVersion := "3.7.1"
+ThisBuild / versionScheme := Some("semver-spec")
+ThisBuild / githubWorkflowScalaVersions := Seq("3.7.1")
+ThisBuild / githubWorkflowJavaVersions := Seq(org.typelevel.sbt.gha.JavaSpec(org.typelevel.sbt.gha.JavaSpec.Distribution.Temurin, "21"))
 ThisBuild / githubWorkflowJavaVersions := Seq(JavaSpec(Distribution.Temurin, "21"))
-ThisBuild / githubWorkflowOSes := Seq("ubuntu-latest")
+ThisBuild / githubWorkflowOSes := Seq("ubuntu-latest", "windows-latest")
+//ThisBuild / sonatypeCredentialHost := sonatypeCentralHost
 ThisBuild / githubWorkflowPermissions := Some(Permissions.WriteAll)
-ThisBuild / mimaFailOnNoPrevious := false
-ThisBuild / tlBaseVersion := "1.0"
-
-// Only needed if you use publishing with TypelevelCiReleasePlugin
-ThisBuild / githubWorkflowPublishTargetBranches := Seq(
-  RefPredicate.Equals(Ref.Branch("main")),
-  RefPredicate.StartsWith(Ref.Tag("v"))
-)
 
 lazy val root = project
   .in(file("."))
   .settings(
     name := "dynalens",
+
+    scalaVersion := scala3Version,
+    javacOptions ++= Seq("--release", "21"),
     Compile / packageBin / mappings += {
       (baseDirectory.value / "plugin.properties") -> "plugin.properties"
     },
-    doc := null,
-    Compile / doc / sources := Nil,
+    doc := null,  // disable dottydoc for now
+    Compile / doc / sources := Seq(),
     libraryDependencies ++= Seq(
       "co.blocke"      %% "scala-reflection"     % "2.0.16",
       "dev.zio"        %% "zio"                  % "2.1.19",
@@ -65,6 +59,11 @@ lazy val root = project
       "dev.zio"        %% "zio-test-magnolia"    % "2.1.19" % Test
     )
   )
+
+ThisBuild / githubWorkflowPublishTargetBranches := Seq(
+  RefPredicate.Equals(Ref.Branch("main")),
+  RefPredicate.StartsWith(Ref.Tag("v"))
+)
 
 ThisBuild / githubWorkflowJobSetup := Seq(
   WorkflowStep.Run(
@@ -97,12 +96,13 @@ ThisBuild / githubWorkflowJobSetup := Seq(
 
 ThisBuild / githubWorkflowPublish := Seq(
   WorkflowStep.Sbt(
-    List("+publishSigned"),
+    List("ci-release"),
     env = Map(
-      "PGP_PASSPHRASE"      -> "${{ secrets.PGP_PASSPHRASE }}",
-      "PGP_SECRET"          -> "${{ secrets.PGP_SECRET }}",
-      "SONATYPE_PASSWORD"   -> "${{ secrets.SONATYPE_PASSWORD }}",
-      "SONATYPE_USERNAME"   -> "${{ secrets.SONATYPE_USERNAME }}"
+      "PGP_PASSPHRASE" -> "${{ secrets.PGP_PASSPHRASE }}",
+      "PGP_SECRET" -> "${{ secrets.PGP_SECRET }}",
+      "SONATYPE_PASSWORD" -> "${{ secrets.SONATYPE_PASSWORD }}",
+      "SONATYPE_USERNAME" -> "${{ secrets.SONATYPE_USERNAME }}",
+      "CI_SNAPSHOT_RELEASE" -> "+publishSigned"
     )
   )
 )
