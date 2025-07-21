@@ -100,7 +100,7 @@ ThisBuild / githubWorkflowJobSetup := Seq(
 
 ThisBuild / githubWorkflowPublish := Seq(
   WorkflowStep.Sbt(
-    List("+publishSigned"),
+    List("publishSigned"),
     env = Map(
       "PGP_PASSPHRASE" -> "${{ secrets.PGP_PASSPHRASE }}",
       "PGP_SECRET" -> "${{ secrets.PGP_SECRET }}",
