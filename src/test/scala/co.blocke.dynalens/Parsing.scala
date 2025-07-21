@@ -450,7 +450,7 @@ object Parsing extends ZIOSpecDefault:
       val result: Either[DynaLensError, ((Shipment, Map[String, (Any, DynaLens[?])]), BlockStmt)] =
         for {
           compiled <- Parser.parseScriptNoZIO(script)
-          output   <- a.runNoZIO(compiled, inst)
+          output <- a.runNoZIO(compiled, inst)
         } yield (output, compiled)
 
       result match {
