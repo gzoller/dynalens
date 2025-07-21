@@ -1,5 +1,5 @@
 import org.typelevel.sbt.gha.GenerativePlugin.autoImport.*
-import org.typelevel.sbt.gha.JavaSpec
+import org.typelevel.sbt.gha.{JavaSpec, Ref, RefPredicate}
 import org.typelevel.sbt.gha.JavaSpec.Distribution
 import org.typelevel.sbt.gha.Permissions
 
@@ -40,6 +40,9 @@ ThisBuild / githubWorkflowScalaVersions := Seq(scala3Version)
 ThisBuild / githubWorkflowJavaVersions := Seq(JavaSpec(Distribution.Temurin, "21"))
 ThisBuild / githubWorkflowOSes := Seq("ubuntu-latest")
 ThisBuild / githubWorkflowPermissions := Some(Permissions.WriteAll)
+ThisBuild / githubWorkflowPublishTargetBranches := Seq(
+  RefPredicate.Equals(Ref.Branch("main"))
+)
 ThisBuild / mimaFailOnNoPrevious := false
 ThisBuild / tlBaseVersion := "1.0"
 
@@ -100,12 +103,12 @@ ThisBuild / githubWorkflowJobSetup := Seq(
 
 ThisBuild / githubWorkflowPublish := Seq(
   WorkflowStep.Sbt(
-    List("publishSigned"),
+    List("ci-release"),
     env = Map(
       "PGP_PASSPHRASE" -> "${{ secrets.PGP_PASSPHRASE }}",
       "PGP_SECRET" -> "${{ secrets.PGP_SECRET }}",
-      "SONATYPE_PASSWORD" -> "${{ secrets.SONATYPE_PASSWORD }}",
-      "SONATYPE_USERNAME" -> "${{ secrets.SONATYPE_USERNAME }}"
+      "SONATYPE_USERNAME" -> "${{ secrets.SONATYPE_USERNAME }}",
+      "SONATYPE_PASSWORD" -> "${{ secrets.SONATYPE_PASSWORD }}"
     )
   )
 )
