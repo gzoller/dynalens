@@ -24,22 +24,28 @@ package co.blocke.dynalens
 import zio.*
 import Path.*
 
-trait Fn[R]:
+trait Fn[+R]:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, R]
+  def as[T]: Fn[T] = this.asInstanceOf[Fn[T]]
 
-// Constant value
+// Marker trait for boolean-returning functions
+trait BooleanFn extends Fn[Boolean]
+
+
+// --- Core Functions ----
+
 case class ConstantFn[R](out: R) extends Fn[R]:
   def resolve(
-      ctx: Map[String, (Any, DynaLens[?])] = Map.empty
-  ): ZIO[_BiMapRegistry, DynaLensError, R] =
+               ctx: Map[String, (Any, DynaLens[?])] = Map.empty
+             ): ZIO[_BiMapRegistry, DynaLensError, R] =
     ZIO.succeed(out)
 
 case class GetFn(path: String) extends Fn[Any]:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
     parsePath(path) match {
       case Nil => ZIO.fail(DynaLensError("get requires a path"))
-      case pathHead :: rest if ctx.contains(pathHead.name) =>
-        ctx.get(pathHead.name) match {
+      case first :: rest if ctx.contains(first.name) =>
+        ctx.get(first.name) match {
           case Some((obj, null)) => // val de-reference
             ZIO.succeed(obj)
           case Some((obj, dynalens)) => // iterable de-reference
@@ -57,246 +63,242 @@ case class GetFn(path: String) extends Fn[Any]:
     }
 
 case class IfFn[R](
-    condition: Fn[Boolean],
-    thenFn: Fn[R],
-    elseFn: Fn[R]
-) extends Fn[R]:
+                    condition: Fn[Boolean],
+                    thenFn: Fn[R],
+                    elseFn: Fn[R]
+                  ) extends Fn[R]:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, R] =
     condition.resolve(ctx).flatMap {
-      case true  => thenFn.resolve(ctx)
+      case true => thenFn.resolve(ctx)
       case false => elseFn.resolve(ctx)
     }
 
 case class BlockFn[R](
-    statements: List[Statement],
-    finalFn: Fn[R]
-) extends Fn[R]:
+                       statements: Seq[Statement],
+                       finalFn: Fn[R]
+                     ) extends Fn[R]:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, R] =
     val prepped = statements.foldLeft(
       ZIO.succeed(ctx): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]]
     )((acc, stmt) => acc.flatMap(stmt.resolve))
     prepped.flatMap(finalFn.resolve)
 
-//
-//===============================
-//  Comparator Functions
-//===============================
-//
 
-case class GreaterThanFn(left: Fn[Any], right: Fn[Any]) extends Fn[Boolean]:
+// --- Boolean Functions ----
+
+case class EqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
       result <- (l, r) match
-        case (l: Int, r: Int)         => ZIO.succeed(l > r)
-        case (l: Int, r: Long)        => ZIO.succeed(l.asInstanceOf[Long] > r.asInstanceOf[Long])
-        case (l: Int, r: Float)       => ZIO.succeed(l.asInstanceOf[Float] > r.asInstanceOf[Float])
-        case (l: Int, r: Double)      => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
-        case (l: Long, r: Int)        => ZIO.succeed(l.asInstanceOf[Long] > r.asInstanceOf[Long])
-        case (l: Long, r: Long)       => ZIO.succeed(l > r)
-        case (l: Long, r: Float)      => ZIO.succeed(l.asInstanceOf[Float] > r.asInstanceOf[Float])
-        case (l: Long, r: Double)     => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
-        case (l: Float, r: Int)       => ZIO.succeed(l.asInstanceOf[Float] > r.asInstanceOf[Float])
-        case (l: Float, r: Long)      => ZIO.succeed(l.asInstanceOf[Float] > r.asInstanceOf[Float])
-        case (l: Float, r: Float)     => ZIO.succeed(l > r)
-        case (l: Float, r: Double)    => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
-        case (l: Double, r: Int)      => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
-        case (l: Double, r: Long)     => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
-        case (l: Double, r: Float)    => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
-        case (l: Double, r: Double)   => ZIO.succeed(l > r)
-        case (ls: String, rs: String) => ZIO.fail(DynaLensError("Cannot perform ordering on strings"))
-        case (lVal, rVal)             => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
-    } yield result
-
-case class GreaterThanOrEqualFn(left: Fn[Any], right: Fn[Any]) extends Fn[Boolean]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
-    for {
-      l <- left.resolve(ctx)
-      r <- right.resolve(ctx)
-      result <- (l, r) match
-        case (l: Int, r: Int)         => ZIO.succeed(l >= r)
-        case (l: Int, r: Long)        => ZIO.succeed(l.asInstanceOf[Long] >= r.asInstanceOf[Long])
-        case (l: Int, r: Float)       => ZIO.succeed(l.asInstanceOf[Float] >= r.asInstanceOf[Float])
-        case (l: Int, r: Double)      => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
-        case (l: Long, r: Int)        => ZIO.succeed(l.asInstanceOf[Long] >= r.asInstanceOf[Long])
-        case (l: Long, r: Long)       => ZIO.succeed(l >= r)
-        case (l: Long, r: Float)      => ZIO.succeed(l.asInstanceOf[Float] >= r.asInstanceOf[Float])
-        case (l: Long, r: Double)     => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
-        case (l: Float, r: Int)       => ZIO.succeed(l.asInstanceOf[Float] >= r.asInstanceOf[Float])
-        case (l: Float, r: Long)      => ZIO.succeed(l.asInstanceOf[Float] >= r.asInstanceOf[Float])
-        case (l: Float, r: Float)     => ZIO.succeed(l >= r)
-        case (l: Float, r: Double)    => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
-        case (l: Double, r: Int)      => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
-        case (l: Double, r: Long)     => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
-        case (l: Double, r: Float)    => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
-        case (l: Double, r: Double)   => ZIO.succeed(l >= r)
-        case (ls: String, rs: String) => ZIO.fail(DynaLensError("Cannot perform ordering on strings"))
-        case (lVal, rVal)             => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
-    } yield result
-
-case class LessThanFn(left: Fn[Any], right: Fn[Any]) extends Fn[Boolean]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
-    for {
-      l <- left.resolve(ctx)
-      r <- right.resolve(ctx)
-      result <- (l, r) match
-        case (l: Int, r: Int)         => ZIO.succeed(l < r)
-        case (l: Int, r: Long)        => ZIO.succeed(l.asInstanceOf[Long] < r.asInstanceOf[Long])
-        case (l: Int, r: Float)       => ZIO.succeed(l.asInstanceOf[Float] < r.asInstanceOf[Float])
-        case (l: Int, r: Double)      => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
-        case (l: Long, r: Int)        => ZIO.succeed(l.asInstanceOf[Long] < r.asInstanceOf[Long])
-        case (l: Long, r: Long)       => ZIO.succeed(l < r)
-        case (l: Long, r: Float)      => ZIO.succeed(l.asInstanceOf[Float] < r.asInstanceOf[Float])
-        case (l: Long, r: Double)     => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
-        case (l: Float, r: Int)       => ZIO.succeed(l.asInstanceOf[Float] < r.asInstanceOf[Float])
-        case (l: Float, r: Long)      => ZIO.succeed(l.asInstanceOf[Float] < r.asInstanceOf[Float])
-        case (l: Float, r: Float)     => ZIO.succeed(l < r)
-        case (l: Float, r: Double)    => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
-        case (l: Double, r: Int)      => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
-        case (l: Double, r: Long)     => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
-        case (l: Double, r: Float)    => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
-        case (l: Double, r: Double)   => ZIO.succeed(l < r)
-        case (ls: String, rs: String) => ZIO.fail(DynaLensError("Cannot perform ordering on strings"))
-        case (lVal, rVal)             => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
-    } yield result
-
-case class LessThanOrEqualFn(left: Fn[Any], right: Fn[Any]) extends Fn[Boolean]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
-    for {
-      l <- left.resolve(ctx)
-      r <- right.resolve(ctx)
-      result <- (l, r) match
-        case (l: Int, r: Int)         => ZIO.succeed(l <= r)
-        case (l: Int, r: Long)        => ZIO.succeed(l.asInstanceOf[Long] <= r.asInstanceOf[Long])
-        case (l: Int, r: Float)       => ZIO.succeed(l.asInstanceOf[Float] <= r.asInstanceOf[Float])
-        case (l: Int, r: Double)      => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
-        case (l: Long, r: Int)        => ZIO.succeed(l.asInstanceOf[Long] <= r.asInstanceOf[Long])
-        case (l: Long, r: Long)       => ZIO.succeed(l <= r)
-        case (l: Long, r: Float)      => ZIO.succeed(l.asInstanceOf[Float] <= r.asInstanceOf[Float])
-        case (l: Long, r: Double)     => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
-        case (l: Float, r: Int)       => ZIO.succeed(l.asInstanceOf[Float] <= r.asInstanceOf[Float])
-        case (l: Float, r: Long)      => ZIO.succeed(l.asInstanceOf[Float] <= r.asInstanceOf[Float])
-        case (l: Float, r: Float)     => ZIO.succeed(l <= r)
-        case (l: Float, r: Double)    => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
-        case (l: Double, r: Int)      => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
-        case (l: Double, r: Long)     => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
-        case (l: Double, r: Float)    => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
-        case (l: Double, r: Double)   => ZIO.succeed(l <= r)
-        case (ls: String, rs: String) => ZIO.fail(DynaLensError("Cannot perform ordering on strings"))
-        case (lVal, rVal)             => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
-    } yield result
-
-case class EqualFn(left: Fn[Any], right: Fn[Any]) extends Fn[Boolean]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
-    for {
-      l <- left.resolve(ctx)
-      r <- right.resolve(ctx)
-      result <- (l, r) match
-        case (l: Int, r: Int)         => ZIO.succeed(l == r)
-        case (l: Int, r: Long)        => ZIO.succeed(l.asInstanceOf[Long] == r.asInstanceOf[Long])
-        case (l: Int, r: Float)       => ZIO.succeed(l.asInstanceOf[Float] == r.asInstanceOf[Float])
-        case (l: Int, r: Double)      => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
-        case (l: Long, r: Int)        => ZIO.succeed(l.asInstanceOf[Long] == r.asInstanceOf[Long])
-        case (l: Long, r: Long)       => ZIO.succeed(l == r)
-        case (l: Long, r: Float)      => ZIO.succeed(l.asInstanceOf[Float] == r.asInstanceOf[Float])
-        case (l: Long, r: Double)     => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
-        case (l: Float, r: Int)       => ZIO.succeed(l.asInstanceOf[Float] == r.asInstanceOf[Float])
-        case (l: Float, r: Long)      => ZIO.succeed(l.asInstanceOf[Float] == r.asInstanceOf[Float])
-        case (l: Float, r: Float)     => ZIO.succeed(l == r)
-        case (l: Float, r: Double)    => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
-        case (l: Double, r: Int)      => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
-        case (l: Double, r: Long)     => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
-        case (l: Double, r: Float)    => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
-        case (l: Double, r: Double)   => ZIO.succeed(l == r)
+        case (l: Int, r: Int) => ZIO.succeed(l == r)
+        case (l: Int, r: Long) => ZIO.succeed(l.asInstanceOf[Long] == r.asInstanceOf[Long])
+        case (l: Int, r: Float) => ZIO.succeed(l.asInstanceOf[Float] == r.asInstanceOf[Float])
+        case (l: Int, r: Double) => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
+        case (l: Long, r: Int) => ZIO.succeed(l.asInstanceOf[Long] == r.asInstanceOf[Long])
+        case (l: Long, r: Long) => ZIO.succeed(l == r)
+        case (l: Long, r: Float) => ZIO.succeed(l.asInstanceOf[Float] == r.asInstanceOf[Float])
+        case (l: Long, r: Double) => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
+        case (l: Float, r: Int) => ZIO.succeed(l.asInstanceOf[Float] == r.asInstanceOf[Float])
+        case (l: Float, r: Long) => ZIO.succeed(l.asInstanceOf[Float] == r.asInstanceOf[Float])
+        case (l: Float, r: Float) => ZIO.succeed(l == r)
+        case (l: Float, r: Double) => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
+        case (l: Double, r: Int) => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
+        case (l: Double, r: Long) => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
+        case (l: Double, r: Float) => ZIO.succeed(l.asInstanceOf[Double] == r.asInstanceOf[Double])
+        case (l: Double, r: Double) => ZIO.succeed(l == r)
         case (ls: String, rs: String) => ZIO.succeed(ls == rs)
-        case (lVal, rVal)             => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
+        case (lVal, rVal) => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
     } yield result
 
-case class NotEqualFn(left: Fn[Any], right: Fn[Any]) extends Fn[Boolean]:
+case class NotEqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
       result <- (l, r) match
-        case (l: Int, r: Int)         => ZIO.succeed(l != r)
-        case (l: Int, r: Long)        => ZIO.succeed(l.asInstanceOf[Long] != r.asInstanceOf[Long])
-        case (l: Int, r: Float)       => ZIO.succeed(l.asInstanceOf[Float] != r.asInstanceOf[Float])
-        case (l: Int, r: Double)      => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
-        case (l: Long, r: Int)        => ZIO.succeed(l.asInstanceOf[Long] != r.asInstanceOf[Long])
-        case (l: Long, r: Long)       => ZIO.succeed(l != r)
-        case (l: Long, r: Float)      => ZIO.succeed(l.asInstanceOf[Float] != r.asInstanceOf[Float])
-        case (l: Long, r: Double)     => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
-        case (l: Float, r: Int)       => ZIO.succeed(l.asInstanceOf[Float] != r.asInstanceOf[Float])
-        case (l: Float, r: Long)      => ZIO.succeed(l.asInstanceOf[Float] != r.asInstanceOf[Float])
-        case (l: Float, r: Float)     => ZIO.succeed(l != r)
-        case (l: Float, r: Double)    => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
-        case (l: Double, r: Int)      => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
-        case (l: Double, r: Long)     => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
-        case (l: Double, r: Float)    => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
-        case (l: Double, r: Double)   => ZIO.succeed(l != r)
+        case (l: Int, r: Int) => ZIO.succeed(l != r)
+        case (l: Int, r: Long) => ZIO.succeed(l.asInstanceOf[Long] != r.asInstanceOf[Long])
+        case (l: Int, r: Float) => ZIO.succeed(l.asInstanceOf[Float] != r.asInstanceOf[Float])
+        case (l: Int, r: Double) => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
+        case (l: Long, r: Int) => ZIO.succeed(l.asInstanceOf[Long] != r.asInstanceOf[Long])
+        case (l: Long, r: Long) => ZIO.succeed(l != r)
+        case (l: Long, r: Float) => ZIO.succeed(l.asInstanceOf[Float] != r.asInstanceOf[Float])
+        case (l: Long, r: Double) => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
+        case (l: Float, r: Int) => ZIO.succeed(l.asInstanceOf[Float] != r.asInstanceOf[Float])
+        case (l: Float, r: Long) => ZIO.succeed(l.asInstanceOf[Float] != r.asInstanceOf[Float])
+        case (l: Float, r: Float) => ZIO.succeed(l != r)
+        case (l: Float, r: Double) => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
+        case (l: Double, r: Int) => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
+        case (l: Double, r: Long) => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
+        case (l: Double, r: Float) => ZIO.succeed(l.asInstanceOf[Double] != r.asInstanceOf[Double])
+        case (l: Double, r: Double) => ZIO.succeed(l != r)
         case (ls: String, rs: String) => ZIO.succeed(ls != rs)
-        case (lVal, rVal)             => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
+        case (lVal, rVal) => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
     } yield result
 
-case class NotFn(inner: Fn[Boolean]) extends Fn[Boolean]:
+case class GreaterThanFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
-    inner.resolve(ctx).map(b => !b)
+    for {
+      l <- left.resolve(ctx)
+      r <- right.resolve(ctx)
+      result <- (l, r) match
+        case (l: Int, r: Int) => ZIO.succeed(l > r)
+        case (l: Int, r: Long) => ZIO.succeed(l.asInstanceOf[Long] > r.asInstanceOf[Long])
+        case (l: Int, r: Float) => ZIO.succeed(l.asInstanceOf[Float] > r.asInstanceOf[Float])
+        case (l: Int, r: Double) => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
+        case (l: Long, r: Int) => ZIO.succeed(l.asInstanceOf[Long] > r.asInstanceOf[Long])
+        case (l: Long, r: Long) => ZIO.succeed(l > r)
+        case (l: Long, r: Float) => ZIO.succeed(l.asInstanceOf[Float] > r.asInstanceOf[Float])
+        case (l: Long, r: Double) => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
+        case (l: Float, r: Int) => ZIO.succeed(l.asInstanceOf[Float] > r.asInstanceOf[Float])
+        case (l: Float, r: Long) => ZIO.succeed(l.asInstanceOf[Float] > r.asInstanceOf[Float])
+        case (l: Float, r: Float) => ZIO.succeed(l > r)
+        case (l: Float, r: Double) => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
+        case (l: Double, r: Int) => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
+        case (l: Double, r: Long) => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
+        case (l: Double, r: Float) => ZIO.succeed(l.asInstanceOf[Double] > r.asInstanceOf[Double])
+        case (l: Double, r: Double) => ZIO.succeed(l > r)
+        case (ls: String, rs: String) => ZIO.fail(DynaLensError("Cannot perform ordering on strings"))
+        case (lVal, rVal) => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
+    } yield result
 
-case class AndFn(left: Fn[Boolean], right: Fn[Boolean]) extends Fn[Boolean]:
+case class LessThanFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
+  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+    for {
+      l <- left.resolve(ctx)
+      r <- right.resolve(ctx)
+      result <- (l, r) match
+        case (l: Int, r: Int) => ZIO.succeed(l < r)
+        case (l: Int, r: Long) => ZIO.succeed(l.asInstanceOf[Long] < r.asInstanceOf[Long])
+        case (l: Int, r: Float) => ZIO.succeed(l.asInstanceOf[Float] < r.asInstanceOf[Float])
+        case (l: Int, r: Double) => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
+        case (l: Long, r: Int) => ZIO.succeed(l.asInstanceOf[Long] < r.asInstanceOf[Long])
+        case (l: Long, r: Long) => ZIO.succeed(l < r)
+        case (l: Long, r: Float) => ZIO.succeed(l.asInstanceOf[Float] < r.asInstanceOf[Float])
+        case (l: Long, r: Double) => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
+        case (l: Float, r: Int) => ZIO.succeed(l.asInstanceOf[Float] < r.asInstanceOf[Float])
+        case (l: Float, r: Long) => ZIO.succeed(l.asInstanceOf[Float] < r.asInstanceOf[Float])
+        case (l: Float, r: Float) => ZIO.succeed(l < r)
+        case (l: Float, r: Double) => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
+        case (l: Double, r: Int) => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
+        case (l: Double, r: Long) => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
+        case (l: Double, r: Float) => ZIO.succeed(l.asInstanceOf[Double] < r.asInstanceOf[Double])
+        case (l: Double, r: Double) => ZIO.succeed(l < r)
+        case (ls: String, rs: String) => ZIO.fail(DynaLensError("Cannot perform ordering on strings"))
+        case (lVal, rVal) => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
+    } yield result
+
+case class GreaterThanOrEqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
+  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+    for {
+      l <- left.resolve(ctx)
+      r <- right.resolve(ctx)
+      result <- (l, r) match
+        case (l: Int, r: Int) => ZIO.succeed(l >= r)
+        case (l: Int, r: Long) => ZIO.succeed(l.asInstanceOf[Long] >= r.asInstanceOf[Long])
+        case (l: Int, r: Float) => ZIO.succeed(l.asInstanceOf[Float] >= r.asInstanceOf[Float])
+        case (l: Int, r: Double) => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
+        case (l: Long, r: Int) => ZIO.succeed(l.asInstanceOf[Long] >= r.asInstanceOf[Long])
+        case (l: Long, r: Long) => ZIO.succeed(l >= r)
+        case (l: Long, r: Float) => ZIO.succeed(l.asInstanceOf[Float] >= r.asInstanceOf[Float])
+        case (l: Long, r: Double) => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
+        case (l: Float, r: Int) => ZIO.succeed(l.asInstanceOf[Float] >= r.asInstanceOf[Float])
+        case (l: Float, r: Long) => ZIO.succeed(l.asInstanceOf[Float] >= r.asInstanceOf[Float])
+        case (l: Float, r: Float) => ZIO.succeed(l >= r)
+        case (l: Float, r: Double) => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
+        case (l: Double, r: Int) => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
+        case (l: Double, r: Long) => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
+        case (l: Double, r: Float) => ZIO.succeed(l.asInstanceOf[Double] >= r.asInstanceOf[Double])
+        case (l: Double, r: Double) => ZIO.succeed(l >= r)
+        case (ls: String, rs: String) => ZIO.fail(DynaLensError("Cannot perform ordering on strings"))
+        case (lVal, rVal) => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
+    } yield result
+
+case class LessThanOrEqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
+  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+    for {
+      l <- left.resolve(ctx)
+      r <- right.resolve(ctx)
+      result <- (l, r) match
+        case (l: Int, r: Int) => ZIO.succeed(l <= r)
+        case (l: Int, r: Long) => ZIO.succeed(l.asInstanceOf[Long] <= r.asInstanceOf[Long])
+        case (l: Int, r: Float) => ZIO.succeed(l.asInstanceOf[Float] <= r.asInstanceOf[Float])
+        case (l: Int, r: Double) => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
+        case (l: Long, r: Int) => ZIO.succeed(l.asInstanceOf[Long] <= r.asInstanceOf[Long])
+        case (l: Long, r: Long) => ZIO.succeed(l <= r)
+        case (l: Long, r: Float) => ZIO.succeed(l.asInstanceOf[Float] <= r.asInstanceOf[Float])
+        case (l: Long, r: Double) => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
+        case (l: Float, r: Int) => ZIO.succeed(l.asInstanceOf[Float] <= r.asInstanceOf[Float])
+        case (l: Float, r: Long) => ZIO.succeed(l.asInstanceOf[Float] <= r.asInstanceOf[Float])
+        case (l: Float, r: Float) => ZIO.succeed(l <= r)
+        case (l: Float, r: Double) => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
+        case (l: Double, r: Int) => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
+        case (l: Double, r: Long) => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
+        case (l: Double, r: Float) => ZIO.succeed(l.asInstanceOf[Double] <= r.asInstanceOf[Double])
+        case (l: Double, r: Double) => ZIO.succeed(l <= r)
+        case (ls: String, rs: String) => ZIO.fail(DynaLensError("Cannot perform ordering on strings"))
+        case (lVal, rVal) => ZIO.fail(DynaLensError(s"Cannot compare types: ${lVal.getClass} and ${rVal.getClass}"))
+    } yield result
+
+case class AndFn(left: BooleanFn, right: BooleanFn) extends BooleanFn:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l && r
 
-case class OrFn(left: Fn[Boolean], right: Fn[Boolean]) extends Fn[Boolean]:
+case class OrFn(left: BooleanFn, right: BooleanFn) extends BooleanFn:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l || r
 
-case class StartsWithFn(left: Fn[String], right: Fn[String]) extends Fn[Boolean]:
+case class NotFn(inner: BooleanFn) extends BooleanFn:
+  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+    inner.resolve(ctx).map(b => !b)
+
+// ---- String Boolean Funcitons ----
+
+case class StartsWithFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l.startsWith(r)
 
-case class EndsWithFn(left: Fn[String], right: Fn[String]) extends Fn[Boolean]:
+case class EndsWithFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l.endsWith(r)
 
-case class ContainsFn(left: Fn[String], right: Fn[String]) extends Fn[Boolean]:
+case class ContainsFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l.contains(r)
 
-case class EqualsIgnoreCaseFn(left: Fn[String], right: Fn[String]) extends Fn[Boolean]:
+case class EqualsIgnoreCaseFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l.equalsIgnoreCase(r)
 
-case class MatchesRegexFn(left: Fn[String], regex: Fn[String]) extends Fn[Boolean]:
+case class MatchesRegexFn(left: Fn[String], regex: Fn[String]) extends BooleanFn:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- regex.resolve(ctx)
     } yield l.matches(r)
 
-//
-//===============================
-//  Math Functions
-//===============================
-//
+
+// --- Arithmetic  Functions ----
 
 case class AddFn(
     left: Fn[Any],
@@ -442,11 +444,8 @@ case class DivideFn(
       }
     } yield result
 
-//
-//===============================
-//  String Builder Functions
-//===============================
-//
+
+// --- String Builder Functions ----
 
 case class TrimFn(in: Fn[Any]) extends Fn[String]:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, String] =
@@ -477,14 +476,6 @@ case class ConcatFn(parts: List[Fn[Any]]) extends Fn[String]:
         case null => ""
         case s    => s.toString
       }.mkString)
-
-case class LengthFn(in: Fn[Any]) extends Fn[Int]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Int] =
-    in.resolve(ctx).map {
-      case null                        => 0
-      case c if c.isInstanceOf[Seq[?]] => c.asInstanceOf[Seq[?]].length
-      case s                           => s.toString.length
-    }
 
 case class InterpolateFn(template: Fn[Any], variables: Map[String, Fn[Any]]) extends Fn[String]:
 
@@ -584,6 +575,17 @@ case class ReplaceFn(in: Fn[Any], target: Fn[Any], replacement: Fn[Any]) extends
       r <- replacement.resolve(ctx).map(v => if v == null then "" else v.toString)
     } yield str.replace(t, r)
 
+
+// --- Misc Functions ----
+
+case class LengthFn(in: Fn[Any]) extends Fn[Int]:
+  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Int] =
+    in.resolve(ctx).map {
+      case null => 0
+      case c if c.isInstanceOf[Seq[?]] => c.asInstanceOf[Seq[?]].length
+      case s => s.toString.length
+    }
+
 case class FilterFn(
     predicate: Fn[Boolean]
 ) extends Fn[Any]:
@@ -671,6 +673,8 @@ case class ParseDateFn(strExpr: Fn[Any], pattern: Fn[String]) extends Fn[Any] {
           ZIO.fail(DynaLensError(s"Expected String for toDate but got ${other.getClass.getName}"))
     } yield result
 }
+
+// --- Stand-Alone Functions ----
 
 case object NowFn extends Fn[Any] {
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =

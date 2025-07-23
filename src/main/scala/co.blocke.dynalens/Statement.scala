@@ -59,7 +59,7 @@ case class IfStmt(
     } yield resultCtx
 }
 
-case class BlockStmt(statements: List[Statement]) extends Statement:
+case class BlockStmt(statements: Seq[Statement]) extends Statement:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]] =
     statements.foldLeft(ZIO.succeed(ctx): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]]) { (accZio, stmt) =>
       accZio.flatMap { accCtx =>
