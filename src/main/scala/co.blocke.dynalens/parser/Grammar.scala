@@ -28,7 +28,7 @@ object Grammar extends Level2 {
 
   // Top-level script block — no `{}`, just a list of statements
   def topLevelBlock[$: P]: P[BlockStmt] =
-    P(WS0 ~ statement(expr).rep ~ WS0).map(BlockStmt(_))
+    P(WS0 ~ statement.rep ~ WS0).map(BlockStmt(_))
 
   /*
       expr

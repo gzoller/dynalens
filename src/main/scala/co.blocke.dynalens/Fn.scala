@@ -260,6 +260,18 @@ case class NotFn(inner: BooleanFn) extends BooleanFn:
   def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     inner.resolve(ctx).map(b => !b)
 
+// Special converter: Fn[Any]->BooleanFn
+case class toBooleanFn(inner: Fn[Any]) extends BooleanFn {
+  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+    for {
+      r <- inner.resolve(ctx)
+      typedResult <- r match {
+        case b: Boolean => ZIO.succeed(b)
+        case other => ZIO.fail(DynaLensError(s"Expected Boolean result at runtime, but got: ${other.getClass.getSimpleName} = $other"))
+      }
+    } yield typedResult
+}
+
 // ---- String Boolean Funcitons ----
 
 case class StartsWithFn(left: Fn[String], right: Fn[String]) extends BooleanFn:

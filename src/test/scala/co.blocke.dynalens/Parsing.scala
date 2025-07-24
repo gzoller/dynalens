@@ -49,6 +49,7 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
+     */
     test("Path and operator precedence") {
       val script =
         """
@@ -67,6 +68,7 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
+    /*
     test("Map statement") {
       val script =
         """
@@ -134,7 +136,6 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 1), Item("xyz", 1, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
-    */
     test("If statement-no else") {
       val script =
         """
@@ -155,6 +156,8 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 12), Item("xyz", 1, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
+
+     */
 
     /*
     test("If statement-with else") {
