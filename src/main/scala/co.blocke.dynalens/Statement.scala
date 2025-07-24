@@ -25,16 +25,16 @@ import zio.*
 import Path.*
 
 trait Statement:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]]
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext]
 
 case class ValStmt[R](name: String, fn: Fn[R]) extends Statement:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
     for {
       value <- fn.resolve(ctx)
     } yield ctx + (name -> (value, null))
 
 case class MapStmt(path: String, fn: Fn[?]) extends Statement:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
     ctx.get("top") match {
       case Some((root, topLens)) =>
         for {
@@ -50,7 +50,7 @@ case class IfStmt(
     elseBlock: Option[Statement] = None
 ) extends Statement {
 
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
     for {
       cond <- condition.resolve(ctx)
       resultCtx <-
@@ -60,8 +60,8 @@ case class IfStmt(
 }
 
 case class BlockStmt(statements: Seq[Statement]) extends Statement:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]] =
-    statements.foldLeft(ZIO.succeed(ctx): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]]) { (accZio, stmt) =>
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
+    statements.foldLeft(ZIO.succeed(ctx): ZIO[_BiMapRegistry, DynaLensError, DynaContext]) { (accZio, stmt) =>
       accZio.flatMap { accCtx =>
         stmt.resolve(accCtx)
       }
@@ -72,7 +72,7 @@ case class UpdateStmt[R](
     valueFn: Fn[R]
 ) extends Statement:
 
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
     parsePath(path) match
       case Nil =>
         ZIO.fail(DynaLensError("update requires a path"))

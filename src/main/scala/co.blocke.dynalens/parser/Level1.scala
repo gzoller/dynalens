@@ -36,13 +36,10 @@ trait Level1 extends Level0:
     }
   }
 
-  def baseExpr[$: P](expr: => P[Fn[Any]]): P[Fn[Any]] =
-    P((constant | path.map(GetFn(_)) | standaloneFn)).flatMap(base => methodChain(base, expr)) ~ WS0
-
 
   // ---- Functions ----
 
-  private def standaloneFn[$: P]: P[Fn[Any]] =
+  def standaloneFn[$: P]: P[Fn[Any]] =
     P(
       StringIn("now", "uuid") ~ "(" ~ ")"
     ).!.map {
@@ -50,24 +47,11 @@ trait Level1 extends Level0:
       case "uuid" => UUIDFn
     }
 
-  private def methodCall[$: P](expr: => P[Fn[Any]]): P[(String, List[Fn[Any]])] =
-    P("." ~ identifier.! ~ "(" ~/ expr.rep(sep = "," ~ WS0) ~ ")" ~ WS0)
-      .map { case (name, args) => (name, args.toList) }
-
-  private def methodChain[$: P](base: Fn[Any], expr: => P[Fn[Any]]): P[Fn[Any]] =
-    P(methodCall(expr).rep).map { chain =>
-      chain.foldLeft(base) { case (inner, (fnName, args)) =>
-        methodFunctions.get(fnName) match
-          case Some(fnBuilder) => fnBuilder(inner, args).asInstanceOf[Fn[Any]]
-          case None => throw new RuntimeException(s"Unknown method: $fnName")
-      }
-    }
-
   private def checkArgs(fnName: String, args: List[Fn[Any]], required: Int): Unit =
     if args.length != required then
       throw new RuntimeException(s"Function ${fnName}() expected $required argument(s), got ${args.length}")
 
-  private val methodFunctions: Map[String, (Fn[Any], List[Fn[Any]]) => Fn[?]] = Map(
+  val methodFunctions: Map[String, (Fn[Any], List[Fn[Any]]) => Fn[?]] = Map(
     "startsWith" -> { (recv, args) =>
       checkArgs("startsWith", args, 1)
       StartsWithFn(recv.as[String], args.head.as[String])

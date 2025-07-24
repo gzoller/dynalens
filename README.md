@@ -72,7 +72,7 @@ We really love ZIO around here, but if you just can't get there, there's a non-Z
 Step 4 becomes:
 ```scala
 val lens = dynalens[Person]
-val result: Either[DynaLensError, (Shipment, Map[String, (Any, DynaLens[?])])] =  
+val result: Either[DynaLensError, (Shipment, DynaContext)] =  
   for {  
     compiled <- Parser.parseScriptNoZIO(script)  
     (output,_) <- lens.runNoZIO(compiled, inst)  

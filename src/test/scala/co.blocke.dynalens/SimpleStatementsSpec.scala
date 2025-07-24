@@ -36,13 +36,13 @@ object SimpleStatementsSpec extends ZIOSpecDefault:
     test("ValStmt should add a symbol to context") {
       val stmt = ValStmt("v1", ConstantFn(123))
       for {
-        newCtx <- stmt.resolve(Map.empty)
+        newCtx <- stmt.resolve(DynaContext.empty)
       } yield assertTrue(newCtx("v1")._1 == 123)
     },
     test("MapStmt should update object field") {
       val stmt = MapStmt("qty", ConstantFn(5))
       for {
-        ctx <- ZIO.succeed(Map("top" -> (sampleItem, rootAssignr)))
+        ctx <- ZIO.succeed(DynaContext(sampleItem, rootAssignr))
         newCtx <- stmt.resolve(ctx)
       } yield assertTrue(newCtx("top")._1.asInstanceOf[Item].qty == 5)
     },
@@ -53,7 +53,7 @@ object SimpleStatementsSpec extends ZIOSpecDefault:
         Some(BlockStmt(List(UpdateStmt("qty", ConstantFn(3)))))
       )
       for {
-        ctx <- ZIO.succeed(Map("top" -> (sampleItem, rootAssignr)))
+        ctx <- ZIO.succeed(DynaContext(sampleItem, rootAssignr))
         newCtx <- stmt.resolve(ctx)
       } yield assertTrue(newCtx("top")._1.asInstanceOf[Item].qty == 7)
     },
@@ -64,7 +64,7 @@ object SimpleStatementsSpec extends ZIOSpecDefault:
         Some(BlockStmt(List(UpdateStmt("qty", ConstantFn(3)))))
       )
       for {
-        ctx <- ZIO.succeed(Map("top" -> (sampleItem, rootAssignr)))
+        ctx <- ZIO.succeed(DynaContext(sampleItem, rootAssignr))
         newCtx <- stmt.resolve(ctx)
       } yield assertTrue(newCtx("top")._1.asInstanceOf[Item].qty == 3)
     }

@@ -16,16 +16,18 @@ trait Level0:
   def WS[$: P]: P[Unit] = P((CharsWhileIn(" \n\r\t") | comment).rep(1)) // WS required
   def WS0[$: P]: P[Unit] = P((CharsWhileIn(" \n\r\t") | comment).rep) // WS optional
 
+  def Newline[$: P]: P[Unit] = P(CharsWhileIn(" \t").? ~ "\n" ~ CharsWhileIn(" \t").?)
+
   private def comment[$: P]: P[Unit] =
     P("#" ~ CharsWhile(_ != '\n', min = 0) ~ ("\n" | End))
 
   def identifier[$: P]: P[String] =
     P((CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").?).!).map(_.trim)
 
-  private def stringLiteral[$: P]: P[Fn[Any]] =
+  def stringLiteral[$: P]: P[Fn[Any]] =
     P("\"" ~/ CharsWhile(_ != '"', 0).! ~ "\"").map (s => ConstantFn(s))
 
-  private def numberLiteral[$: P]: P[Fn[Any]] =
+  def numberLiteral[$: P]: P[Fn[Any]] =
     P(
       (CharIn("+\\-").? ~ CharsWhileIn("0-9") ~ ("." ~ CharsWhileIn("0-9")).?).!
     ).map { raw =>
@@ -44,11 +46,14 @@ trait Level0:
       }
     }
 
-  private def booleanLiteral[$: P]: P[Fn[Any]] =
+  def booleanLiteral[$: P]: P[Fn[Any]] =
     P(StringIn("true", "false").!).map {
       case "true" => ConstantFn(true)
       case "false" => ConstantFn(false)
     } ~ WS.?
+
+  // Specially typed boolean literal (for use in booleanExpr)
+  def booleanLiteral2[$: P]: P[BooleanFn] = booleanLiteral.map(_.asInstanceOf[BooleanFn])
 
   def constant[$: P]: P[Fn[Any]] =
     P(stringLiteral | numberLiteral | booleanLiteral)

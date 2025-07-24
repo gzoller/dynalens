@@ -25,7 +25,7 @@ import zio.*
 import Path.*
 
 trait Fn[+R]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, R]
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, R]
   def as[T]: Fn[T] = this.asInstanceOf[Fn[T]]
 
 // Marker trait for boolean-returning functions
@@ -36,12 +36,12 @@ trait BooleanFn extends Fn[Boolean]
 
 case class ConstantFn[R](out: R) extends Fn[R]:
   def resolve(
-               ctx: Map[String, (Any, DynaLens[?])] = Map.empty
+               ctx: DynaContext = scala.collection.mutable.Map.empty
              ): ZIO[_BiMapRegistry, DynaLensError, R] =
     ZIO.succeed(out)
 
 case class GetFn(path: String) extends Fn[Any]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     parsePath(path) match {
       case Nil => ZIO.fail(DynaLensError("get requires a path"))
       case first :: rest if ctx.contains(first.name) =>
@@ -67,7 +67,7 @@ case class IfFn[R](
                     thenFn: Fn[R],
                     elseFn: Fn[R]
                   ) extends Fn[R]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, R] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, R] =
     condition.resolve(ctx).flatMap {
       case true => thenFn.resolve(ctx)
       case false => elseFn.resolve(ctx)
@@ -77,9 +77,9 @@ case class BlockFn[R](
                        statements: Seq[Statement],
                        finalFn: Fn[R]
                      ) extends Fn[R]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, R] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, R] =
     val prepped = statements.foldLeft(
-      ZIO.succeed(ctx): ZIO[_BiMapRegistry, DynaLensError, Map[String, (Any, DynaLens[?])]]
+      ZIO.succeed(ctx): ZIO[_BiMapRegistry, DynaLensError, DynaContext]
     )((acc, stmt) => acc.flatMap(stmt.resolve))
     prepped.flatMap(finalFn.resolve)
 
@@ -87,7 +87,7 @@ case class BlockFn[R](
 // --- Boolean Functions ----
 
 case class EqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
@@ -113,7 +113,7 @@ case class EqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
     } yield result
 
 case class NotEqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
@@ -139,7 +139,7 @@ case class NotEqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
     } yield result
 
 case class GreaterThanFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
@@ -165,7 +165,7 @@ case class GreaterThanFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
     } yield result
 
 case class LessThanFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
@@ -191,7 +191,7 @@ case class LessThanFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
     } yield result
 
 case class GreaterThanOrEqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
@@ -217,7 +217,7 @@ case class GreaterThanOrEqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn
     } yield result
 
 case class LessThanOrEqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
@@ -243,26 +243,26 @@ case class LessThanOrEqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
     } yield result
 
 case class AndFn(left: BooleanFn, right: BooleanFn) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l && r
 
 case class OrFn(left: BooleanFn, right: BooleanFn) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l || r
 
 case class NotFn(inner: BooleanFn) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     inner.resolve(ctx).map(b => !b)
 
 // Special converter: Fn[Any]->BooleanFn
 case class toBooleanFn(inner: Fn[Any]) extends BooleanFn {
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       r <- inner.resolve(ctx)
       typedResult <- r match {
@@ -275,35 +275,35 @@ case class toBooleanFn(inner: Fn[Any]) extends BooleanFn {
 // ---- String Boolean Funcitons ----
 
 case class StartsWithFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l.startsWith(r)
 
 case class EndsWithFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l.endsWith(r)
 
 case class ContainsFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l.contains(r)
 
 case class EqualsIgnoreCaseFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
     } yield l.equalsIgnoreCase(r)
 
 case class MatchesRegexFn(left: Fn[String], regex: Fn[String]) extends BooleanFn:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
       l <- left.resolve(ctx)
       r <- regex.resolve(ctx)
@@ -312,12 +312,42 @@ case class MatchesRegexFn(left: Fn[String], regex: Fn[String]) extends BooleanFn
 
 // --- Arithmetic  Functions ----
 
+case class NegateFn(
+                  target: Fn[Any]
+                   ) extends Fn[Any]:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    for {
+      t <- target.resolve(ctx)
+      result <- t match {
+        case a: Int    => ZIO.succeed(a * -1)
+        case a: Long   => ZIO.succeed(a * -1)
+        case a: Float  => ZIO.succeed(a * -1)
+        case a: Double => ZIO.succeed(a * -1)
+        case _ =>
+          ZIO.fail(DynaLensError(s"NegateFn does not support an operand of type: ${t.getClass}"))
+      }
+    } yield result
+
+case class ModuloFn(left: Fn[Any], right: Fn[Any]) extends Fn[Any]:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    for {
+      l <- left.resolve(ctx)
+      r <- right.resolve(ctx)
+      result <- (l, r) match
+        case (li: Int, ri: Int) => ZIO.succeed(li % ri)
+        case (li: Long, ri: Long) => ZIO.succeed(li % ri)
+        case (li: Int, rl: Long) => ZIO.succeed(li.toLong % rl)
+        case (ll: Long, ri: Int) => ZIO.succeed(ll % ri.toLong)
+        case _ =>
+          ZIO.fail(DynaLensError(s"Modulo (%) only supported for Int and Long, not (${l.getClass}, ${r.getClass})"))
+    } yield result
+
 case class AddFn(
     left: Fn[Any],
     right: Fn[Any]
 ) extends Fn[Any]:
 
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
@@ -357,7 +387,7 @@ case class SubtractFn(
     right: Fn[Any]
 ) extends Fn[Any]:
 
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
@@ -391,7 +421,7 @@ case class MultiplyFn(
     right: Fn[Any]
 ) extends Fn[Any]:
 
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
@@ -425,7 +455,7 @@ case class DivideFn(
     right: Fn[Any]
 ) extends Fn[Any]:
 
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
@@ -460,28 +490,28 @@ case class DivideFn(
 // --- String Builder Functions ----
 
 case class TrimFn(in: Fn[Any]) extends Fn[String]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, String] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     in.resolve(ctx).map {
       case null => ""
       case s    => s.toString.trim
     }
 
 case class ToLowerFn(in: Fn[Any]) extends Fn[String]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, String] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     in.resolve(ctx).map {
       case null => ""
       case s    => s.toString.toLowerCase
     }
 
 case class ToUpperFn(in: Fn[Any]) extends Fn[String]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, String] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     in.resolve(ctx).map {
       case null => ""
       case s    => s.toString.toUpperCase
     }
 
 case class ConcatFn(parts: List[Fn[Any]]) extends Fn[String]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, String] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     ZIO
       .foreach(parts)(_.resolve(ctx))
       .map(_.map {
@@ -491,7 +521,7 @@ case class ConcatFn(parts: List[Fn[Any]]) extends Fn[String]:
 
 case class InterpolateFn(template: Fn[Any], variables: Map[String, Fn[Any]]) extends Fn[String]:
 
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, String] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     for {
       templStr <- template.resolve(ctx).map {
         case null => ""
@@ -564,7 +594,7 @@ object TemplateUtils {
 }
 
 case class SubstringFn(str: Fn[Any], start: Fn[Int], end: Option[Fn[Int]]) extends Fn[String]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, String] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     for {
       s <- str.resolve(ctx).map {
         case null => ""
@@ -580,7 +610,7 @@ case class SubstringFn(str: Fn[Any], start: Fn[Int], end: Option[Fn[Int]]) exten
     } yield result
 
 case class ReplaceFn(in: Fn[Any], target: Fn[Any], replacement: Fn[Any]) extends Fn[String]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, String] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     for {
       str <- in.resolve(ctx).map(v => if v == null then "" else v.toString)
       t <- target.resolve(ctx).map(v => if v == null then "" else v.toString)
@@ -591,7 +621,7 @@ case class ReplaceFn(in: Fn[Any], target: Fn[Any], replacement: Fn[Any]) extends
 // --- Misc Functions ----
 
 case class LengthFn(in: Fn[Any]) extends Fn[Int]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Int] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Int] =
     in.resolve(ctx).map {
       case null => 0
       case c if c.isInstanceOf[Seq[?]] => c.asInstanceOf[Seq[?]].length
@@ -602,7 +632,7 @@ case class FilterFn(
     predicate: Fn[Boolean]
 ) extends Fn[Any]:
 
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ctx.get("this") match
       case Some((v, lens)) =>
         v match
@@ -619,7 +649,7 @@ case class FilterFn(
         ZIO.fail(DynaLensError(s"'this' not found in context"))
 
 case class MapFwdFn(mapName: String) extends Fn[Any]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ctx.get("this") match
       case Some((value, _)) =>
         ZIO.serviceWithZIO[_BiMapRegistry] { registry =>
@@ -635,7 +665,7 @@ case class MapFwdFn(mapName: String) extends Fn[Any]:
         ZIO.fail(DynaLensError(s"'this' is not defined in context"))
 
 case class MapRevFn(mapName: String) extends Fn[Any]:
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ctx.get("this") match
       case Some((value, _)) =>
         ZIO.serviceWithZIO[_BiMapRegistry] { registry =>
@@ -651,7 +681,7 @@ case class MapRevFn(mapName: String) extends Fn[Any]:
         ZIO.fail(DynaLensError(s"'this' is not defined in context"))
 
 case class FormatDateFn(dateExpr: Fn[Any], pattern: Fn[String]) extends Fn[Any] {
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
       d <- dateExpr.resolve(ctx)
       p <- pattern.resolve(ctx)
@@ -669,7 +699,7 @@ case class FormatDateFn(dateExpr: Fn[Any], pattern: Fn[String]) extends Fn[Any] 
 }
 
 case class ParseDateFn(strExpr: Fn[Any], pattern: Fn[String]) extends Fn[Any] {
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
       s <- strExpr.resolve(ctx)
       p <- pattern.resolve(ctx)
@@ -689,11 +719,11 @@ case class ParseDateFn(strExpr: Fn[Any], pattern: Fn[String]) extends Fn[Any] {
 // --- Stand-Alone Functions ----
 
 case object NowFn extends Fn[Any] {
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ZIO.succeed(new java.util.Date())
 }
 
 case object UUIDFn extends Fn[Any] {
-  def resolve(ctx: Map[String, (Any, DynaLens[?])]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ZIO.succeed(java.util.UUID.randomUUID())
 }

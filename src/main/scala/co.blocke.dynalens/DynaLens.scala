@@ -45,20 +45,20 @@ case class DynaLens[T](
       script: BlockStmt,
       target: T,
       registry: _BiMapRegistry = EmptyBiMapRegistry
-  ): ZIO[Any, DynaLensError, (T, Map[String, (Any, DynaLens[?])])] =
+  ): ZIO[Any, DynaLensError, (T, DynaContext)] =
     actualRun(script, target).provide(BiMapRegistry.layer(registry))
 
   private inline def actualRun(
       script: BlockStmt,
       target: T
-  ): ZIO[_BiMapRegistry, DynaLensError, (T, Map[String, (Any, DynaLens[?])])] =
-    val ctx = Map("top" -> (target, this))
+  ): ZIO[_BiMapRegistry, DynaLensError, (T, DynaContext)] =
+    val ctx: DynaContext = DynaContext(target, this)
     for {
       resultCtx <- script.resolve(ctx)
       (resultObj, _) = resultCtx("top")
     } yield (resultObj.asInstanceOf[T], resultCtx)
 
-  def runNoZIO(script: BlockStmt, target: T, registry: _BiMapRegistry = EmptyBiMapRegistry): Either[DynaLensError, (T, Map[String, (Any, DynaLens[?])])] =
+  def runNoZIO(script: BlockStmt, target: T, registry: _BiMapRegistry = EmptyBiMapRegistry): Either[DynaLensError, (T, DynaContext)] =
     Unsafe.unsafe { implicit unsafe =>
       Runtime.default.unsafe
         .run(
@@ -163,9 +163,9 @@ case class DynaLens[T](
       path: List[PathElement],
       current: Any,
       dynalens: DynaLens[?]
-  ): ZIO[Any, DynaLensError, mutable.Map[String, (Any, DynaLens[?])]] = {
+  ): ZIO[Any, DynaLensError, DynaContext] = {
 
-    val ctx = mutable.Map[String, (Any, DynaLens[?])]("top" -> (current, dynalens))
+    val ctx: DynaContext = DynaContext(current, dynalens)
 
     def step(
         path: List[PathElement],
@@ -209,14 +209,14 @@ case class DynaLens[T](
       path: String,
       fn: Fn[R],
       obj: T,
-      outerCtx: Map[String, (Any, DynaLens[?])] = Map.empty // <-- added outer context
+      outerCtx: DynaContext = DynaContext.empty // <-- added outer context
   ): ZIO[_BiMapRegistry, DynaLensError, T] =
 
     def processPaths(
         paths: List[List[PathElement]],
         refObj: Any,
         dynalens: DynaLens[?],
-        ctx: mutable.Map[String, (Any, DynaLens[?])]
+        ctx: DynaContext
     ): ZIO[_BiMapRegistry, DynaLensError, Any] =
       paths match {
         case pathParts :: Nil =>

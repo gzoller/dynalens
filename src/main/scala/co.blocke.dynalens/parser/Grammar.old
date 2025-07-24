@@ -131,7 +131,7 @@ object Grammar {
     P(blockExpr | methodExpr | literalWithMethods) ~ WS0
 
   case class ToStringFn(input: Fn[Any]) extends Fn[String]:
-    def resolve(ctx: Map[String, (Any, DynaLens[?])]) =
+    def resolve(ctx: DynaContext) =
       input.resolve(ctx).map {
         case null => ""
         case v    => v.toString

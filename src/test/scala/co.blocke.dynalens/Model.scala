@@ -33,9 +33,9 @@ case class Order(id: String, pack: Pack)
 case class Ticket(id: java.util.UUID, when: java.util.Date)
 
 // Utility fn for testing
-def toStringCtx(ctx: Map[String, (Any, DynaLens[?])]): String = {
+def toStringCtx(ctx: DynaContext): String = {
   val sb = new StringBuffer()
-  ctx.foreach { case (key, (value, _)) =>
+  ctx.toList.sortBy(_._1).foreach { case (key, (value, _)) =>
     sb.append(s"$key -> $value\n")
   }
   sb.toString

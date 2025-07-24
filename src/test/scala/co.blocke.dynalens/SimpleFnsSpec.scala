@@ -26,13 +26,11 @@ import zio.test.*
 
 object SimpleFnsSpec extends ZIOSpecDefault:
 
-  val testCtx: Map[String, (Any, DynaLens[?])] = Map(
-    "top" -> ("hello", null),
-    "s1" -> ("world", null),
-    "num" -> (5, null),
-    "x" -> (10, null),
-    "y" -> (3, null)
-  )
+  val testCtx: DynaContext = DynaContext("hello", null)
+  testCtx.put("s1", ("world", null))
+  testCtx.put("num", (5, null))
+  testCtx.put("x", (10, null))
+  testCtx.put("y", (3, null))
 
   def spec = suite("SimpleFnsSpec")(
     test("ConstantFn should return constant value") {
