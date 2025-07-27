@@ -618,7 +618,133 @@ case class ReplaceFn(in: Fn[Any], target: Fn[Any], replacement: Fn[Any]) extends
     } yield str.replace(t, r)
 
 
+// --- Collection (Iterable) Functions ----
+
+case class FilterFn(predicate: Fn[Boolean]) extends Fn[Any]:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ctx.get("this") match
+      case Some((v: Iterable[?], lens)) =>
+        ZIO.foreach(v) { item =>
+          val localCtx = ctx + ("this" -> (item, lens))
+          predicate.resolve(localCtx).map(b => if b then Some(item) else None)
+        }.map(_.flatten)
+      case Some((other, _)) =>
+        ZIO.fail(DynaLensError(s"filter() may only be applied to Iterable types, got: ${other.getClass.getSimpleName}"))
+      case None =>
+        ZIO.fail(DynaLensError(s"'this' not found in context"))
+
+case class SortFn(
+                   fieldPath: Option[String],
+                   asc: Boolean = true
+                 ) extends Fn[Any]:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ctx.get("this") match
+      case Some((v: Iterable[?], lens)) =>
+        fieldPath match
+          case Some(path) =>
+            for {
+              itemValuePairs <- ZIO.foreach(v) { item =>
+                lens.get(path, item.asInstanceOf[lens.ThisT]).map { value =>
+                  (item, value.asInstanceOf[Comparable[Any]])
+                }
+              }
+            } yield {
+              val sorted = itemValuePairs.toSeq.sortBy(_._2)
+              if asc then sorted.map(_._1) else sorted.reverse.map(_._1)
+            }
+
+          case None =>
+            for {
+              seq <- ZIO.foreach(v) {
+                case c: Comparable[?] => ZIO.succeed(c.asInstanceOf[Comparable[Any]])
+                case other =>
+                  ZIO.fail(DynaLensError(s"Item '$other' is not Comparable"))
+              }
+            } yield {
+              implicit val ordering: Ordering[Comparable[Any]] =
+                (a: Comparable[Any], b: Comparable[Any]) => a.compareTo(b)
+
+              val sorted = seq.toSeq.sorted
+              if asc then sorted else sorted.reverse
+            }
+
+      case Some((other, _)) =>
+        ZIO.fail(DynaLensError(s"sort${if asc then "Asc" else "Desc"}() may only be applied to Iterable types, but got: ${other.getClass.getSimpleName}"))
+
+      case None =>
+        ZIO.fail(DynaLensError(s"'this' not found in context"))
+
+case class DistinctFn(fieldPath: Option[String]) extends Fn[Any]:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ctx.get("this") match
+      case Some((items: Iterable[?], lens)) =>
+        fieldPath match
+          case Some(field) =>
+            for {
+              itemPairs <- ZIO.foreach(items) { item =>
+                lens.get(field, item.asInstanceOf[lens.ThisT]).map(v => (v, item))
+              }
+              // groupBy first value, then keep distinct items
+              deduped = itemPairs.groupBy(_._1).values.map(_.head._2)
+            } yield deduped.toList
+
+          case None =>
+            ZIO.succeed(items.toSet.toList)
+
+      case Some((nonIterable, _)) =>
+        ZIO.fail(DynaLensError(s"distinct() may only be applied to Iterable types, but got: ${nonIterable.getClass.getSimpleName}"))
+
+      case None =>
+        ZIO.fail(DynaLensError(s"'this' not found in context"))
+
+case class LimitFn(count: Int) extends Fn[Any]:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ctx.get("this") match
+      case Some((items: Iterable[?], _)) =>
+        ZIO.succeed(items.take(count).toList)
+
+      case Some((nonIterable, _)) =>
+        ZIO.fail(DynaLensError(s"limit() may only be applied to Iterable types, but got: ${nonIterable.getClass.getSimpleName}"))
+
+      case None =>
+        ZIO.fail(DynaLensError(s"'this' not found in context"))
+
+case class ReverseFn() extends Fn[Any]:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ctx.get("this") match
+      case Some((items: Iterable[?], _)) =>
+        ZIO.succeed(items.toList.reverse)
+
+      case Some((nonIterable, _)) =>
+        ZIO.fail(DynaLensError(s"reverse() may only be applied to Iterable types, but got: ${nonIterable.getClass.getSimpleName}"))
+
+      case None =>
+        ZIO.fail(DynaLensError(s"'this' not found in context"))
+
+case class CleanFn() extends Fn[Any]:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ctx.get("this") match
+      case Some((items: Iterable[?], _)) =>
+        ZIO.succeed(items.filter {
+          case null => false
+          case None => false
+          case _: Unit => false
+          case _ => true
+        })
+
+      case Some((nonIterable, _)) =>
+        ZIO.fail(DynaLensError(s"clean() may only be applied to Iterable types, but got: ${nonIterable.getClass.getSimpleName}"))
+
+      case None =>
+        ZIO.fail(DynaLensError(s"'this' not found in context"))
+
 // --- Misc Functions ----
+
+case object IdentityFn extends Fn[Any]:  // No-op function (for chaining)
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ctx.get("this") match
+      case Some((v, _)) => ZIO.succeed(v)
+      case None => ZIO.fail(DynaLensError("'this' not found in context"))
 
 case class LengthFn(in: Fn[Any]) extends Fn[Int]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Int] =
@@ -627,26 +753,6 @@ case class LengthFn(in: Fn[Any]) extends Fn[Int]:
       case c if c.isInstanceOf[Seq[?]] => c.asInstanceOf[Seq[?]].length
       case s => s.toString.length
     }
-
-case class FilterFn(
-    predicate: Fn[Boolean]
-) extends Fn[Any]:
-
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
-    ctx.get("this") match
-      case Some((v, lens)) =>
-        v match
-          case items: Iterable[?] =>
-            for {
-              filtered <- ZIO.foreach(items) { item =>
-                val localCtx = ctx + ("this" -> (item, lens)) // replace map's "this" for our filter fn
-                predicate.resolve(localCtx).map(b => if b then Some(item) else None)
-              }
-            } yield filtered.flatten
-          case other =>
-            ZIO.fail(DynaLensError(s"filter() may only be applied to Iterable types, but got: ${other.getClass.getSimpleName}"))
-      case None =>
-        ZIO.fail(DynaLensError(s"'this' not found in context"))
 
 case class MapFwdFn(mapName: String) extends Fn[Any]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =

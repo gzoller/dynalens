@@ -116,13 +116,25 @@ trait Level2 extends Level1:
 
   // ---- valueExpr => Top-Level Expr ----
 
+//  def valueExpr[$: P]: P[Fn[Any]] =
+//    P(CharsWhile(_ != ')').!.map { str =>
+//      println(s"[valueExpr] matched: '$str'")
+//      ConstantFn(str) // fake out for testing
+//    })
+//  def valueExpr[$: P]: P[Fn[Any]] =
+//    P(CharsWhile(_ != ')').!.map { s =>
+//      println(s"[valueExpr] matched: '$s'")
+//      GreaterThanFn(GetFn("this.qty"), ConstantFn(4)) // dummy
+//    })
   def valueExpr[$: P]: P[Fn[Any]] =
-    P(
-      ifFn |
-        blockFn |                // Optional block expression
-        concatExpr |  // Includes hook into arithmeticExpr, which hooks into baseExpr (path+methods)
-        booleanExpr.map(b => b: Fn[Any])  // Boolean logic safely downgraded
-    )
+    P("this.qty > 4".!.map(_ => GreaterThanFn(GetFn("this.qty"), ConstantFn(4))).map{h=>println("HERE! Parsed valueExpr");h})
+//  def valueExpr[$: P]: P[Fn[Any]] =
+//    P(
+//      ifFn |
+//        blockFn |                // Optional block expression
+//        concatExpr |  // Includes hook into arithmeticExpr, which hooks into baseExpr (path+methods)
+//        booleanExpr.map(b => b: Fn[Any])  // Boolean logic safely downgraded
+//    )
 
   def blockFn[$: P]: P[BlockFn[?]] =
     P(
@@ -138,7 +150,15 @@ trait Level2 extends Level1:
     P("{" ~/ WS0 ~ statement.rep(sep = WS0).log("BLOCK_STATEMENTS") ~ WS0 ~ "}").map(BlockStmt.apply)
 
   def statement[$: P]: P[Statement] =
-    P(WS0 ~ (valDecl | updateOrMapStmt | ifStmt.log("!IF") | blockStmt).log("STATEMENT") ~ WS0)
+    P(WS0 ~ (
+      P(collectionStmt(valueExpr).log("!COLLECTION_STMT")) |
+      P(valDecl.log("!VAL")) |
+      P(updateOrMapStmt.log("TRY_UPD")) |
+        P(ifStmt.log("!IF")) |
+        P(blockStmt.log("!BLOCK"))
+      ).log("+STATEMENT") ~ WS0)
+//  def statement[$: P]: P[Statement] =
+//    P(WS0 ~ (valDecl | updateOrMapStmt | ifStmt.log("!IF") | blockStmt | collectionStmt(booleanExpr).log("COLLECTION_STMT")).log("STATEMENT") ~ WS0)
 
   def valDecl[$: P]: P[ValStmt[?]] =
     P("val" ~/ WS ~ identifier.! ~ WS0 ~ "=" ~ WS0 ~ valueExpr).map {

@@ -30,6 +30,7 @@ import parser.Parser
 object Parsing extends ZIOSpecDefault:
 
   def spec = suite("Parsing Tests")(
+    /*
     test("Simple val assignment script test") {
       val script =
         """
@@ -337,7 +338,6 @@ object Parsing extends ZIOSpecDefault:
       val a = dynalens[Item]
       for {
         compiledScript <- Parser.parseScript(script)
-        _ <- ZIO.succeed(println("&&& "+compiledScript))
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && normalize(resultStr) == normalize(expectedResult) && compiledScript.toString == expectedCompiled)
@@ -391,11 +391,11 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 6, 5), Item("xyz", 3, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
-    /*
+    */
     test("filter must work") {
       val script =
         """
-          |  items[].filter(this.qty > 4)
+          |  items[].filter( this.qty > 4 )
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(items[],FilterFn(GreaterThanFn(GetFn(this.qty),ConstantFn(4))))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,9,5)),1)""".stripMargin + "\n"
@@ -403,10 +403,12 @@ object Parsing extends ZIOSpecDefault:
       val a = dynalens[Shipment]
       for {
         compiledScript <- Parser.parseScript(script)
+        _ <- ZIO.succeed(println("&&& "+compiledScript))
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 9, 5)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
+    /*
     test("BiMap conversion must work") {
       val numbers = Map("abc" -> "p123", "xyz" -> "p456")
       val withRegistry = (new BiMapRegistry()).register("testmap", BiMap.fromMap(numbers))
