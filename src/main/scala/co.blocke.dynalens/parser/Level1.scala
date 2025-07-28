@@ -15,36 +15,69 @@ trait Level1 extends Level0:
   //   foo.bar
   //   foo[].bar
   //   foo[3].bar
-  def path[$: P]: P[String] = {  // path with no following ws allowed
 
-    def dotField[$: P]: P[String] =
-      P(&("." ~ identifier ~ "(").!.?).flatMap {
-        // Prevent matching function calls like `.foo(...)`
-        case Some(_) => Fail
-        case None => P("." ~/ identifier).map("." + _)
-      }.log("DOT_FIELD")
+  def path[$: P]: P[(String, Option[String])] = {
 
-    def arrayIndex[$: P]: P[String] =
-      P("[" ~/ CharsWhileIn("0-9").! ~ "]").map("[" + _ + "]").log("ARRAY_INDEX")
+    def fullPath[$: P]: P[String] =
+      P(CharsWhileIn("a-zA-Z0-9_.[]").rep(1).!) //.map{h=>println("S: "+h);h}
 
-    def arrayAll[$: P]: P[String] =
-      P("[" ~ "]").map(_ => "[]").log("ARRAY_ALL")
+    // Non-consuming lookahead: detects if next char is '('
+    def isFunc[$: P]: P[Boolean] =
+      P(
+        &("(").map(_ => true)
+          | Pass.map(_ => false)
+      )
 
-    def segment[$: P]: P[String] =
-      P(arrayAll | arrayIndex | dotField)
-
-    P(
-      // Prevent this rule from running if we're about to enter a method chain
-      !("." ~ collectionMethodName ~ "(") ~
-        (arrayAll | arrayIndex | dotField).rep(1, sep = ".").!.map { p =>
-          println(s"PATH CAPTURED: $p")
-          p
-        }
-    ).log("PATH")
-//    P(identifier.! ~ segment.rep).map { case (head, tail) =>
-//      tail.foldLeft(head)(_ + _)
-//    }.log("PATH")
+    // Combine an
+    // //.map{x => println("S2: "+x);x}d post-process
+    (fullPath ~ isFunc).map {
+      case (raw, hasFunc) =>
+        println(s"Raw: $raw  HasFunc: $hasFunc")
+        if hasFunc then
+          val lastDot = raw.lastIndexOf('.')
+          if lastDot == -1 then
+            (raw, None)
+          else
+            val base = raw.take(lastDot)
+            val fn = raw.drop(lastDot + 1)
+            (base, Some(fn))
+        else
+          (raw, None)
+    }
   }
+
+  private def pathFn[$: P](valueExpr: => P[Fn[Any]]): P[Fn[Any]] =
+    P(path).flatMap {
+      case (rawPath, maybeMethod) =>
+        val baseFn = GetFn(rawPath)
+
+        maybeMethod match
+          case None => P(Pass(baseFn))
+          case Some(methodName) =>
+            methodFunctions.get(methodName) match
+              case Some(fnBuilder) =>
+                P(methodArgs(valueExpr).map(args => fnBuilder(baseFn, args)))
+              case None =>
+                throw new RuntimeException(s"Unknown method: $methodName")
+    }
+
+  private def methodArgs[$: P](valueExpr: => P[Fn[Any]]): P[List[Fn[Any]]] =
+    P("(" ~ valueExpr.rep(sep = "," ~ WS0) ~ ")" ~ WS0).map(_.toList)
+
+  private def methodCall[$: P](valueExpr: => P[Fn[Any]]): P[(String, List[Fn[Any]])] =
+    P("." ~ identifier.! ~ methodArgs(valueExpr))
+      .map { case (name, args) => (name, args.toList) }
+
+  def baseExpr[$: P](valueExpr: => P[Fn[Any]]): P[Fn[Any]] =
+    def methodChain[$: P](base: Fn[Any]): P[Fn[Any]] =
+      P(methodCall(valueExpr).rep).map { chain =>
+        chain.foldLeft(base) { case (inner, (fnName, args)) =>
+          methodFunctions.get(fnName) match
+            case Some(fnBuilder) => fnBuilder(inner, args).asInstanceOf[Fn[Any]]
+            case None => throw new RuntimeException(s"Unknown method: $fnName")
+        }
+      }
+    P(constant | pathFn(valueExpr) | standaloneFn).flatMap(methodChain) ~ WS0
 
 
   // ---- Functions ----
@@ -124,88 +157,68 @@ trait Level1 extends Level0:
 
   // ---- Collection Statements ----
 
-  // Greedily captures a path ending in at least one [] and parses chained method calls.
-  def collectionMethodName[$: P]: P[String] =
-    P(StringIn("filter", "sortAsc", "sortDesc", "distinct", "limit", "reverse", "clean").!)
-
-  def collectionStmtPathAndMethods[$: P](valueExpr: => P[Fn[Any]]): P[(String, List[(String, List[Fn[Any]])])] = {
-
-//    def methodCall[$: P]: P[(String, List[Fn[Any]])] =
-//      P("." ~ collectionMethodName.!.map(name => {
-//        println("meth name: " + name); name
-//      }) ~
-//        "(" ~/
-//        valueExpr.rep(sep = "," ~ WS0).map { args =>
-//          println("Args: " + args.map(_.getClass.getSimpleName).mkString(", "))
-//          args.toList
-//        } ~
-//        ")"
-//      ).map { (name, args) =>
-//        println(s"[methodCall] parsed method '$name' with args: " + args.map(_.getClass.getSimpleName).mkString(", "))
-//        (name, args)
-//      }
-
-//    def methodCall[$: P]: P[(String, List[Fn[Any]])] =
-//      P("." ~ identifier.!.map { f => println("fn id: " + f); f } ~
-//        "(" ~/ CharsWhile(_ != ')').!.map { v => println("RAW V: " + v); GreaterThanFn(GetFn("this.qty"), ConstantFn(4)) }.rep(sep = "," ~ WS0) ~ ")" ~ WS0)
-//        .map { case (name, args) =>
-//          println("HEY: " + name)
-//          (name, args.toList)
-//        }
-    def methodCall[$: P]: P[(String, List[Fn[Any]])] =
-      P("." ~ identifier.!.map { f => println("fn id: " + f); f } ~
-        "(" ~/ valueExpr.map { v => println("V: " + v); v }.rep(sep = "," ~ WS0) ~ ")" ~ WS0)
-        .map { case (name, args) =>
-          println(s"[methodCall.map] name=$name, args=${args.map(_.getClass.getSimpleName).mkString(",")}")
-          (name, args.toList)
+  def collectionStmt[$: P](valueExpr: => P[Fn[Any]]): P[Statement] =
+    P(path).flatMap {
+      case (basePath, Some(fnName)) =>
+        P(methodArgs(valueExpr) ~ methodCall(valueExpr).rep).map {
+          case (firstArgs, restMethods) =>
+            val fullChain = (fnName, firstArgs) :: restMethods.toList
+            val composedFn = fullChain.foldLeft[Fn[Any]](IdentityFn) {
+              case (innerFn, (methodName, args)) =>
+                collectionStatementFns.get(methodName) match
+                  case Some(fnBuilder) => fnBuilder(innerFn, args)
+                  case None => throw new RuntimeException(s"Unknown collection method: $methodName")
+            }
+            MapStmt(basePath, composedFn)
         }
 
-    def methodCall[$: P]: P[(String, List[Fn[Any]])] =
-      P("." ~ identifier.! ~ "(" ~/ valueExpr.rep(sep = "," ~ WS0) ~ ")" ~ WS0)
-        .map { case (name, args) => (name, args.toList) }
-      
-    def collectionPath[$: P]: P[String] =
-      P(CharsWhile(_ != '.').! ~ &("." ~ collectionMethodName ~ "("))
-        .map(_.trim)
-        .flatMap { path =>
-          if path.endsWith("[]") then Pass(path)
-          else Fail.opaque("collectionPath must end with []")
-        }
-        .log("COLLECTION_PATH")
-
-//    P(Index ~ collectionPath.map{z=>println("Captured path: "+z);z} ~ Index).flatMap {
-//      case (start, path, end) =>
-//        // println(s"COLLECT path: $path from $start to $end")
-//        P(methodCalls).map(methods => (path, methods))
-//    }
-    P(collectionPath.map{z=>println("Captured path: "+z);z}.opaque("collectionPath done") ~ methodCalls)
-      .map { case (p, methods) =>
-        println(s"[collectionStmt] Got: path=$p, methods=$methods")
-        CollectionStmt(p, methods)
-      }
-//    P(collectionPath.map{z=>println("Captured path: "+z);z} ~ methodCalls)
-  }
-
-  def collectionStmt[$: P](valueExpr: P[Fn[Any]]): P[Statement] =
-    P(collectionStmtPathAndMethods(valueExpr)).map {
-      case (collectionPath, methodCalls) =>
-        println(s"[collectionStmt] path: $collectionPath")
-        println(s"[collectionStmt] methods: $methodCalls")
-        val composedFn = methodCalls.foldLeft[Fn[Any]](IdentityFn) {
-          case (innerFn, (methodName, args)) =>
-            collectionStatementFns.get(methodName) match
-              case Some(fnBuilder) => fnBuilder(innerFn, args)
-              case None => throw new RuntimeException(s"Unknown collection method: $methodName")
-        }
-        MapStmt(collectionPath, composedFn)
+      case (_, None) =>
+        Fail.opaque("Collection statement must have at least one method")
     }
 
-  val collectionStatementFns: Map[String, (Fn[Any], List[Any]) => Fn[Any]] = Map(
-    "filter" -> { case (_, List(pred: BooleanFn)) => FilterFn(pred) },
-    "sortAsc" -> { case (_, List(field: String)) => SortFn(Some(field)) },
-    "sortDesc" -> { case (_, List(field: String)) => SortFn(Some(field), asc = false) },
-    "distinct" -> { case (_, List(field: String)) => DistinctFn(Some(field)) },
-    "limit" -> { case (_, List(value: Int)) => LimitFn(value) },
-    "reverse" -> { case (_, Nil) => ReverseFn() },
-    "clean" -> { case (_, Nil) => CleanFn() }
-  )
+val collectionStatementFns: Map[String, (Fn[Any], List[Fn[Any]]) => Fn[Any]] = Map(
+  "filter" -> {
+    case (_, List(pred: BooleanFn)) => FilterFn(pred)
+  },
+  "sortAsc" -> {
+    case (_, List(GetFn(path))) => SortFn(Some(path))
+    case (_, Nil) => SortFn(None)
+    case (_, args) => throw RuntimeException(s"Invalid arguments for sortAsc: $args")
+  },
+  "sortDesc" -> {
+    case (_, List(GetFn(path))) => SortFn(Some(path), asc = false)
+    case (_, Nil) => SortFn(None, asc = false)
+    case (_, args) => throw RuntimeException(s"Invalid arguments for sortDesc: $args")
+  },
+  "distinct" -> {
+    case (_, List(GetFn(path))) => DistinctFn(Some(path))
+    case (_, List(ConstantFn(s: String))) => DistinctFn(Some(s))
+    case (_, args) => throw RuntimeException(s"Invalid arguments for distinct: $args")
+  },
+  "limit" -> {
+    case (_, List(ConstantFn(i: Int))) => LimitFn(i)
+    case (_, args) => throw RuntimeException(s"Invalid arguments for limit: $args")
+  },
+  "reverse" -> {
+    case (_, Nil) => ReverseFn()
+    case (_, args) => throw RuntimeException(s"reverse does not take arguments: $args")
+  },
+  "clean" -> {
+    case (_, Nil) => CleanFn()
+    case (_, args) => throw RuntimeException(s"clean does not take arguments: $args")
+  }
+)
+
+//  def collectionStmt[$: P](valueExpr: => P[Fn[Any]]): P[Statement] =
+//    P(collectionStmtPathAndMethods(valueExpr)).map {
+//      case (collectionPath, methodCalls) =>
+//        println(s"[collectionStmt] path: $collectionPath")
+//        println(s"[collectionStmt] methods: $methodCalls")
+//        val composedFn = methodCalls.foldLeft[Fn[Any]](IdentityFn) {
+//          case (innerFn, (methodName, args)) =>
+//            collectionStatementFns.get(methodName) match
+//              case Some(fnBuilder) => fnBuilder(innerFn, args)
+//              case None => throw new RuntimeException(s"Unknown collection method: $methodName")
+//        }
+//        MapStmt(collectionPath, composedFn)
+//    }

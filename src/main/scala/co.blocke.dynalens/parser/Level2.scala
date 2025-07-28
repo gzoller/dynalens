@@ -12,31 +12,16 @@ import fastparse.*, NoWhitespace.*
 trait Level2 extends Level1:
 
 
-  def baseExpr[$: P]: P[Fn[Any]] =
-    P((constant | path.map(GetFn(_)) | standaloneFn)).flatMap(methodChain) ~ WS0
-
-  private def methodCall[$: P]: P[(String, List[Fn[Any]])] =
-    P("." ~ identifier.! ~ "(" ~/ valueExpr.rep(sep = "," ~ WS0) ~ ")" ~ WS0)
-      .map { case (name, args) => (name, args.toList) }
-
-  private def methodChain[$: P](base: Fn[Any]): P[Fn[Any]] =
-    P(methodCall.rep).map { chain =>
-      chain.foldLeft(base) { case (inner, (fnName, args)) =>
-        methodFunctions.get(fnName) match
-          case Some(fnBuilder) => fnBuilder(inner, args).asInstanceOf[Fn[Any]]
-          case None => throw new RuntimeException(s"Unknown method: $fnName")
-      }
-    }
-
-
   // ---- Boolean ----
 
   def booleanAtom[$: P]: P[BooleanFn] =
     P(
-      "(" ~/ booleanExpr ~ ")" |
-        comparisonExpr | // e.g., x == 10
-        booleanLiteral2 |
-        arithmeticExpr.map(toBooleanFn.apply) // includes bare paths like `x` or `foo.bar`
+      WS0 ~ (
+        "(" ~/ booleanExpr ~ ")" |
+          comparisonExpr |
+          booleanLiteral2 |
+          arithmeticExpr.map(toBooleanFn.apply)
+        )
     ).log("BOOL_ATOM")
 
   def booleanExpr[$: P]: P[BooleanFn] =
@@ -96,7 +81,7 @@ trait Level2 extends Level1:
 
   private def arithmeticAtom[$: P]: P[Fn[Any]] =
     P(
-      baseExpr |
+      baseExpr(valueExpr) |
       numberLiteral |
         stringLiteral | // optional if you support it
         "(" ~/ arithmeticExpr ~ ")"
@@ -117,24 +102,14 @@ trait Level2 extends Level1:
   // ---- valueExpr => Top-Level Expr ----
 
 //  def valueExpr[$: P]: P[Fn[Any]] =
-//    P(CharsWhile(_ != ')').!.map { str =>
-//      println(s"[valueExpr] matched: '$str'")
-//      ConstantFn(str) // fake out for testing
-//    })
-//  def valueExpr[$: P]: P[Fn[Any]] =
-//    P(CharsWhile(_ != ')').!.map { s =>
-//      println(s"[valueExpr] matched: '$s'")
-//      GreaterThanFn(GetFn("this.qty"), ConstantFn(4)) // dummy
-//    })
+//    P("this.qty > 4".!.map(_ => GreaterThanFn(GetFn("this.qty"), ConstantFn(4))).map{h=>println("HERE! Parsed valueExpr");h})
   def valueExpr[$: P]: P[Fn[Any]] =
-    P("this.qty > 4".!.map(_ => GreaterThanFn(GetFn("this.qty"), ConstantFn(4))).map{h=>println("HERE! Parsed valueExpr");h})
-//  def valueExpr[$: P]: P[Fn[Any]] =
-//    P(
-//      ifFn |
-//        blockFn |                // Optional block expression
-//        concatExpr |  // Includes hook into arithmeticExpr, which hooks into baseExpr (path+methods)
-//        booleanExpr.map(b => b: Fn[Any])  // Boolean logic safely downgraded
-//    )
+    P(
+      ifFn |
+        blockFn |                // Optional block expression
+        concatExpr |  // Includes hook into arithmeticExpr, which hooks into baseExpr (path+methods)
+        booleanExpr.map(b => b: Fn[Any]) // Boolean logic safely downgraded
+    )
 
   def blockFn[$: P]: P[BlockFn[?]] =
     P(
@@ -166,7 +141,7 @@ trait Level2 extends Level1:
     }
 
   def updateOrMapStmt[$: P]: P[Statement] =
-    P(path.! ~ WS0 ~ "=" ~/ WS0 ~ valueExpr).map {
+    P(path.map(_._1) ~ WS0 ~ "=" ~/ WS0 ~ valueExpr).map {
       case (p, v) =>
         if p.contains("[]") then MapStmt(p, v) else UpdateStmt(p, v)
     }

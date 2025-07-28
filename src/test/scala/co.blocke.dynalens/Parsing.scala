@@ -392,15 +392,20 @@ object Parsing extends ZIOSpecDefault:
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 6, 5), Item("xyz", 3, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     */
-    test("filter must work") {
+    test("filter and sort must work") {
+//      items[].filter(this.qty > 4).sortAsc(this.id)
       val script =
         """
-          |  items[].filter( this.qty > 4 )
+          |  items[].sortAsc( this.id )
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(items[],FilterFn(GreaterThanFn(GetFn(this.qty),ConstantFn(4))))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,9,5)),1)""".stripMargin + "\n"
-      val inst = Shipment("aaa", List(Item("abc", 9, 5), Item("xyz", 1, 7)), 1)
-      val a = dynalens[Shipment]
+      val inst =
+        Order("ord1", Pack("pallet", 2, List(
+          Shipment("aaa", List(Item("wow", 9, 5), Item("xyz", 1, 7), Item("abc", 19, 7)), 1),
+          Shipment("bbb", List(Item("free", 7, 5), Item("ace", 5, 7), Item("xyz", 1, 7)), 1)
+        )))
+      val a = dynalens[Order]
       for {
         compiledScript <- Parser.parseScript(script)
         _ <- ZIO.succeed(println("&&& "+compiledScript))
