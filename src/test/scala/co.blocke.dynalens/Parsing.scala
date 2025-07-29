@@ -30,7 +30,6 @@ import parser.Parser
 object Parsing extends ZIOSpecDefault:
 
   def spec = suite("Parsing Tests")(
-    /*
     test("Simple val assignment script test") {
       val script =
         """
@@ -391,15 +390,13 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 6, 5), Item("xyz", 3, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
-    */
     test("filter and sort must work") {
-//      items[].filter(this.qty > 4).sortAsc(this.id)
       val script =
         """
-          |  items[].sortAsc( this.id )
+          |  pack.shipments[].items[].filter( this.qty > 4 ).sortAsc(number)
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(items[],FilterFn(GreaterThanFn(GetFn(this.qty),ConstantFn(4))))))"""
-      val expectedResult = """top -> Shipment(aaa,List(Item(abc,9,5)),1)""".stripMargin + "\n"
+      val expectedCompiled = """BlockStmt(List(BlockStmt(List(MapStmt(pack.shipments[].items[],FilterFn(toBooleanFn(GreaterThanFn(GetFn(this.qty),ConstantFn(4))))), MapStmt(pack.shipments[].items[],SortFn(Some(number),true))))))"""
+      val expectedResult = """top -> Order(ord1,Pack(pallet,2,List(Shipment(aaa,List(Item(abc,19,7), Item(wow,9,5)),1), Shipment(bbb,List(Item(ace,5,7), Item(free,7,5)),1))))""".stripMargin + "\n"
       val inst =
         Order("ord1", Pack("pallet", 2, List(
           Shipment("aaa", List(Item("wow", 9, 5), Item("xyz", 1, 7), Item("abc", 19, 7)), 1),
@@ -408,10 +405,42 @@ object Parsing extends ZIOSpecDefault:
       val a = dynalens[Order]
       for {
         compiledScript <- Parser.parseScript(script)
-        _ <- ZIO.succeed(println("&&& "+compiledScript))
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 9, 5)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Order("ord1",Pack("pallet",2,List(Shipment("aaa",List(Item("abc",19,7), Item("wow",9,5)),1), Shipment("bbb",List(Item("ace",5,7), Item("free",7,5)),1)))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
+    test("reverse and clean must work") {
+      val script =
+        """
+          |  items[].reverse().clean()
+          |""".stripMargin
+      val expectedCompiled = """BlockStmt(List(BlockStmt(List(MapStmt(items[],ReverseFn()), MapStmt(items[],CleanFn())))))"""
+      val expectedResult = """top -> Shipment(aaa,List(Item(xyz,1,7), Item(abc,2,5)),1)""".stripMargin + "\n"
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), null, Item("xyz", 1, 7)), 1)
+      val a = dynalens[Shipment]
+      for {
+        compiledScript <- Parser.parseScript(script)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        _ <- ZIO.succeed(println(">>> "+x))
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x == Shipment("aaa", List(Item("xyz", 1, 7), Item("abc", 2, 5)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
+    test("distinct must work") {
+      val script =
+        """
+          |  items[].distinct(number).limit( 2 )
+          |""".stripMargin
+      val expectedCompiled = """BlockStmt(List(BlockStmt(List(MapStmt(items[],DistinctFn(Some(number))), MapStmt(items[],LimitFn(2))))))"""
+      val expectedResult = """top -> Shipment(aaa,List(Item(abc,2,5), Item(xyz,1,7)),1)""".stripMargin + "\n"
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("abc", 3, 44), Item("xyz", 1, 7), Item("foo", 1, 7), Item("bar", 1, 7)), 1)
+      val a = dynalens[Shipment]
+      for {
+        compiledScript <- Parser.parseScript(script)
+        _ <- ZIO.succeed(println("&&& "+compiledScript))
+        (x, newCtx) <- a.run(compiledScript, inst)
+        _ <- ZIO.succeed(println(">>> "+x))
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     /*
     test("BiMap conversion must work") {

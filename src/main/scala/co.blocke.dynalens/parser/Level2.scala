@@ -126,7 +126,7 @@ trait Level2 extends Level1:
 
   def statement[$: P]: P[Statement] =
     P(WS0 ~ (
-      P(collectionStmt(valueExpr).log("!COLLECTION_STMT")) |
+      P(collectionStmt(valueExpr, booleanExpr).log("!COLLECTION_STMT")) |
       P(valDecl.log("!VAL")) |
       P(updateOrMapStmt.log("TRY_UPD")) |
         P(ifStmt.log("!IF")) |
