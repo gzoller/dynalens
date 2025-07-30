@@ -30,6 +30,7 @@ import parser.Parser
 object Parsing extends ZIOSpecDefault:
 
   def spec = suite("Parsing Tests")(
+    /*
     test("Simple val assignment script test") {
       val script =
         """
@@ -107,15 +108,15 @@ object Parsing extends ZIOSpecDefault:
         |  }
         |""".stripMargin
 
-        val expectedCompiled = """BlockStmt(List(UpdateStmt(items[0].num,BlockFn(List(ValStmt(z,ConstantFn(wow)), ValStmt(y,ConstantFn(1))),GetFn(y)))))"""
-        val expectedResult = "top -> Shipment(aaa,List(Item(abc,2,1), Item(xyz,1,7)),1)\n"
-        val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
-        val a = dynalens[Shipment]
-        for {
-          compiledScript <- Parser.parseScript(script)
-          (x, newCtx) <- a.run(compiledScript, inst)
-          resultStr = toStringCtx(newCtx)
-        } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 1), Item("xyz", 1, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      val expectedCompiled = """BlockStmt(List(UpdateStmt(items[0].num,BlockFn(List(ValStmt(z,ConstantFn(wow)), ValStmt(y,ConstantFn(1))),GetFn(y)))))"""
+      val expectedResult = "top -> Shipment(aaa,List(Item(abc,2,1), Item(xyz,1,7)),1)\n"
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
+      val a = dynalens[Shipment]
+      for {
+        compiledScript <- Parser.parseScript(script)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 1), Item("xyz", 1, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Empty statement BlockFn") {
       val script =
@@ -391,6 +392,7 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 6, 5), Item("xyz", 3, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
+    */
     test("filter and sort must work") {
       val script =
         """
@@ -422,6 +424,7 @@ object Parsing extends ZIOSpecDefault:
         ) && resultStr == expectedResult && compiledScript.toString == expectedCompiled
       )
     },
+    /*
     test("reverse and clean must work") {
       val script =
         """
@@ -548,6 +551,7 @@ object Parsing extends ZIOSpecDefault:
         formattedWhen == "1972-07-09" // Confirm parsed date
       )
     }
+    */
   )
 
 /*

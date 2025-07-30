@@ -34,3 +34,7 @@ extension (ctx: DynaContext)
     val copy = ctx.clone().asInstanceOf[DynaContext]
     copy += (k -> v)
     copy
+
+case class ExprContext(searchThis: Boolean = false)
+
+given defaultExprContext: ExprContext = ExprContext()

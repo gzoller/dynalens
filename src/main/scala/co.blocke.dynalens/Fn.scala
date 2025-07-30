@@ -39,7 +39,7 @@ case class ConstantFn[R](out: R) extends Fn[R]:
   ): ZIO[_BiMapRegistry, DynaLensError, R] =
     ZIO.succeed(out)
 
-case class GetFn(path: String) extends Fn[Any]:
+case class GetFn(path: String, searchThis: Boolean = false) extends Fn[Any]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     parsePath(path) match {
       case Nil => ZIO.fail(DynaLensError("get requires a path"))
@@ -50,7 +50,10 @@ case class GetFn(path: String) extends Fn[Any]:
           case Some((obj, dynalens)) => // iterable de-reference
             dynalens.get(partialPath(rest), obj.asInstanceOf[dynalens.ThisT])
           case None =>
-            ZIO.fail(DynaLensError(s"Field $path not found in context"))
+            if searchThis then
+              GetFn("this."+path).resolve(ctx)
+            else
+              ZIO.fail(DynaLensError(s"Field $path not found in context"))
         }
       case _ =>
         ctx.get("top") match {

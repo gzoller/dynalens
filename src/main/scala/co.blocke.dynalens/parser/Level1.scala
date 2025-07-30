@@ -64,9 +64,9 @@ trait Level1 extends Level0:
     }
   }
 
-  private def pathFn[$: P](valueExpr: => P[Fn[Any]]): P[Fn[Any]] =
+  private def pathFn[$: P](valueExpr: => P[Fn[Any]])(using ctx: ExprContext): P[Fn[Any]] =
     P(path).flatMap { case (rawPath, maybeMethod) =>
-      val baseFn = GetFn(rawPath)
+      val baseFn = GetFn(rawPath, searchThis = ctx.searchThis)
 
       maybeMethod match
         case None => P(Pass(baseFn))
@@ -199,7 +199,10 @@ trait Level1 extends Level0:
     case object FilterMethod extends CollectionMethodParser {
       val name = "filter"
       def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        booleanExpr.map(v => FilterFn(toBooleanFn(v)))
+        {
+          given ExprContext = ExprContext(searchThis = true)
+          booleanExpr.map(v => FilterFn(toBooleanFn(v)))
+        }
     }
 
     case object DistinctMethod extends CollectionMethodParser {
