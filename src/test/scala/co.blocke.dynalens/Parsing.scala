@@ -398,7 +398,7 @@ object Parsing extends ZIOSpecDefault:
         """
           |  pack.shipments[].items[].filter( this.qty > 4 ).sortAsc(number)
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(pack.shipments[].items[],PolyFn(List(FilterFn(toBooleanFn(GreaterThanFn(GetFn(this.qty),ConstantFn(4)))), SortFn(Some(number),true))))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(pack.shipments[].items[],PolyFn(List(FilterFn(toBooleanFn(GreaterThanFn(GetFn(this.qty,true),ConstantFn(4)))), SortFn(Some(number),true))))))"""
       val expectedResult = """top -> Order(ord1,Pack(pallet,2,List(Shipment(aaa,List(Item(abc,19,7), Item(wow,9,5)),1), Shipment(bbb,List(Item(ace,5,7), Item(free,7,5)),1))))""".stripMargin + "\n"
       val inst =
         Order(

@@ -85,7 +85,7 @@ trait Level1 extends Level0:
     P(WS0 ~ "." ~ identifier.! ~ methodArgs(valueExpr))
       .map { case (name, args) => (name, args.toList) }
 
-  def baseExpr[$: P](valueExpr: => P[Fn[Any]]): P[Fn[Any]] =
+  def baseExpr[$: P](valueExpr: => P[Fn[Any]])(using ctx: ExprContext): P[Fn[Any]] =
     def methodChain[$: P](base: Fn[Any]): P[Fn[Any]] =
       P(WS0 ~ methodCall(valueExpr).rep).map { chain =>
         chain.foldLeft(base) { case (inner, (fnName, args)) =>
@@ -175,11 +175,9 @@ trait Level1 extends Level0:
   private trait CollectionMethodParser {
     def name: String
     def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]]
-//    def parseFnFromArgs(args: List[Fn[Any]]): P[Fn[Any]] =
-//      P( Fail.opaque(s"$name() does not support argument parsing via parseFnFromArgs") )
   }
 
-  def collectionStmt[$: P](booleanExpr: => P[BooleanFn]): P[Statement] = {
+  def collectionStmt[$: P](booleanExpr: ExprContext ?=> P[BooleanFn]): P[Statement] =
 
     def simpleFieldPath[$: P]: P[String] =
       P(CharsWhileIn("a-zA-Z0-9_.").!)
@@ -199,10 +197,7 @@ trait Level1 extends Level0:
     case object FilterMethod extends CollectionMethodParser {
       val name = "filter"
       def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        {
-          given ExprContext = ExprContext(searchThis = true)
-          booleanExpr.map(v => FilterFn(toBooleanFn(v)))
-        }
+        booleanExpr(using ExprContext(searchThis = true)).map(v => FilterFn(toBooleanFn(v)))
     }
 
     case object DistinctMethod extends CollectionMethodParser {
@@ -283,4 +278,3 @@ trait Level1 extends Level0:
       case _ =>
         Fail.opaque("Collection statement must have at least one method")
     }
-  }

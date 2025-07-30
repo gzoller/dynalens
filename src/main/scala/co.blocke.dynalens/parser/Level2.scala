@@ -34,7 +34,7 @@ trait Level2 extends Level1:
 
   // ---- Boolean ----
 
-  private def booleanAtom[$: P]: P[BooleanFn] =
+  private def booleanAtom[$: P](using ctx: ExprContext): P[BooleanFn] =
     P(
       WS0 ~ (
         "(" ~/ booleanExpr ~ ")" |
@@ -44,7 +44,7 @@ trait Level2 extends Level1:
       )
     )
 
-  def booleanExpr[$: P]: P[BooleanFn] =
+  def booleanExpr[$: P](using ctx: ExprContext): P[BooleanFn] =
     P(booleanAnd ~ (WS0 ~ "||" ~ WS0 ~ booleanAnd).rep).flatMap {
       case (left, Nil) =>
         left match
@@ -54,15 +54,15 @@ trait Level2 extends Level1:
         P(Pass(rest.foldLeft(first)(OrFn(_, _))))
     }
 
-  private def booleanAnd[$: P]: P[BooleanFn] =
+  private def booleanAnd[$: P](using ctx: ExprContext): P[BooleanFn] =
     P(booleanNot ~ (WS0 ~ "&&" ~ WS0 ~ booleanNot).rep).map { case (first, rest) =>
       rest.foldLeft(first)(AndFn(_, _))
     }
 
-  private def booleanNot[$: P]: P[BooleanFn] =
+  private def booleanNot[$: P](using ctx: ExprContext): P[BooleanFn] =
     P("!" ~ WS0 ~ booleanNot).map(NotFn(_)) | booleanAtom
 
-  private def comparisonExpr[$: P]: P[BooleanFn] =
+  private def comparisonExpr[$: P](using ctx: ExprContext): P[BooleanFn] =
     P(
       arithmeticExpr ~ WS0 ~
         StringIn("==", "!=", ">=", "<=", ">", "<").! ~
@@ -79,9 +79,9 @@ trait Level2 extends Level1:
 
   // ---- Arithmetic ----
 
-  private def arithmeticExpr[$: P]: P[Fn[Any]] = arithmeticTerm
+  private def arithmeticExpr[$: P](using ctx: ExprContext): P[Fn[Any]] = arithmeticTerm
 
-  private def arithmeticTerm[$: P]: P[Fn[Any]] =
+  private def arithmeticTerm[$: P](using ctx: ExprContext): P[Fn[Any]] =
     P(arithmeticFactor ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticFactor).rep).map { case (first, rest) =>
       rest.foldLeft(first) {
         case (left, ("+", right)) => AddFn(left, right)
@@ -90,7 +90,7 @@ trait Level2 extends Level1:
       }
     }
 
-  private def arithmeticFactor[$: P]: P[Fn[Any]] =
+  private def arithmeticFactor[$: P](using ctx: ExprContext): P[Fn[Any]] =
     P(unaryMinus ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ unaryMinus).rep).map { case (first, rest) =>
       rest.foldLeft(first) {
         case (left, ("*", right)) => MultiplyFn(left, right)
@@ -100,7 +100,7 @@ trait Level2 extends Level1:
       }
     }
 
-  private def arithmeticAtom[$: P]: P[Fn[Any]] =
+  private def arithmeticAtom[$: P](using ctx: ExprContext): P[Fn[Any]] =
     P(
       baseExpr(valueExpr) |
         numberLiteral |
@@ -109,12 +109,12 @@ trait Level2 extends Level1:
     )
 
   // support -x
-  private def unaryMinus[$: P]: P[Fn[Any]] =
+  private def unaryMinus[$: P](using ctx: ExprContext): P[Fn[Any]] =
     P("-" ~/ WS0 ~ arithmeticAtom).map(NegateFn(_)) | arithmeticAtom
 
   // ---- String Concat ----
 
-  private def concatExpr[$: P]: P[Fn[Any]] =
+  private def concatExpr[$: P](using ctx: ExprContext): P[Fn[Any]] =
     P(arithmeticExpr ~ (WS0 ~ "::" ~ WS0 ~ arithmeticExpr).rep).map {
       case (first, Nil)  => first
       case (first, rest) => ConcatFn(first :: rest.toList)
@@ -122,7 +122,7 @@ trait Level2 extends Level1:
 
   // ---- valueExpr => Top-Level Expr ----
 
-  def valueExpr[$: P]: P[Fn[Any]] =
+  def valueExpr[$: P](using ctx: ExprContext): P[Fn[Any]] =
     P(
       ifFn |
         blockFn | // Optional block expression
