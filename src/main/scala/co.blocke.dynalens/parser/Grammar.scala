@@ -52,15 +52,5 @@ object Grammar extends Level2 {
             ├── path
             └── standaloneFn
    */
-//  def expr[$: P]: P[Fn[Any]] = {
-//    def e: P[Fn[Any]] =
-//      booleanExpr(e).log("BOOL") |
-//      comparisonExpr(e).log("COMPARE") |
-//      arithmeticExpr(e).log("ARITH") |
-//      baseExpr(e).log("BASE") |
-//      ifFn(e).log("IF") |
-//      blockFn(e).log("BLOCK")
-//
-//    P(e)
-//  }
+
 }

@@ -1,3 +1,24 @@
+/*
+ * Copyright (c) 2025 Greg Zoller
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 package co.blocke.dynalens
 package parser
 
@@ -19,46 +40,42 @@ trait Level1 extends Level0:
   def path[$: P]: P[(String, Option[String])] = {
 
     def fullPath[$: P]: P[String] =
-      P(CharsWhileIn("a-zA-Z0-9_.[]").rep(1).!) //.map{h=>println("S: "+h);h}
+      P(CharsWhileIn("a-zA-Z0-9_.[]").rep(1).!)
 
-    // Non-consuming lookahead: detects if next char is '('
+    // Lookahead to see if the *last identifier* is followed by a `(`
     def isFunc[$: P]: P[Boolean] =
       P(
         &("(").map(_ => true)
           | Pass.map(_ => false)
       )
 
-    // Combine an
-    // //.map{x => println("S2: "+x);x}d post-process
-    (fullPath ~ isFunc).map {
-      case (raw, hasFunc) =>
-        println(s"Raw: $raw  HasFunc: $hasFunc")
-        if hasFunc then
-          val lastDot = raw.lastIndexOf('.')
-          if lastDot == -1 then
-            (raw, None)
-          else
-            val base = raw.take(lastDot)
-            val fn = raw.drop(lastDot + 1)
-            (base, Some(fn))
-        else
-          (raw, None)
+    P(fullPath ~ isFunc).flatMap { case (raw, hasFunc) =>
+      if hasFunc then
+        val lastDot = raw.lastIndexOf('.')
+        if lastDot == -1 then
+          // This is like `foo()` — illegal in path context
+          Fail.opaque("Function call detected where path was expected")
+        else {
+          val base = raw.take(lastDot)
+          val fn = raw.drop(lastDot + 1)
+          Pass((base, Some(fn)))
+        }
+      else Pass((raw, None))
     }
   }
 
   private def pathFn[$: P](valueExpr: => P[Fn[Any]]): P[Fn[Any]] =
-    P(path).flatMap {
-      case (rawPath, maybeMethod) =>
-        val baseFn = GetFn(rawPath)
+    P(path).flatMap { case (rawPath, maybeMethod) =>
+      val baseFn = GetFn(rawPath)
 
-        maybeMethod match
-          case None => P(Pass(baseFn))
-          case Some(methodName) =>
-            methodFunctions.get(methodName) match
-              case Some(fnBuilder) =>
-                P(methodArgs(valueExpr).map(args => fnBuilder(baseFn, args)))
-              case None =>
-                throw new RuntimeException(s"Unknown method: $methodName")
+      maybeMethod match
+        case None => P(Pass(baseFn))
+        case Some(methodName) =>
+          methodFunctions.get(methodName) match
+            case Some(fnBuilder) =>
+              P(methodArgs(valueExpr).map(args => fnBuilder(baseFn, args)))
+            case None =>
+              throw new RuntimeException(s"Unknown method: $methodName")
     }
 
   private def methodArgs[$: P](valueExpr: => P[Fn[Any]]): P[List[Fn[Any]]] =
@@ -74,27 +91,25 @@ trait Level1 extends Level0:
         chain.foldLeft(base) { case (inner, (fnName, args)) =>
           methodFunctions.get(fnName) match
             case Some(fnBuilder) => fnBuilder(inner, args).asInstanceOf[Fn[Any]]
-            case None => throw new RuntimeException(s"Unknown method: $fnName")
+            case None            => throw new RuntimeException(s"Unknown method: $fnName")
         }
       }
-    P(constant | pathFn(valueExpr) | standaloneFn).flatMap(methodChain) ~ WS0
-
+    P(standaloneFn | constant | pathFn(valueExpr)).flatMap(methodChain) ~ WS0
 
   // ---- Functions ----
 
-  def standaloneFn[$: P]: P[Fn[Any]] =
+  private def standaloneFn[$: P]: P[Fn[Any]] =
     P(
-      StringIn("now", "uuid") ~ "(" ~ ")"
-    ).!.map {
-      case "now" => NowFn
+      StringIn("now", "uuid").! ~ "(" ~ WS0 ~ ")"
+    ).map {
+      case "now"  => NowFn
       case "uuid" => UUIDFn
     }
 
   private def checkArgs(fnName: String, args: List[Fn[Any]], required: Int): Unit =
-    if args.length != required then
-      throw new RuntimeException(s"Function ${fnName}() expected $required argument(s), got ${args.length}")
+    if args.length != required then throw new RuntimeException(s"Function $fnName() expected $required argument(s), got ${args.length}")
 
-  val methodFunctions: Map[String, (Fn[Any], List[Fn[Any]]) => Fn[?]] = Map(
+  private val methodFunctions: Map[String, (Fn[Any], List[Fn[Any]]) => Fn[?]] = Map(
     "startsWith" -> { (recv, args) =>
       checkArgs("startsWith", args, 1)
       StartsWithFn(recv.as[String], args.head.as[String])
@@ -157,14 +172,14 @@ trait Level1 extends Level0:
 
   // ---- Collection Statements ----
 
-  trait CollectionMethodParser {
+  private trait CollectionMethodParser {
     def name: String
     def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]]
 //    def parseFnFromArgs(args: List[Fn[Any]]): P[Fn[Any]] =
 //      P( Fail.opaque(s"$name() does not support argument parsing via parseFnFromArgs") )
   }
 
-  def collectionStmt[$: P](valueExpr: => P[Fn[Any]], booleanExpr: => P[BooleanFn]): P[Statement] = {
+  def collectionStmt[$: P](booleanExpr: => P[BooleanFn]): P[Statement] = {
 
     def simpleFieldPath[$: P]: P[String] =
       P(CharsWhileIn("a-zA-Z0-9_.").!)
@@ -172,25 +187,25 @@ trait Level1 extends Level0:
     case object SortAscMethod extends CollectionMethodParser {
       val name = "sortAsc"
       def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        simpleFieldPath.?.map { p => SortFn(p) }
+        simpleFieldPath.?.map(p => SortFn(p))
     }
 
     case object SortDescMethod extends CollectionMethodParser {
       val name = "sortDesc"
       def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        simpleFieldPath.?.map { p => SortFn(p,false) }
+        simpleFieldPath.?.map(p => SortFn(p, false))
     }
 
     case object FilterMethod extends CollectionMethodParser {
       val name = "filter"
       def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        booleanExpr.map( v => FilterFn( toBooleanFn(v)) )
+        booleanExpr.map(v => FilterFn(toBooleanFn(v)))
     }
 
     case object DistinctMethod extends CollectionMethodParser {
       val name = "distinct"
       def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        simpleFieldPath.?.map { p => DistinctFn(p) }
+        simpleFieldPath.?.map(p => DistinctFn(p))
     }
 
     case object LimitMethod extends CollectionMethodParser {
@@ -213,33 +228,49 @@ trait Level1 extends Level0:
         P("(" ~ WS0 ~ ")" | Pass(())).map(_ => CleanFn())
     }
 
+    case object MapToMethod extends CollectionMethodParser {
+      val name = "mapTo"
+      def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
+        stringLiteral.map {
+          case ConstantFn(mapName) => MapFwdFn(mapName.toString)
+          case _                   => throw new RuntimeException("String-typed constant arg required for mapTo()")
+        }
+    }
+
+    case object MapFromMethod extends CollectionMethodParser {
+      val name = "mapFrom"
+      def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
+        stringLiteral.map {
+          case ConstantFn(mapName) => MapRevFn(mapName.toString)
+          case _                   => throw new RuntimeException("String-typed constant arg required for mapFrom()")
+        }
+    }
+
     val collectionMethodRegistry: Map[String, CollectionMethodParser] =
-      List(SortAscMethod, FilterMethod, DistinctMethod, LimitMethod, ReverseMethod, CleanMethod).map(m => m.name -> m).toMap
+      List(SortAscMethod, SortDescMethod, FilterMethod, DistinctMethod, LimitMethod, ReverseMethod, CleanMethod, MapToMethod, MapFromMethod).map(m => m.name -> m).toMap
 
     P(path).flatMap {
       case (basePath, Some(firstMethod)) =>
-        println(s"HERE: $basePath, $firstMethod")
         collectionMethodRegistry.get(firstMethod) match {
           case Some(firstParser) =>
-            println("THERE...")
             for {
               firstFn <- P("(" ~/ WS0 ~ firstParser.parseFn(IdentityFn) ~ WS0 ~ ")")
               restFns <- P((WS0 ~ "." ~ identifier.!).rep).flatMap { methodNames =>
-                methodNames.foldLeft(Pass(List.empty[Fn[Any]]): P[List[Fn[Any]]]) {
-                  case (accP, methodName) =>
-                    accP.flatMap { acc =>
-                      collectionMethodRegistry.get(methodName) match {
-                        case Some(parser) =>
-                          P("(" ~/ WS0 ~ parser.parseFn(IdentityFn) ~ WS0 ~ ")").map(fn => acc :+ fn)
-                        case None =>
-                          P( Fail.opaque(s"Unknown collection method: $methodName") )
-                      }
+                methodNames.foldLeft(Pass(List.empty[Fn[Any]]): P[List[Fn[Any]]]) { case (accP, methodName) =>
+                  accP.flatMap { acc =>
+                    collectionMethodRegistry.get(methodName) match {
+                      case Some(parser) =>
+                        P("(" ~/ WS0 ~ parser.parseFn(IdentityFn) ~ WS0 ~ ")").map(fn => acc :+ fn)
+                      case None =>
+                        P(Fail.opaque(s"Unknown collection method: $methodName"))
                     }
+                  }
                 }
               }
             } yield {
               val allFns = firstFn +: restFns
-              BlockStmt(allFns.map(fn => MapStmt(basePath, fn)))
+              if allFns.size == 1 then MapStmt(basePath, allFns.head)
+              else MapStmt(basePath, PolyFn(allFns))
             }
 
           case None =>

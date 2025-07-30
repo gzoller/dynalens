@@ -1,3 +1,24 @@
+/*
+ * Copyright (c) 2025 Greg Zoller
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 package co.blocke.dynalens
 package parser
 
@@ -11,38 +32,37 @@ import fastparse.*, NoWhitespace.*
 //
 trait Level2 extends Level1:
 
-
   // ---- Boolean ----
 
-  def booleanAtom[$: P]: P[BooleanFn] =
+  private def booleanAtom[$: P]: P[BooleanFn] =
     P(
       WS0 ~ (
         "(" ~/ booleanExpr ~ ")" |
           comparisonExpr |
           booleanLiteral2 |
           arithmeticExpr.map(toBooleanFn.apply)
-        )
-    ).log("BOOL_ATOM")
+      )
+    )
 
   def booleanExpr[$: P]: P[BooleanFn] =
     P(booleanAnd ~ (WS0 ~ "||" ~ WS0 ~ booleanAnd).rep).flatMap {
       case (left, Nil) =>
         left match
           case b: BooleanFn => P(Pass(b))
-          case _ => P(Fail) // soft fail to try another expression rule
+          case null         => P(Fail) // soft fail to try another expression rule
       case (first, rest) =>
         P(Pass(rest.foldLeft(first)(OrFn(_, _))))
     }
 
   private def booleanAnd[$: P]: P[BooleanFn] =
-    P(booleanNot ~ (WS0 ~ "&&" ~ WS0 ~ booleanNot).rep).map {
-      case (first, rest) => rest.foldLeft(first)(AndFn(_, _))
+    P(booleanNot ~ (WS0 ~ "&&" ~ WS0 ~ booleanNot).rep).map { case (first, rest) =>
+      rest.foldLeft(first)(AndFn(_, _))
     }
 
   private def booleanNot[$: P]: P[BooleanFn] =
     P("!" ~ WS0 ~ booleanNot).map(NotFn(_)) | booleanAtom
 
-  def comparisonExpr[$: P]: P[BooleanFn] =
+  private def comparisonExpr[$: P]: P[BooleanFn] =
     P(
       arithmeticExpr ~ WS0 ~
         StringIn("==", "!=", ">=", "<=", ">", "<").! ~
@@ -52,37 +72,38 @@ trait Level2 extends Level1:
       case (left, "!=", right) => NotEqualFn(left, right)
       case (left, ">=", right) => GreaterThanOrEqualFn(left, right)
       case (left, "<=", right) => LessThanOrEqualFn(left, right)
-      case (left, ">", right) => GreaterThanFn(left, right)
-      case (left, "<", right) => LessThanFn(left, right)
+      case (left, ">", right)  => GreaterThanFn(left, right)
+      case (left, "<", right)  => LessThanFn(left, right)
+      case (_, op, _)          => throw new RuntimeException(s"Unknown operator $op")
     }
 
   // ---- Arithmetic ----
 
-  def arithmeticExpr[$: P]: P[Fn[Any]] = arithmeticTerm
+  private def arithmeticExpr[$: P]: P[Fn[Any]] = arithmeticTerm
 
   private def arithmeticTerm[$: P]: P[Fn[Any]] =
-    P(arithmeticFactor ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticFactor).rep).map {
-      case (first, rest) =>
-        rest.foldLeft(first) {
-          case (left, ("+", right)) => AddFn(left, right)
-          case (left, ("-", right)) => SubtractFn(left, right)
-        }
+    P(arithmeticFactor ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticFactor).rep).map { case (first, rest) =>
+      rest.foldLeft(first) {
+        case (left, ("+", right)) => AddFn(left, right)
+        case (left, ("-", right)) => SubtractFn(left, right)
+        case (_, (op, _))         => throw new RuntimeException(s"Unknown arithmetic operator $op")
+      }
     }
 
   private def arithmeticFactor[$: P]: P[Fn[Any]] =
-    P(unaryMinus ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ unaryMinus).rep).map {
-      case (first, rest) =>
-        rest.foldLeft(first) {
-          case (left, ("*", right)) => MultiplyFn(left, right)
-          case (left, ("/", right)) => DivideFn(left, right)
-          case (left, ("%", right)) => ModuloFn(left, right)
-        }
+    P(unaryMinus ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ unaryMinus).rep).map { case (first, rest) =>
+      rest.foldLeft(first) {
+        case (left, ("*", right)) => MultiplyFn(left, right)
+        case (left, ("/", right)) => DivideFn(left, right)
+        case (left, ("%", right)) => ModuloFn(left, right)
+        case (_, (op, _))         => throw new RuntimeException(s"Unknown arithmetic operator $op")
+      }
     }
 
   private def arithmeticAtom[$: P]: P[Fn[Any]] =
     P(
       baseExpr(valueExpr) |
-      numberLiteral |
+        numberLiteral |
         stringLiteral | // optional if you support it
         "(" ~/ arithmeticExpr ~ ")"
     )
@@ -95,72 +116,68 @@ trait Level2 extends Level1:
 
   private def concatExpr[$: P]: P[Fn[Any]] =
     P(arithmeticExpr ~ (WS0 ~ "::" ~ WS0 ~ arithmeticExpr).rep).map {
-      case (first, Nil) => first
+      case (first, Nil)  => first
       case (first, rest) => ConcatFn(first :: rest.toList)
     }
 
   // ---- valueExpr => Top-Level Expr ----
 
-//  def valueExpr[$: P]: P[Fn[Any]] =
-//    P("this.qty > 4".!.map(_ => GreaterThanFn(GetFn("this.qty"), ConstantFn(4))).map{h=>println("HERE! Parsed valueExpr");h})
   def valueExpr[$: P]: P[Fn[Any]] =
     P(
       ifFn |
-        blockFn |                // Optional block expression
-        concatExpr |  // Includes hook into arithmeticExpr, which hooks into baseExpr (path+methods)
+        blockFn | // Optional block expression
+        concatExpr | // Includes hook into arithmeticExpr, which hooks into baseExpr (path+methods)
         booleanExpr.map(b => b: Fn[Any]) // Boolean logic safely downgraded
     )
 
-  def blockFn[$: P]: P[BlockFn[?]] =
+  private def blockFn[$: P]: P[BlockFn[?]] =
     P(
       "{" ~/ WS0 ~
         statement.rep(sep = WS0) ~ // zero or more val/update statements
-        valueExpr ~                           // the final expression
+        valueExpr ~ // the final expression
         WS0 ~ "}"
-    ).map {
-      case (stmts, result) => BlockFn(stmts.toList, result)
+    ).map { case (stmts, result) =>
+      BlockFn(stmts.toList, result)
     }
 
-  def blockStmt[$: P]: P[BlockStmt] =
-    P("{" ~/ WS0 ~ statement.rep(sep = WS0).log("BLOCK_STATEMENTS") ~ WS0 ~ "}").map(BlockStmt.apply)
+  private def blockStmt[$: P]: P[BlockStmt] =
+    P("{" ~/ WS0 ~ statement.rep(sep = WS0) ~ WS0 ~ "}").map(BlockStmt.apply)
 
   def statement[$: P]: P[Statement] =
-    P(WS0 ~ (
-      P(collectionStmt(valueExpr, booleanExpr).log("!COLLECTION_STMT")) |
-      P(valDecl.log("!VAL")) |
-      P(updateOrMapStmt.log("TRY_UPD")) |
-        P(ifStmt.log("!IF")) |
-        P(blockStmt.log("!BLOCK"))
-      ).log("+STATEMENT") ~ WS0)
-//  def statement[$: P]: P[Statement] =
-//    P(WS0 ~ (valDecl | updateOrMapStmt | ifStmt.log("!IF") | blockStmt | collectionStmt(booleanExpr).log("COLLECTION_STMT")).log("STATEMENT") ~ WS0)
-
-  def valDecl[$: P]: P[ValStmt[?]] =
-    P("val" ~/ WS ~ identifier.! ~ WS0 ~ "=" ~ WS0 ~ valueExpr).map {
-      case (name, value) => ValStmt(name, value)
-    }
-
-  def updateOrMapStmt[$: P]: P[Statement] =
-    P(path.map(_._1) ~ WS0 ~ "=" ~/ WS0 ~ valueExpr).map {
-      case (p, v) =>
-        if p.contains("[]") then MapStmt(p, v) else UpdateStmt(p, v)
-    }
-
-  def ifStmt[$: P]: P[IfStmt] =
     P(
-      "if" ~/ WS ~ booleanExpr.log("COND") ~ WS0 ~
-        "then" ~ WS0 ~ statement.log("THEN") ~
-        (WS0 ~ "else" ~ WS0 ~ statement.log("ELSE")).?
-    ).log("IF_FULL").map {
-      case (cond, thenPart, elseOpt) => IfStmt(cond, thenPart, elseOpt)
+      WS0 ~ (
+        collectionStmt(booleanExpr) |
+          valDecl |
+          updateOrMapStmt() |
+          ifStmt |
+          blockStmt
+      ) ~ WS0
+    )
+
+  private def valDecl[$: P]: P[ValStmt[?]] =
+    P("val" ~/ WS ~ identifier.! ~ WS0 ~ "=" ~ WS0 ~ valueExpr).map { case (name, value) =>
+      ValStmt(name, value)
     }
 
-  def ifFn[$: P]: P[Fn[Any]] =
+  private def updateOrMapStmt[$: P](): P[Statement] =
+    P(path.map(_._1) ~ WS0 ~ "=" ~/ WS0 ~ valueExpr).map { case (p, v) =>
+      if p.contains("[]") then MapStmt(p, v) else UpdateStmt(p, v)
+    }
+
+  private def ifStmt[$: P]: P[IfStmt] =
     P(
-      "if" ~/ WS ~ booleanExpr.log("COND") ~ WS0 ~
+      "if" ~/ WS ~ booleanExpr ~ WS0 ~
+        "then" ~ WS0 ~ statement ~
+        (WS0 ~ "else" ~ WS0 ~ statement).?
+    ).map { case (cond, thenPart, elseOpt) =>
+      IfStmt(cond, thenPart, elseOpt)
+    }
+
+  private def ifFn[$: P]: P[Fn[Any]] =
+    P(
+      "if" ~/ WS ~ booleanExpr ~ WS0 ~
         "then" ~/ WS0 ~ valueExpr ~ WS0 ~
         "else" ~/ WS0 ~ valueExpr
-    ).log("IF_FULL_2").map {
-      case (cond, thenBranch, elseBranch) =>
-        IfFn(cond, thenBranch, elseBranch)
+    ).map { case (cond, thenBranch, elseBranch) =>
+      IfFn(cond, thenBranch, elseBranch)
     }

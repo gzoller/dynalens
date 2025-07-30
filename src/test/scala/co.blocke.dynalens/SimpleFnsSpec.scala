@@ -74,7 +74,7 @@ object SimpleFnsSpec extends ZIOSpecDefault:
       } yield assertTrue(result == "ell")
     },
     test("Bad cast in Fn should fail") {
-      val badCtx = testCtx.updated("x", ("oops", null))
+      val badCtx = testCtx.clone().addOne("x", ("oops", null))
       val fn = AddFn(GetFn("x"), ConstantFn(5))
       for {
         result <- fn.resolve(badCtx).either

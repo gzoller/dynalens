@@ -26,7 +26,6 @@ import scala.quoted.*
 import co.blocke.scala_reflection.reflect.ReflectOnType
 import co.blocke.scala_reflection.reflect.rtypeRefs.{FieldInfoRef, ScalaClassRef, SeqRef}
 import co.blocke.scala_reflection.TypedName
-import scala.collection.mutable
 
 import Path.*
 
