@@ -41,13 +41,14 @@ case class ConstantFn[R](out: R) extends Fn[R]:
 
 case class GetFn(path: String, searchThis: Boolean = false) extends Fn[Any]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    // Multi-part path
     parsePath(path) match {
       case Nil => ZIO.fail(DynaLensError("get requires a path"))
       case first :: rest if ctx.contains(first.name) =>
         ctx.get(first.name) match {
-          case Some((obj, null)) => // val de-reference
+          case Some((obj, None)) => // val de-reference
             ZIO.succeed(obj)
-          case Some((obj, dynalens)) => // iterable de-reference
+          case Some((obj, Some(dynalens))) => // iterable de-reference
             dynalens.get(partialPath(rest), obj.asInstanceOf[dynalens.ThisT])
           case None =>
             if searchThis then
@@ -55,11 +56,17 @@ case class GetFn(path: String, searchThis: Boolean = false) extends Fn[Any]:
             else
               ZIO.fail(DynaLensError(s"Field $path not found in context"))
         }
+      // Single-part path
       case _ =>
         ctx.get("top") match {
-          case Some((obj, dynalens)) =>
-            dynalens.get(path, obj.asInstanceOf[dynalens.ThisT])
-          case None =>
+          case Some((obj, Some(dynalens))) =>
+            // Retry if searchThis is true
+            dynalens.get(path, obj.asInstanceOf[dynalens.ThisT]).catchSome {
+              case e: DynaLensError if e.msg.startsWith("Field not found") && searchThis =>
+                // Try resolving with "this." prefix
+                GetFn(s"this.$path").resolve(ctx)
+            }
+          case _ =>
             ZIO.fail(DynaLensError(s"Field $path not found"))
         }
     }
@@ -637,36 +644,43 @@ case class SortFn(
     fieldPath: Option[String],
     asc: Boolean = true
 ) extends Fn[Any]:
+  private def sortV(v: Iterable[Any]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    for {
+      seq <- ZIO.foreach(v) {
+        case c: Comparable[?] => ZIO.succeed(c.asInstanceOf[Comparable[Any]])
+        case other =>
+          ZIO.fail(DynaLensError(s"Item '$other' is not Comparable"))
+      }
+    } yield {
+      implicit val ordering: Ordering[Comparable[Any]] =
+        (a: Comparable[Any], b: Comparable[Any]) => a.compareTo(b)
+
+      val sorted = seq.toSeq.sorted
+      if asc then sorted else sorted.reverse
+    }
+
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ctx.get("this") match
       case Some((v: Iterable[?], lens)) =>
-        fieldPath match
-          case Some(path) =>
-            for {
-              itemValuePairs <- ZIO.foreach(v) { item =>
-                lens.get(path, item.asInstanceOf[lens.ThisT]).map { value =>
-                  (item, value.asInstanceOf[Comparable[Any]])
+        lens match
+          case Some(dlens) =>
+            fieldPath match
+              case Some(path) =>
+                for {
+                  itemValuePairs <- ZIO.foreach(v) { item =>
+                    dlens.get(path, item.asInstanceOf[dlens.ThisT]).map { value =>
+                      (item, value.asInstanceOf[Comparable[Any]])
+                    }
+                  }
+                } yield {
+                  val sorted = itemValuePairs.toSeq.sortBy(_._2)
+                  if asc then sorted.map(_._1) else sorted.reverse.map(_._1)
                 }
-              }
-            } yield {
-              val sorted = itemValuePairs.toSeq.sortBy(_._2)
-              if asc then sorted.map(_._1) else sorted.reverse.map(_._1)
-            }
 
+              case None =>
+                sortV(v)
           case None =>
-            for {
-              seq <- ZIO.foreach(v) {
-                case c: Comparable[?] => ZIO.succeed(c.asInstanceOf[Comparable[Any]])
-                case other =>
-                  ZIO.fail(DynaLensError(s"Item '$other' is not Comparable"))
-              }
-            } yield {
-              implicit val ordering: Ordering[Comparable[Any]] =
-                (a: Comparable[Any], b: Comparable[Any]) => a.compareTo(b)
-
-              val sorted = seq.toSeq.sorted
-              if asc then sorted else sorted.reverse
-            }
+            sortV(v)
 
       case Some((other, _)) =>
         ZIO.fail(DynaLensError(s"sort${if asc then "Asc" else "Desc"}() may only be applied to Iterable types, but got: ${other.getClass.getSimpleName}"))
@@ -680,9 +694,10 @@ case class DistinctFn(fieldPath: Option[String]) extends Fn[Any]:
       case Some((items: Iterable[?], lens)) =>
         fieldPath match
           case Some(field) =>
+            val dlens = lens.get // <-- Safe because ._1 would be None not Iterable if this is a simple type
             for {
               itemPairs <- ZIO.foreach(items) { item =>
-                lens.get(field, item.asInstanceOf[lens.ThisT]).map(v => (v, item))
+                dlens.get(field, item.asInstanceOf[dlens.ThisT]).map(v => (v, item))
               }
               // groupBy first value, then keep distinct items
               deduped = itemPairs.groupBy(_._1).values.map(_.head._2)
@@ -729,6 +744,7 @@ case class CleanFn() extends Fn[Any]:
           case null    => false
           case None    => false
           case _: Unit => false
+          case ""      => false
           case _       => true
         })
 
@@ -742,7 +758,7 @@ case class CleanFn() extends Fn[Any]:
 case class PolyFn(fns: List[Fn[Any]]) extends Fn[Any] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ctx.get("this") match
-      case Some((value, lens: DynaLens[?])) =>
+      case Some((value, lens)) =>
         ZIO.foreachDiscard(fns) { fn =>
           for {
             result <- fn.resolve(ctx)
@@ -774,9 +790,17 @@ case class MapFwdFn(mapName: String) extends Fn[Any]:
         ZIO.serviceWithZIO[_BiMapRegistry] { registry =>
           registry.get(mapName) match
             case Some(bimap) =>
-              bimap.getForward(value.toString) match
-                case Some(result) => ZIO.succeed(result)
-                case None         => ZIO.fail(DynaLensError(s"Key '$value' not found in forward map '$mapName'"))
+              value match
+                case iter: Iterable[_] =>
+                  ZIO.foreach(iter) { item =>
+                    bimap.getForward(item.toString) match
+                      case Some(res) => ZIO.succeed(res)
+                      case None      => ZIO.fail(DynaLensError(s"Key '$item' not found in forward map '$mapName'"))
+                  }.map(_.toList)
+                case _ =>
+                  bimap.getForward(value.toString) match
+                    case Some(result) => ZIO.succeed(result)
+                    case None         => ZIO.fail(DynaLensError(s"Key '$value' not found in forward map '$mapName'"))
             case None =>
               ZIO.fail(DynaLensError(s"BiMap '$mapName' not found"))
         }
@@ -790,9 +814,17 @@ case class MapRevFn(mapName: String) extends Fn[Any]:
         ZIO.serviceWithZIO[_BiMapRegistry] { registry =>
           registry.get(mapName) match
             case Some(bimap) =>
-              bimap.getReverse(value.toString) match
-                case Some(result) => ZIO.succeed(result)
-                case None         => ZIO.fail(DynaLensError(s"Key '$value' not found in reverse map '$mapName'"))
+              value match
+                case iter: Iterable[_] =>
+                  ZIO.foreach(iter) { item =>
+                    bimap.getReverse(item.toString) match
+                      case Some(res) => ZIO.succeed(res)
+                      case None      => ZIO.fail(DynaLensError(s"Key '$item' not found in reverse map '$mapName'"))
+                  }.map(_.toList)
+                case _ =>
+                  bimap.getReverse(value.toString) match
+                    case Some(result) => ZIO.succeed(result)
+                    case None         => ZIO.fail(DynaLensError(s"Key '$value' not found in reverse map '$mapName'"))
             case None =>
               ZIO.fail(DynaLensError(s"BiMap '$mapName' not found"))
         }

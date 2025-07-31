@@ -26,11 +26,11 @@ import zio.test.*
 
 object SimpleFnsSpec extends ZIOSpecDefault:
 
-  val testCtx: DynaContext = DynaContext("hello", null)
-  testCtx.put("s1", ("world", null))
-  testCtx.put("num", (5, null))
-  testCtx.put("x", (10, null))
-  testCtx.put("y", (3, null))
+  val testCtx: DynaContext = DynaContext("hello", None)
+  testCtx.put("s1", ("world", None))
+  testCtx.put("num", (5, None))
+  testCtx.put("x", (10, None))
+  testCtx.put("y", (3, None))
 
   def spec = suite("SimpleFnsSpec")(
     test("ConstantFn should return constant value") {
@@ -74,7 +74,7 @@ object SimpleFnsSpec extends ZIOSpecDefault:
       } yield assertTrue(result == "ell")
     },
     test("Bad cast in Fn should fail") {
-      val badCtx = testCtx.clone().addOne("x", ("oops", null))
+      val badCtx = testCtx.clone().addOne("x", ("oops", None))
       val fn = AddFn(GetFn("x"), ConstantFn(5))
       for {
         result <- fn.resolve(badCtx).either

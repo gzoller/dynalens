@@ -21,16 +21,16 @@
 
 package co.blocke.dynalens
 
-type DynaContext = scala.collection.mutable.Map[String, (Any, DynaLens[?])]
+type DynaContext = scala.collection.mutable.Map[String, (Any, Option[DynaLens[?]])]
 
 object DynaContext:
-  def apply(target: Any, lens: DynaLens[?]): DynaContext =
+  def apply(target: Any, lens: Option[DynaLens[?]]): DynaContext =
     scala.collection.mutable.Map("top" -> (target, lens))
 
   def empty: DynaContext = scala.collection.mutable.Map.empty
 
 extension (ctx: DynaContext)
-  def updatedWith(k: String, v: (Any, DynaLens[?])): DynaContext =
+  def updatedWith(k: String, v: (Any, Option[DynaLens[?]])): DynaContext =
     val copy = ctx.clone().asInstanceOf[DynaContext]
     copy += (k -> v)
     copy

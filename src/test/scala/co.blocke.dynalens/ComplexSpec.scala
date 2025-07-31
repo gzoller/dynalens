@@ -51,7 +51,7 @@ object ComplexSpec extends ZIOSpecDefault:
         )
       )
       for {
-        ctx <- ZIO.succeed(DynaContext(order, orderAssignr))
+        ctx <- ZIO.succeed(DynaContext(order, Some(orderAssignr)))
         result <- script.resolve(ctx)
       } yield assertTrue(result.get("top").map(_._1) == Some(Order("ORD-1", Pack("P1", 2, List(Shipment("S1", List(Item("A", 42, 7), Item("B", 42, 7)), 2), Shipment("S2", List(Item("C", 42, 7)), 2))))))
     },
@@ -67,7 +67,7 @@ object ComplexSpec extends ZIOSpecDefault:
         )
       )
       for {
-        ctx <- ZIO.succeed(DynaContext(order, orderAssignr))
+        ctx <- ZIO.succeed(DynaContext(order, Some(orderAssignr)))
         result <- script.resolve(ctx)
       } yield assertTrue(result.get("top").map(_._1) == Some(Order("ORD-1", Pack("P1", 2, List(Shipment("S1", List(Item("A", 99, 7), Item("B", 99, 7)), 2), Shipment("S2", List(Item("C", 99, 7)), 2))))))
     },

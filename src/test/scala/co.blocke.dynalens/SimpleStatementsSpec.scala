@@ -42,7 +42,7 @@ object SimpleStatementsSpec extends ZIOSpecDefault:
     test("MapStmt should update object field") {
       val stmt = MapStmt("qty", ConstantFn(5))
       for {
-        ctx <- ZIO.succeed(DynaContext(sampleItem, rootAssignr))
+        ctx <- ZIO.succeed(DynaContext(sampleItem, Some(rootAssignr)))
         newCtx <- stmt.resolve(ctx)
       } yield assertTrue(newCtx("top")._1.asInstanceOf[Item].qty == 5)
     },
@@ -53,7 +53,7 @@ object SimpleStatementsSpec extends ZIOSpecDefault:
         Some(BlockStmt(List(UpdateStmt("qty", ConstantFn(3)))))
       )
       for {
-        ctx <- ZIO.succeed(DynaContext(sampleItem, rootAssignr))
+        ctx <- ZIO.succeed(DynaContext(sampleItem, Some(rootAssignr)))
         newCtx <- stmt.resolve(ctx)
       } yield assertTrue(newCtx("top")._1.asInstanceOf[Item].qty == 7)
     },
@@ -64,7 +64,7 @@ object SimpleStatementsSpec extends ZIOSpecDefault:
         Some(BlockStmt(List(UpdateStmt("qty", ConstantFn(3)))))
       )
       for {
-        ctx <- ZIO.succeed(DynaContext(sampleItem, rootAssignr))
+        ctx <- ZIO.succeed(DynaContext(sampleItem, Some(rootAssignr)))
         newCtx <- stmt.resolve(ctx)
       } yield assertTrue(newCtx("top")._1.asInstanceOf[Item].qty == 3)
     }

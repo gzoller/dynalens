@@ -51,7 +51,7 @@ case class DynaLens[T](
       script: BlockStmt,
       target: T
   ): ZIO[_BiMapRegistry, DynaLensError, (T, DynaContext)] =
-    val ctx: DynaContext = DynaContext(target, this)
+    val ctx: DynaContext = DynaContext(target, Some(this))
     for {
       resultCtx <- script.resolve(ctx)
       (resultObj, _) = resultCtx("top")
@@ -164,7 +164,7 @@ case class DynaLens[T](
       dynalens: DynaLens[?]
   ): ZIO[Any, DynaLensError, DynaContext] = {
 
-    val ctx: DynaContext = DynaContext(current, dynalens)
+    val ctx: DynaContext = DynaContext(current, Some(dynalens))
 
     def step(
         path: List[PathElement],
@@ -179,10 +179,10 @@ case class DynaLens[T](
         currentLens._registry.get(f) match {
           case Some(loopLens) =>
             // Insert into top-level map
-            ctx += (f -> (null, loopLens))
+            ctx += (f -> (null, Some(loopLens)))
             step(rest, loopLens)
-          case None =>
-            ZIO.fail(DynaLensError(s"No lens found for loop field '$f'"))
+          case None => // simple field--just return current ctx
+            ZIO.unit
         }
 
       case Nil =>
@@ -214,56 +214,57 @@ case class DynaLens[T](
     def processPaths(
         paths: List[List[PathElement]],
         refObj: Any,
-        dynalens: DynaLens[?],
+        dynalens: Option[DynaLens[?]],
         ctx: DynaContext
     ): ZIO[_BiMapRegistry, DynaLensError, Any] =
-      paths match {
-        case pathParts :: Nil =>
-          val partialPath = Path.partialPath(pathParts)
-          for {
-            in <- dynalens.get(partialPath, refObj.asInstanceOf[dynalens.ThisT])
-            maybeLens = pathParts.last match {
-              case IndexedField(p, _) => dynalens._registry.get(p).getOrElse(null)
-              case Field(p)           => null
-            }
-            _ = ctx.put("this", (in, maybeLens)) // assign loop param variable
-            enrichedCtx = outerCtx ++ ctx.toMap // <-- merge loop context with outer context
-            out <- fn.resolve(enrichedCtx)
-//              .mapError{ e => DynaLensError(s"Map function input value of $in is of the wrong data type.")}
-            updated <- dynalens.update(partialPath, out, refObj.asInstanceOf[dynalens.ThisT])
-          } yield updated
+      dynalens.map( lens =>
+        paths match {
+          case pathParts :: Nil =>
+            val partialPath = Path.partialPath(pathParts)
+            for {
+              in <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
+              maybeLens = pathParts.last match {
+                case IndexedField(p, _) => lens._registry.get(p).orElse(None)
+                case Field(p)           => None
+              }
+              _ = ctx.put("this", (in, maybeLens)) // assign loop param variable
+              enrichedCtx = outerCtx ++ ctx.toMap // <-- merge loop context with outer context
+              out <- fn.resolve(enrichedCtx)
+              updated <- lens.update(partialPath, out, refObj.asInstanceOf[lens.ThisT])
+            } yield updated
 
-        case pathParts :: rest =>
-          val partialPath = Path.partialPath(pathParts)
-          val loopKey = pathParts.last.name
-          for {
-            listVal <- dynalens.get(partialPath, refObj.asInstanceOf[dynalens.ThisT])
-            iterable <- ZIO.fromEither(listVal match {
-              case i: Iterable[?] => Right(i)
-              case other =>
-                Left(DynaLensError(s"Expected iterable at path '$partialPath', but found: ${other.getClass.getName}"))
-            })
-            lensForList <- ctx.get(loopKey) match {
-              case Some((_, existingLens)) => ZIO.succeed(existingLens)
-              case None =>
-                ZIO.fail(DynaLensError(s"No existing lens found in ctx for key: $loopKey"))
-            }
-            updatedIterable <- ZIO.foreach(iterable) { item =>
-              ctx.update(loopKey, (item, lensForList)) // update ctx with current item
-              processPaths(rest, item, lensForList, ctx) // recurse
-            }
-            updatedRefObj <- dynalens.update(partialPath, updatedIterable, refObj.asInstanceOf[dynalens.ThisT])
-          } yield updatedRefObj
+          case pathParts :: rest =>
+            val partialPath = Path.partialPath(pathParts)
+            val loopKey = pathParts.last.name
+            for {
+              listVal <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
+              iterable <- ZIO.fromEither(listVal match {
+                case i: Iterable[?] => Right(i)
+                case other =>
+                  Left(DynaLensError(s"Expected iterable at path '$partialPath', but found: ${other.getClass.getName}"))
+              })
+              maybeLensForList <- ctx.get(loopKey) match {
+                case Some((_, existingLens)) => ZIO.succeed(existingLens)
+                case None =>
+                  ZIO.fail(DynaLensError(s"No existing lens found in ctx for key: $loopKey"))
+              }
+              updatedIterable <- ZIO.foreach(iterable) { item =>
+                ctx.update(loopKey, (item, maybeLensForList)) // update ctx with current item
+                processPaths(rest, item, maybeLensForList, ctx) // recurse
+              }
+              updatedRefObj <- lens.update(partialPath, updatedIterable, refObj.asInstanceOf[lens.ThisT])
+            } yield updatedRefObj
 
-        case Nil =>
-          ZIO.fail(DynaLensError("Should Never Happen(tm)"))
-      }
+          case Nil =>
+            ZIO.fail(DynaLensError("Should Never Happen(tm)"))
+        }
+      ).getOrElse(null)
 
     val parsed = parsePath(path)
     for {
       ctx <- walkPath(parsed, obj, this)
       splitPaths = splitIntoLevels(parsed)
-      updated <- processPaths(splitPaths, obj, this, ctx)
+      updated <- processPaths(splitPaths, obj, Some(this), ctx)
     } yield updated.asInstanceOf[T]
 
 object DynaLens:

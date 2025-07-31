@@ -46,12 +46,14 @@ trait Level2 extends Level1:
 
   def booleanExpr[$: P](using ctx: ExprContext): P[BooleanFn] =
     P(booleanAnd ~ (WS0 ~ "||" ~ WS0 ~ booleanAnd).rep).flatMap {
-      case (left, Nil) =>
-        left match
+      case (first, Nil) =>
+        first match
           case b: BooleanFn => P(Pass(b))
-          case null         => P(Fail) // soft fail to try another expression rule
+          case _ => P(Fail) // ensure this is a BooleanFn, or backtrack
       case (first, rest) =>
-        P(Pass(rest.foldLeft(first)(OrFn(_, _))))
+        first match
+          case b: BooleanFn => P(Pass(rest.foldLeft(b)(OrFn(_, _))))
+          case _ => P(Fail)
     }
 
   private def booleanAnd[$: P](using ctx: ExprContext): P[BooleanFn] =
@@ -115,9 +117,14 @@ trait Level2 extends Level1:
   // ---- String Concat ----
 
   private def concatExpr[$: P](using ctx: ExprContext): P[Fn[Any]] =
-    P(arithmeticExpr ~ (WS0 ~ "::" ~ WS0 ~ arithmeticExpr).rep).map {
-      case (first, Nil)  => first
-      case (first, rest) => ConcatFn(first :: rest.toList)
+    P(
+      arithmeticExpr ~
+        (WS0 ~ "::" ~ WS0 ~ arithmeticExpr).rep ~
+        &(WS0 ~ !CharIn("=<>!")) // Lookahead to reject comparisons
+    ).map {
+      case (first, rest: Seq[Fn[Any]] @unchecked) =>
+        if rest.isEmpty then first
+        else ConcatFn((first +: rest).toList)
     }
 
   // ---- valueExpr => Top-Level Expr ----

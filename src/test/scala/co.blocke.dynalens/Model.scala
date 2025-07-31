@@ -32,6 +32,8 @@ case class Order(id: String, pack: Pack)
 
 case class Ticket(id: java.util.UUID, when: java.util.Date)
 
+case class Registry( id: String, giftNums: List[Int], giftDesc: List[String] )
+
 // Utility fn for testing
 def toStringCtx(ctx: DynaContext): String = {
   val sb = new StringBuffer()
