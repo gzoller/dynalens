@@ -104,10 +104,12 @@ trait Level2 extends Level1:
 
   private def arithmeticAtom[$: P](using ctx: ExprContext): P[Fn[Any]] =
     P(
-      baseExpr(valueExpr) |
+      baseExpr(valueExpr) | // already handles its own methodChain
         numberLiteral |
-        stringLiteral | // optional if you support it
-        "(" ~/ arithmeticExpr ~ ")"
+        stringLiteral |
+        ("(" ~/ valueExpr ~ ")").flatMap(expr =>
+          methodChain(expr, valueExpr) // <-- now attaches .methods to parenthesized expressions
+        )
     )
 
   // support -x

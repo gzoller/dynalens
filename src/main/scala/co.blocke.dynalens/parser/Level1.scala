@@ -81,20 +81,21 @@ trait Level1 extends Level0:
   private def methodArgs[$: P](valueExpr: => P[Fn[Any]]): P[List[Fn[Any]]] =
     P("(" ~ valueExpr.rep(sep = "," ~ WS0) ~ ")" ~ WS0).map(_.toList)
 
-  private def methodCall[$: P](valueExpr: => P[Fn[Any]]): P[(String, List[Fn[Any]])] =
+  def methodCall[$: P](valueExpr: => P[Fn[Any]]): P[(String, List[Fn[Any]])] =
     P(WS0 ~ "." ~ identifier.! ~ methodArgs(valueExpr))
       .map { case (name, args) => (name, args.toList) }
 
-  def baseExpr[$: P](valueExpr: => P[Fn[Any]])(using ctx: ExprContext): P[Fn[Any]] =
-    def methodChain[$: P](base: Fn[Any]): P[Fn[Any]] =
-      P(WS0 ~ methodCall(valueExpr).rep).map { chain =>
-        chain.foldLeft(base) { case (inner, (fnName, args)) =>
-          methodFunctions.get(fnName) match
-            case Some(fnBuilder) => fnBuilder(inner, args).asInstanceOf[Fn[Any]]
-            case None            => throw new RuntimeException(s"Unknown method: $fnName")
-        }
+  def methodChain[$: P](base: Fn[Any], valueExpr: => P[Fn[Any]]): P[Fn[Any]] =
+    P(WS0 ~ methodCall(valueExpr).rep).map { chain =>
+      chain.foldLeft(base) { case (inner, (fnName, args)) =>
+        methodFunctions.get(fnName) match
+          case Some(fnBuilder) => fnBuilder(inner, args).asInstanceOf[Fn[Any]]
+          case None => throw new RuntimeException(s"Unknown method: $fnName")
       }
-    P(standaloneFn | constant | pathFn(valueExpr)).flatMap(methodChain) ~ WS0
+    }
+
+  def baseExpr[$: P](valueExpr: => P[Fn[Any]])(using ctx: ExprContext): P[Fn[Any]] =
+    P((standaloneFn | constant | pathFn(valueExpr)).flatMap(base => methodChain(base, valueExpr)) ~ WS0)
 
   // ---- Functions ----
 

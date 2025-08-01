@@ -1,0 +1,101 @@
+/*
+ * Copyright (c) 2025 Greg Zoller
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+package co.blocke.dynalens
+
+import zio.*
+import zio.test.*
+
+import DynaLens.*
+import parser.Parser
+
+object Options extends ZIOSpecDefault:
+
+  def spec = suite("Negative and Limits Tests")(
+    test("Simple option assignment") {
+      val script =
+        """
+          |  dunno = "foom"
+          |  interest = None
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(UpdateStmt(dunno,ConstantFn(foom)), UpdateStmt(interest,ConstantFn(None))))"""
+      val expectedResult =
+        """top -> Maybe(abc,Some(foom),None)
+          |""".stripMargin
+      val inst = Maybe("abc",None,Some(List(Item("abc", 2, 5))))
+      val a = dynalens[Maybe]
+      for {
+        compiledScript <- Parser.parseScript(script)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x == Maybe("abc",Some("foom")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
+    test("Expression-based option assignment") {
+      val script =
+        """
+          |  val x = "yay"
+          |  val y = None
+          |  dunno = x
+          |  interest = y
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(ValStmt(x,ConstantFn(yay)), ValStmt(y,ConstantFn(None)), UpdateStmt(dunno,GetFn(x,false)), UpdateStmt(interest,GetFn(y,false))))"""
+      val expectedResult =
+        """top -> Maybe(abc,Some(yay),None)
+          |x -> yay
+          |y -> None
+          |""".stripMargin
+      val inst = Maybe("abc",None,Some(List(Item("abc", 2, 5))))
+      val a = dynalens[Maybe]
+      for {
+        compiledScript <- Parser.parseScript(script)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x == Maybe("abc",Some("yay")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
+    test("Get option value") {
+      val script =
+        """
+          |  val x = dunno
+          |  val y = x :: " ok"
+          |  val z = interest
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(ValStmt(x,GetFn(dunno,false)), ValStmt(y,ConcatFn(List(GetFn(x,false), ConstantFn( ok)))), ValStmt(z,GetFn(interest,false))))"""
+      val expectedResult =
+        """top -> Maybe(abc,Some(wow),None)
+          |x -> wow
+          |y -> wow ok
+          |z -> null
+          |""".stripMargin
+      val inst = Maybe("abc",Some("wow"))
+      val a = dynalens[Maybe]
+      for {
+        compiledScript <- Parser.parseScript(script)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+//        _ <- ZIO.succeed(println("&&& "+compiledScript))
+//        _ <- ZIO.succeed(println("!!! "+x))
+//        _ <- ZIO.succeed(println("??? "+resultStr))
+      } yield assertTrue(x == Maybe("abc",Some("wow")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
+  )

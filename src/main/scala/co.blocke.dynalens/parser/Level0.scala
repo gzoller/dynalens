@@ -48,6 +48,9 @@ trait Level0:
   def stringLiteral[$: P]: P[Fn[Any]] =
     P("\"" ~/ CharsWhile(_ != '"', 0).! ~ "\"").map(s => ConstantFn(s))
 
+  def noneLiteral[$: P]: P[Fn[Any]] =
+    P("None").map(s => ConstantFn(None))
+
   def numberLiteral[$: P]: P[Fn[Any]] =
     P(
       (CharIn("+\\-").? ~ CharsWhileIn("0-9") ~ ("." ~ CharsWhileIn("0-9")).?).!
@@ -79,4 +82,4 @@ trait Level0:
   def booleanLiteral2[$: P]: P[BooleanFn] = booleanLiteral.map(_.asInstanceOf[BooleanFn])
 
   def constant[$: P]: P[Fn[Any]] =
-    P(stringLiteral | numberLiteral | booleanLiteral)
+    P(stringLiteral | numberLiteral | booleanLiteral | noneLiteral)

@@ -24,7 +24,7 @@ package co.blocke.dynalens
 import zio.*
 import scala.quoted.*
 import co.blocke.scala_reflection.reflect.ReflectOnType
-import co.blocke.scala_reflection.reflect.rtypeRefs.{FieldInfoRef, ScalaClassRef, SeqRef}
+import co.blocke.scala_reflection.reflect.rtypeRefs.{FieldInfoRef, ScalaClassRef, SeqRef, OptionRef, ScalaOptionRef}
 import co.blocke.scala_reflection.TypedName
 
 import Path.*
@@ -331,10 +331,26 @@ object DynaLens:
           fieldParam,
           classFields.map { f =>
             val fieldName = f.name
+            val fieldRef = f.fieldRef
+
+            val fieldAccess = Select.unique(targetParam, fieldName)
+
+            val unwrapped = fieldRef match
+              case _: OptionRef[?] =>
+                val fieldExpr = fieldAccess.asExprOf[Option[Any]]
+                '{
+                  $fieldExpr match {
+                    case Some(v) => v
+                    case None => null
+                  }
+                }.asTerm
+
+              case _ => fieldAccess
+
             CaseDef(
               Literal(StringConstant(fieldName)),
               None,
-              '{ ZIO.succeed(${ Select.unique(targetParam, fieldName).asExpr }) }.asTerm
+              '{ ZIO.succeed(${ unwrapped.asExpr }) }.asTerm
             )
           } :+ CaseDef(
             Wildcard(),
@@ -374,18 +390,50 @@ object DynaLens:
         val cases = classFields.map { field =>
           val name = field.name
           val fieldType = field.fieldRef.refType
+          val isOptional = field.fieldRef.isInstanceOf[OptionRef[?]]
+
+          val updatedValue: Term =
+            field.fieldRef match
+              case opt: ScalaOptionRef[?] =>
+                val innerRTypeRef = opt.optionParamType
+                innerRTypeRef.refType match
+                  case '[innerT] =>
+                    val optionType = opt.refType
+                    val valueExpr = valueParam.asExprOf[Any]
+
+                    val wrappedExpr: Expr[Option[innerT]] = '{
+                      val v = $valueExpr
+                      v match {
+                        case o: Option[?] => o.asInstanceOf[Option[innerT]]
+                        case null         => None
+                        case other        => Some(other.asInstanceOf[innerT])
+                      }
+                    }
+
+                    wrappedExpr.asExprOf(using optionType).asTerm
+
+              case _ =>
+                TypeApply(
+                  Select.unique(valueParam, "asInstanceOf"),
+                  List(TypeTree.of(using fieldType))
+                ).asExpr.asTerm
+
           val copyArgs = fields.map { f =>
-            if f.name == name then NamedArg(f.name, TypeApply(Select.unique(valueParam, "asInstanceOf"), List(TypeTree.of(using fieldType))).asExpr.asTerm)
-            else NamedArg(f.name, Select.unique(targetParam, f.name))
+            if f.name == name then
+              NamedArg(f.name, updatedValue)
+            else
+              NamedArg(f.name, Select.unique(targetParam, f.name))
           }
 
           val updatedExpr = Apply(Select.unique(targetParam, "copy"), copyArgs)
 
-          CaseDef(Literal(StringConstant(name)), None, '{ ZIO.succeed(${ updatedExpr.asExprOf[T] }) }.asTerm)
+          CaseDef(
+            Literal(StringConstant(name)),
+            None,
+            '{ ZIO.succeed(${ updatedExpr.asExprOf[T] }) }.asTerm
+          )
         }
-
         val fallback = CaseDef(Wildcard(), None, '{ ZIO.fail(DynaLensError("Field not found: " + ${ fieldParam.asExprOf[String] })) }.asTerm)
-
         Match(fieldParam, cases :+ fallback)
       }
     ).asExprOf[(String, Any, T) => ZIO[Any, DynaLensError, T]]
