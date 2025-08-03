@@ -22,13 +22,14 @@
 package co.blocke.dynalens
 
 import zio.*
+
 import scala.quoted.*
 import co.blocke.scala_reflection.reflect.ReflectOnType
-import co.blocke.scala_reflection.reflect.rtypeRefs.{FieldInfoRef, ScalaClassRef, SeqRef}
+import co.blocke.scala_reflection.reflect.rtypeRefs.{FieldInfoRef, OptionRef, ScalaClassRef, ScalaOptionRef, SeqRef}
 import co.blocke.scala_reflection.TypedName
-import scala.collection.mutable
-
 import Path.*
+
+import scala.annotation.tailrec
 
 case class DynaLensError(msg: String)
 
@@ -45,20 +46,20 @@ case class DynaLens[T](
       script: BlockStmt,
       target: T,
       registry: _BiMapRegistry = EmptyBiMapRegistry
-  ): ZIO[Any, DynaLensError, (T, Map[String, (Any, DynaLens[?])])] =
+  ): ZIO[Any, DynaLensError, (T, DynaContext)] =
     actualRun(script, target).provide(BiMapRegistry.layer(registry))
 
   private inline def actualRun(
       script: BlockStmt,
       target: T
-  ): ZIO[_BiMapRegistry, DynaLensError, (T, Map[String, (Any, DynaLens[?])])] =
-    val ctx = Map("top" -> (target, this))
+  ): ZIO[_BiMapRegistry, DynaLensError, (T, DynaContext)] =
+    val ctx: DynaContext = DynaContext(target, Some(this))
     for {
       resultCtx <- script.resolve(ctx)
       (resultObj, _) = resultCtx("top")
     } yield (resultObj.asInstanceOf[T], resultCtx)
 
-  def runNoZIO(script: BlockStmt, target: T, registry: _BiMapRegistry = EmptyBiMapRegistry): Either[DynaLensError, (T, Map[String, (Any, DynaLens[?])])] =
+  def runNoZIO(script: BlockStmt, target: T, registry: _BiMapRegistry = EmptyBiMapRegistry): Either[DynaLensError, (T, DynaContext)] =
     Unsafe.unsafe { implicit unsafe =>
       Runtime.default.unsafe
         .run(
@@ -110,7 +111,19 @@ case class DynaLens[T](
                   }
 
               case other =>
-                ZIO.fail(DynaLensError(s"Expected sequence at '$f', but got ${other.getClass.getSimpleName}"))
+                other match {
+                  case Some(elem) =>
+                    currentLens._registry.get(f) match {
+                      case Some(elemLens) =>
+                        step(elem, elemLens, rest)
+                      case None =>
+                        if rest.isEmpty then ZIO.succeed(elem)
+                        else ZIO.fail(DynaLensError(s"No registry for '$f' to recurse into index"))
+                    }
+                  case None => ZIO.fail(DynaLensError(s"Boom 2"))
+                  case _ =>
+                    ZIO.fail(DynaLensError(s"Expected sequence at '$f', but got ${other.getClass.getSimpleName}"))
+                }
             }
       }
 
@@ -163,10 +176,11 @@ case class DynaLens[T](
       path: List[PathElement],
       current: Any,
       dynalens: DynaLens[?]
-  ): ZIO[Any, DynaLensError, mutable.Map[String, (Any, DynaLens[?])]] = {
+  ): ZIO[Any, DynaLensError, DynaContext] = {
 
-    val ctx = mutable.Map[String, (Any, DynaLens[?])]("top" -> (current, dynalens))
+    val ctx: DynaContext = DynaContext(current, Some(dynalens))
 
+    @tailrec
     def step(
         path: List[PathElement],
         currentLens: DynaLens[?]
@@ -180,10 +194,10 @@ case class DynaLens[T](
         currentLens._registry.get(f) match {
           case Some(loopLens) =>
             // Insert into top-level map
-            ctx += (f -> (null, loopLens))
+            ctx += (f -> (null, Some(loopLens)))
             step(rest, loopLens)
-          case None =>
-            ZIO.fail(DynaLensError(s"No lens found for loop field '$f'"))
+          case None => // simple field--just return current ctx
+            ZIO.unit
         }
 
       case Nil =>
@@ -209,62 +223,67 @@ case class DynaLens[T](
       path: String,
       fn: Fn[R],
       obj: T,
-      outerCtx: Map[String, (Any, DynaLens[?])] = Map.empty // <-- added outer context
+      outerCtx: DynaContext = DynaContext.empty // <-- added outer context
   ): ZIO[_BiMapRegistry, DynaLensError, T] =
 
     def processPaths(
         paths: List[List[PathElement]],
         refObj: Any,
-        dynalens: DynaLens[?],
-        ctx: mutable.Map[String, (Any, DynaLens[?])]
+        dynalens: Option[DynaLens[?]],
+        ctx: DynaContext
     ): ZIO[_BiMapRegistry, DynaLensError, Any] =
-      paths match {
-        case pathParts :: Nil =>
-          val partialPath = Path.partialPath(pathParts)
-          for {
-            in <- dynalens.get(partialPath, refObj.asInstanceOf[dynalens.ThisT])
-            maybeLens = pathParts.last match {
-              case IndexedField(p, _) => dynalens._registry.get(p).getOrElse(null)
-              case Field(p)           => null
-            }
-            _ = ctx.put("this", (in, maybeLens)) // assign loop param variable
-            enrichedCtx = outerCtx ++ ctx.toMap // <-- merge loop context with outer context
-            out <- fn.resolve(enrichedCtx)
-//              .mapError{ e => DynaLensError(s"Map function input value of $in is of the wrong data type.")}
-            updated <- dynalens.update(partialPath, out, refObj.asInstanceOf[dynalens.ThisT])
-          } yield updated
+      dynalens
+        .map(lens =>
+          paths match {
+            case pathParts :: Nil =>
+              val partialPath = Path.partialPath(pathParts)
+              for {
+                in <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
+                maybeLens = pathParts.last match {
+                  case IndexedField(p, _) => lens._registry.get(p).orElse(None)
+                  case Field(p)           => None
+                }
+                _ = ctx.put("this", (in, maybeLens)) // assign loop param variable
+                enrichedCtx = outerCtx ++ ctx.toMap // <-- merge loop context with outer context
+                out <- fn.resolve(enrichedCtx)
+                updated <- lens.update(partialPath, out, refObj.asInstanceOf[lens.ThisT])
+              } yield updated
 
-        case pathParts :: rest =>
-          val partialPath = Path.partialPath(pathParts)
-          val loopKey = pathParts.last.name
-          for {
-            listVal <- dynalens.get(partialPath, refObj.asInstanceOf[dynalens.ThisT])
-            iterable <- ZIO.fromEither(listVal match {
-              case i: Iterable[?] => Right(i)
-              case other =>
-                Left(DynaLensError(s"Expected iterable at path '$partialPath', but found: ${other.getClass.getName}"))
-            })
-            lensForList <- ctx.get(loopKey) match {
-              case Some((_, existingLens)) => ZIO.succeed(existingLens)
-              case None =>
-                ZIO.fail(DynaLensError(s"No existing lens found in ctx for key: $loopKey"))
-            }
-            updatedIterable <- ZIO.foreach(iterable) { item =>
-              ctx.update(loopKey, (item, lensForList)) // update ctx with current item
-              processPaths(rest, item, lensForList, ctx) // recurse
-            }
-            updatedRefObj <- dynalens.update(partialPath, updatedIterable, refObj.asInstanceOf[dynalens.ThisT])
-          } yield updatedRefObj
+            case pathParts :: rest =>
+              val partialPath = Path.partialPath(pathParts)
+              val loopKey = pathParts.last.name
+              for {
+                listVal <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
+                iterable <- ZIO.fromEither(listVal match {
+                  case i: Iterable[?]       => Right(i)
+                  case Some(i: Iterable[?]) => Right(i)
+                  case None                 => Right(Nil)
+                  case other =>
+                    Left(DynaLensError(s"Expected iterable at path '$partialPath', but found: ${other.getClass.getName}"))
+                })
+                maybeLensForList <- ctx.get(loopKey) match {
+                  case Some((_, existingLens)) => ZIO.succeed(existingLens)
+                  case None =>
+                    ZIO.fail(DynaLensError(s"No existing lens found in ctx for key: $loopKey"))
+                }
+                updatedIterable <- ZIO.foreach(iterable) { item =>
+                  ctx.update(loopKey, (item, maybeLensForList)) // update ctx with current item
+                  processPaths(rest, item, maybeLensForList, ctx) // recurse
+                }
+                updatedRefObj <- lens.update(partialPath, updatedIterable, refObj.asInstanceOf[lens.ThisT])
+              } yield updatedRefObj
 
-        case Nil =>
-          ZIO.fail(DynaLensError("Should Never Happen(tm)"))
-      }
+            case Nil =>
+              ZIO.fail(DynaLensError("Should Never Happen(tm)"))
+          }
+        )
+        .orNull
 
     val parsed = parsePath(path)
     for {
       ctx <- walkPath(parsed, obj, this)
       splitPaths = splitIntoLevels(parsed)
-      updated <- processPaths(splitPaths, obj, this, ctx)
+      updated <- processPaths(splitPaths, obj, Some(this), ctx)
     } yield updated.asInstanceOf[T]
 
 object DynaLens:
@@ -296,6 +315,18 @@ object DynaLens:
                       val lensExpr = generateDynaLensImpl[t]
                       val keyExpr = Expr(field.name)
                       Some('{ $keyExpr -> $lensExpr })
+                case _ => None
+            case c: OptionRef[?] if c.optionParamType.isInstanceOf[SeqRef[?]] =>
+              c.optionParamType match
+                case s: SeqRef[?] =>
+                  s.elementRef match
+                    case d: ScalaClassRef[?] if d.isCaseClass =>
+                      d.refType match
+                        case '[t] =>
+                          val lensExpr = generateDynaLensImpl[t]
+                          val keyExpr = Expr(field.name)
+                          Some('{ $keyExpr -> $lensExpr })
+                    case _ => None
                 case _ => None
             case _ => None
           }
@@ -331,10 +362,11 @@ object DynaLens:
           fieldParam,
           classFields.map { f =>
             val fieldName = f.name
+            val fieldAccess = Select.unique(targetParam, fieldName)
             CaseDef(
               Literal(StringConstant(fieldName)),
               None,
-              '{ ZIO.succeed(${ Select.unique(targetParam, fieldName).asExpr }) }.asTerm
+              '{ ZIO.succeed(${ fieldAccess.asExpr }) }.asTerm
             )
           } :+ CaseDef(
             Wildcard(),
@@ -374,18 +406,47 @@ object DynaLens:
         val cases = classFields.map { field =>
           val name = field.name
           val fieldType = field.fieldRef.refType
+
+          val updatedValue: Term =
+            field.fieldRef match
+              case opt: ScalaOptionRef[?] =>
+                val innerRTypeRef = opt.optionParamType
+                innerRTypeRef.refType match
+                  case '[innerT] =>
+                    val optionType = opt.refType
+                    val valueExpr = valueParam.asExprOf[Any]
+
+                    val wrappedExpr: Expr[Option[innerT]] = '{
+                      val v = $valueExpr
+                      v match {
+                        case o: Option[?] => o.asInstanceOf[Option[innerT]]
+                        case null         => None
+                        case other        => Some(other.asInstanceOf[innerT])
+                      }
+                    }
+
+                    wrappedExpr.asExprOf(using optionType).asTerm
+
+              case _ =>
+                TypeApply(
+                  Select.unique(valueParam, "asInstanceOf"),
+                  List(TypeTree.of(using fieldType))
+                ).asExpr.asTerm
+
           val copyArgs = fields.map { f =>
-            if f.name == name then NamedArg(f.name, TypeApply(Select.unique(valueParam, "asInstanceOf"), List(TypeTree.of(using fieldType))).asExpr.asTerm)
+            if f.name == name then NamedArg(f.name, updatedValue)
             else NamedArg(f.name, Select.unique(targetParam, f.name))
           }
 
           val updatedExpr = Apply(Select.unique(targetParam, "copy"), copyArgs)
 
-          CaseDef(Literal(StringConstant(name)), None, '{ ZIO.succeed(${ updatedExpr.asExprOf[T] }) }.asTerm)
+          CaseDef(
+            Literal(StringConstant(name)),
+            None,
+            '{ ZIO.succeed(${ updatedExpr.asExprOf[T] }) }.asTerm
+          )
         }
-
         val fallback = CaseDef(Wildcard(), None, '{ ZIO.fail(DynaLensError("Field not found: " + ${ fieldParam.asExprOf[String] })) }.asTerm)
-
         Match(fieldParam, cases :+ fallback)
       }
     ).asExprOf[(String, Any, T) => ZIO[Any, DynaLensError, T]]

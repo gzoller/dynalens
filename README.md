@@ -2,8 +2,8 @@
 
 ## dynalens -- script-driven, dynamic lens mutation for compiled Scala case class fields
 
-[![license](https://img.shields.io/github/license/mashape/apistatus.svg?maxAge=86400)](https://opensource.org/licenses/MIT)  
-[![Maven Central](https://maven-badges.herokuapp.com/maven-central/co.blocke/dynalens_3/badge.svg)](https://search.maven.org/artifact/co.blocke/dynalens_3/1.0/jar)
+[![license](https://img.shields.io/github/license/mashape/apistatus.svg?maxAge=86400)](https://opensource.org/licenses/MIT) 
+[![Maven Central](https://img.shields.io/maven-central/v/co.blocke/dynalens_3.svg?label=Maven%20Central)](https://search.maven.org/artifact/co.blocke/dynalens_3)
 
 The intent of this library is to allow for a runtime-interpreted script to modify a compiled Scala case class. Imagine you have a business object Shipment, which has Items. Let's say these objects flow in an event stream and you want to be able to mutate certain values in-flight. The challenge is these mutations vary at runtime, for example per client, and the person in your company with the business logic knowledge isn't a software engineer. Their coding skill is at an Excel macro level.
 
@@ -72,7 +72,7 @@ We really love ZIO around here, but if you just can't get there, there's a non-Z
 Step 4 becomes:
 ```scala
 val lens = dynalens[Person]
-val result: Either[DynaLensError, (Shipment, Map[String, (Any, DynaLens[?])])] =  
+val result: Either[DynaLensError, (Shipment, DynaContext)] =  
   for {  
     compiled <- Parser.parseScriptNoZIO(script)  
     (output,_) <- lens.runNoZIO(compiled, inst)  

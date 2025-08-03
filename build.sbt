@@ -31,6 +31,8 @@ inThisBuild(
 
 //ThisBuild / version := "1.0.0-SNAPSHOT" // <-- Comment this line out for real releases!
 
+ThisBuild / name := "dynalens"
+ThisBuild / moduleName := "dynalens_3"
 ThisBuild / organization := "co.blocke"
 ThisBuild / scalaVersion := scala3Version
 ThisBuild / versionScheme := Some("early-semver")
@@ -55,7 +57,6 @@ ThisBuild / githubWorkflowPublishTargetBranches := Seq(
 lazy val root = project
   .in(file("."))
   .settings(
-    name := "dynalens",
     Compile / packageBin / mappings += {
       (baseDirectory.value / "plugin.properties") -> "plugin.properties"
     },
