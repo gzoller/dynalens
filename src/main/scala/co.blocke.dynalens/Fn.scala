@@ -72,18 +72,17 @@ case class GetFn(path: String, searchThis: Boolean = false, elseValue: Option[Fn
           case _ =>
             ZIO.fail(DynaLensError(s"Field $path not found"))
         }
+    }.flatMap { obj =>
+      unwrapOption(path, obj, elseValue, isDefined, useRawValue) match
+        case Left(err) =>
+          ZIO.fail(err)
+
+        case Right(Left(altFn)) =>
+          altFn.resolve(ctx)
+
+        case Right(Right(value)) =>
+          ZIO.succeed(value)
     }
-      .flatMap { obj =>
-        unwrapOption(path, obj, elseValue, isDefined, useRawValue) match
-          case Left(err) =>
-            ZIO.fail(err)
-
-          case Right(Left(altFn)) =>
-            altFn.resolve(ctx)
-
-          case Right(Right(value)) =>
-            ZIO.succeed(value)
-      }
 
 case class IfFn[R](
     condition: Fn[Boolean],
