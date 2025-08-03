@@ -22,12 +22,14 @@
 package co.blocke.dynalens
 
 import zio.*
+
 import scala.quoted.*
 import co.blocke.scala_reflection.reflect.ReflectOnType
 import co.blocke.scala_reflection.reflect.rtypeRefs.{FieldInfoRef, OptionRef, ScalaClassRef, ScalaOptionRef, SeqRef}
 import co.blocke.scala_reflection.TypedName
-
 import Path.*
+
+import scala.annotation.tailrec
 
 case class DynaLensError(msg: String)
 
@@ -178,6 +180,7 @@ case class DynaLens[T](
 
     val ctx: DynaContext = DynaContext(current, Some(dynalens))
 
+    @tailrec
     def step(
         path: List[PathElement],
         currentLens: DynaLens[?]
@@ -238,7 +241,7 @@ case class DynaLens[T](
                 in <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
                 maybeLens = pathParts.last match {
                   case IndexedField(p, _) => lens._registry.get(p).orElse(None)
-                  case Field(p)           => None
+                  case Field(p) => None
                 }
                 _ = ctx.put("this", (in, maybeLens)) // assign loop param variable
                 enrichedCtx = outerCtx ++ ctx.toMap // <-- merge loop context with outer context
@@ -252,9 +255,9 @@ case class DynaLens[T](
               for {
                 listVal <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
                 iterable <- ZIO.fromEither(listVal match {
-                  case i: Iterable[?]       => Right(i)
+                  case i: Iterable[?] => Right(i)
                   case Some(i: Iterable[?]) => Right(i)
-                  case None                 => Right(Nil)
+                  case None => Right(Nil)
                   case other =>
                     Left(DynaLensError(s"Expected iterable at path '$partialPath', but found: ${other.getClass.getName}"))
                 })
@@ -273,8 +276,7 @@ case class DynaLens[T](
             case Nil =>
               ZIO.fail(DynaLensError("Should Never Happen(tm)"))
           }
-        )
-        .getOrElse(null)
+        ).orNull
 
     val parsed = parsePath(path)
     for {
@@ -359,7 +361,6 @@ object DynaLens:
           fieldParam,
           classFields.map { f =>
             val fieldName = f.name
-            val fieldRef = f.fieldRef
             val fieldAccess = Select.unique(targetParam, fieldName)
             CaseDef(
               Literal(StringConstant(fieldName)),
@@ -404,7 +405,6 @@ object DynaLens:
         val cases = classFields.map { field =>
           val name = field.name
           val fieldType = field.fieldRef.refType
-          val isOptional = field.fieldRef.isInstanceOf[OptionRef[?]]
 
           val updatedValue: Term =
             field.fieldRef match

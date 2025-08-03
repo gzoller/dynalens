@@ -49,11 +49,11 @@ trait Level2 extends Level1:
       case (first, Nil) =>
         first match
           case b: BooleanFn => P(Pass(b))
-          case _            => P(Fail) // ensure this is a BooleanFn, or backtrack
+          case null            => P(Fail) // ensure this is a BooleanFn, or backtrack
       case (first, rest) =>
         first match
           case b: BooleanFn => P(Pass(rest.foldLeft(b)(OrFn(_, _))))
-          case _            => P(Fail)
+          case null            => P(Fail)
     }
 
   private def booleanAnd[$: P](using ctx: ExprContext): P[BooleanFn] =

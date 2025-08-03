@@ -48,8 +48,8 @@ trait Level0:
   def stringLiteral[$: P]: P[Fn[Any]] =
     P("\"" ~/ CharsWhile(_ != '"', 0).! ~ "\"").map(s => ConstantFn(s))
 
-  def noneLiteral[$: P]: P[Fn[Any]] =
-    P("None").map(s => ConstantFn(None))
+  private def noneLiteral[$: P]: P[Fn[Any]] =
+    P("None").map(_ => ConstantFn(None))
 
   def numberLiteral[$: P]: P[Fn[Any]] =
     P(
