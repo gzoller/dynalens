@@ -21,8 +21,6 @@
 
 package co.blocke.dynalens
 
-import zio.*
-
 type DynaContext = scala.collection.mutable.Map[String, (Any, Option[DynaLens[?]])]
 
 object DynaContext:

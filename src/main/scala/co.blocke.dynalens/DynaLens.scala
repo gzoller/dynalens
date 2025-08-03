@@ -22,12 +22,14 @@
 package co.blocke.dynalens
 
 import zio.*
+
 import scala.quoted.*
 import co.blocke.scala_reflection.reflect.ReflectOnType
 import co.blocke.scala_reflection.reflect.rtypeRefs.{FieldInfoRef, OptionRef, ScalaClassRef, ScalaOptionRef, SeqRef}
 import co.blocke.scala_reflection.TypedName
-
 import Path.*
+
+import scala.annotation.tailrec
 
 case class DynaLensError(msg: String)
 
@@ -178,6 +180,7 @@ case class DynaLens[T](
 
     val ctx: DynaContext = DynaContext(current, Some(dynalens))
 
+    @tailrec
     def step(
         path: List[PathElement],
         currentLens: DynaLens[?]
@@ -274,7 +277,7 @@ case class DynaLens[T](
               ZIO.fail(DynaLensError("Should Never Happen(tm)"))
           }
         )
-        .getOrElse(null)
+        .orNull
 
     val parsed = parsePath(path)
     for {
@@ -359,7 +362,6 @@ object DynaLens:
           fieldParam,
           classFields.map { f =>
             val fieldName = f.name
-            val fieldRef = f.fieldRef
             val fieldAccess = Select.unique(targetParam, fieldName)
             CaseDef(
               Literal(StringConstant(fieldName)),
@@ -404,7 +406,6 @@ object DynaLens:
         val cases = classFields.map { field =>
           val name = field.name
           val fieldType = field.fieldRef.refType
-          val isOptional = field.fieldRef.isInstanceOf[OptionRef[?]]
 
           val updatedValue: Term =
             field.fieldRef match
