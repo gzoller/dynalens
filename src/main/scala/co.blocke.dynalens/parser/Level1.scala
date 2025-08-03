@@ -69,7 +69,21 @@ trait Level1 extends Level0:
       val baseFn = GetFn(rawPath, searchThis = ctx.searchThis)
 
       maybeMethod match
-        case None => P(Pass(baseFn))
+        case None =>
+          P(Pass(baseFn))
+
+        case Some("else") =>
+          // This expects the format: `.else(...)`
+          P("(" ~ valueExpr ~ ")").map { elseFn =>
+            baseFn.copy(elseValue = Some(elseFn))
+          }
+
+        case Some("isDefined") =>
+          // This expects the format: `.else(...)`
+          P("(" ~ WS0 ~ ")").map { _ =>
+            baseFn.copy(isDefined = true)
+          }
+
         case Some(methodName) =>
           methodFunctions.get(methodName) match
             case Some(fnBuilder) =>
@@ -130,6 +144,9 @@ trait Level1 extends Level0:
     "matchesRegex" -> { (recv, args) =>
       checkArgs("matchesRegex", args, 1)
       MatchesRegexFn(recv.as[String], args.head.as[String])
+    },
+    "isDefined" -> { (recv, _) =>
+      IsDefinedFn(recv)
     },
     "len" -> { (recv, _) =>
       LengthFn(recv)

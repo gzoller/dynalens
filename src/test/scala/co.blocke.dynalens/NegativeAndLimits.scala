@@ -41,7 +41,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(flag,IfFn(GreaterThanFn(GetFn(qty,false),ConstantFn(5)),BlockFn(List(),ConstantFn(big)),BlockFn(List(),ConstantFn(small))))))"""
+        """BlockStmt(List(ValStmt(flag,IfFn(GreaterThanFn(GetFn(qty,false,None,false,false),ConstantFn(5)),BlockFn(List(),ConstantFn(big)),BlockFn(List(),ConstantFn(small))))))"""
 
       val inst = Item("abc", 6)
       val a = dynalens[Item]
@@ -127,7 +127,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Registry]
 
       val expected = Registry("r1", List(3, 4), Nil)
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums[],FilterFn(toBooleanFn(GreaterThanFn(GetFn(this,true),ConstantFn(2)))))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums[],FilterFn(toBooleanFn(GreaterThanFn(GetFn(this,true,None,false,false),ConstantFn(2)))))))"""
       val expectedResult = "top -> Registry(r1,List(3, 4),List())\n"
 
       for {
@@ -139,5 +139,29 @@ object NegativeAndLimits extends ZIOSpecDefault:
         compiled.toString == expectedCompiled,
         ctxStr == expectedResult
       )
-    }
+    },
+    test("collection len in predicate") {
+      val script =
+        """
+          |  interest[].qty = interest[].len() * 5
+          |""".stripMargin
+      val inst = Maybe("abc",Some("wow"),Some(List(Item("abc", 2, 5), Item("xyz", 1, 7))))
+      val a = dynalens[Maybe]
+
+      val result = for {
+        compiled <- Parser.parseScript(script)
+        output <- a.run(compiled, inst)
+      } yield output
+
+      result.exit.map {
+        case Exit.Failure(cause) =>
+          cause.failureOption match
+            case Some(DynaLensError(message)) =>
+              assertTrue(message.contains("Sorry...we don't support len() function on collections"))
+            case _ =>
+              assertTrue(false).label("Unexpected error structure")
+        case _ =>
+          assertTrue(false).label("Expected mapTo key failure")
+      }
+    },
   )

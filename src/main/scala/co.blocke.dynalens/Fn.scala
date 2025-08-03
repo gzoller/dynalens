@@ -39,37 +39,54 @@ case class ConstantFn[R](out: R) extends Fn[R]:
   ): ZIO[_BiMapRegistry, DynaLensError, R] =
     ZIO.succeed(out)
 
-case class GetFn(path: String, searchThis: Boolean = false) extends Fn[Any]:
+case class GetFn(path: String, searchThis: Boolean = false, elseValue: Option[Fn[Any]] = None, isDefined: Boolean = false, useRawValue: Boolean = false) extends Fn[Any]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     // Multi-part path
     parsePath(path) match {
-      case Nil => ZIO.fail(DynaLensError("get requires a path"))
+      case Nil =>
+        ZIO.fail(DynaLensError("get requires a path"))
+
       case first :: rest if ctx.contains(first.name) =>
         ctx.get(first.name) match {
           case Some((obj, None)) => // val de-reference
             ZIO.succeed(obj)
-          case Some((obj, Some(dynalens))) => // iterable de-reference
-            dynalens.get(partialPath(rest), obj.asInstanceOf[dynalens.ThisT])
+
+          case Some((obj, Some(dynalens))) =>
+            if rest.isEmpty then
+              ZIO.succeed(obj)
+            else
+              dynalens.get(partialPath(rest), obj.asInstanceOf[dynalens.ThisT])
+
           case None =>
             if searchThis then
-              GetFn("this."+path).resolve(ctx)
+              GetFn(path = "this." + path, elseValue = elseValue).resolve(ctx)
             else
               ZIO.fail(DynaLensError(s"Field $path not found in context"))
         }
+
       // Single-part path
       case _ =>
         ctx.get("top") match {
           case Some((obj, Some(dynalens))) =>
-            // Retry if searchThis is true
             dynalens.get(path, obj.asInstanceOf[dynalens.ThisT]).catchSome {
               case e: DynaLensError if e.msg.startsWith("Field not found") && searchThis =>
-                // Try resolving with "this." prefix
-                GetFn(s"this.$path").resolve(ctx)
+                GetFn(path = "this." + path, elseValue = elseValue).resolve(ctx)
             }
+
           case _ =>
             ZIO.fail(DynaLensError(s"Field $path not found"))
         }
     }
+  .flatMap { obj => unwrapOption(path, obj, elseValue, isDefined, useRawValue ) match
+    case Left(err) =>
+      ZIO.fail(err)
+
+    case Right(Left(altFn)) =>
+      altFn.resolve(ctx)
+
+    case Right(Right(value)) =>
+      ZIO.succeed(value)
+  }
 
 case class IfFn[R](
     condition: Fn[Boolean],
@@ -267,6 +284,19 @@ case class OrFn(left: BooleanFn, right: BooleanFn) extends BooleanFn:
 case class NotFn(inner: BooleanFn) extends BooleanFn:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     inner.resolve(ctx).map(b => !b)
+
+case class IsDefinedFn(inner: Fn[Any]) extends BooleanFn {
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+    for {
+      value <- inner.resolve(ctx)
+    } yield value match {
+      case opt: Option[_] => opt.isDefined
+      case null => false
+      case _ =>
+        // Non-option types are always considered defined
+        true
+    }
+}
 
 // Special converter: Fn[Any]->BooleanFn
 case class toBooleanFn(inner: Fn[Any]) extends BooleanFn {
@@ -588,7 +618,7 @@ case class InterpolateFn(template: Fn[Any], variables: Map[String, Fn[Any]]) ext
 // Extract vars for interpolation
 object TemplateUtils {
   private val varPattern =
-    """(?:\{([a-zA-Z_][a-zA-Z0-9_]*(?:\[[0-9]+\]|\.[a-zA-Z_][a-zA-Z0-9_]*(?:\[[0-9]+\])?)*)(?:%[^}:]+)?(?::[^}]+)?\}|\$\{([a-zA-Z_][a-zA-Z0-9_]*(?:\[[0-9]+\]|\.[a-zA-Z_][a-zA-Z0-9_]*(?:\[[0-9]+\])?)*)(?:%[^}:]+)?(?::[^}]+)?\})""".r
+    """\{([a-zA-Z_][a-zA-Z0-9_]*(?:\[[0-9]+\]|\.[a-zA-Z_][a-zA-Z0-9_]*(?:\[[0-9]+\])?)*)(?:%[^}:]+)?(?::[^}]+)?\}""".r
 
   def extractVariables(template: String): Set[String] =
     varPattern
@@ -641,7 +671,7 @@ case class FilterFn(predicate: Fn[Boolean]) extends Fn[Any]:
         ZIO.fail(DynaLensError(s"'this' not found in context"))
 
 case class SortFn(
-    fieldPath: Option[String],
+    path: Option[String],
     asc: Boolean = true
 ) extends Fn[Any]:
   private def sortV(v: Iterable[Any]): ZIO[_BiMapRegistry, DynaLensError, Any] =
@@ -660,33 +690,46 @@ case class SortFn(
     }
 
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
-    ctx.get("this") match
-      case Some((v: Iterable[?], lens)) =>
-        lens match
-          case Some(dlens) =>
-            fieldPath match
-              case Some(path) =>
-                for {
-                  itemValuePairs <- ZIO.foreach(v) { item =>
-                    dlens.get(path, item.asInstanceOf[dlens.ThisT]).map { value =>
-                      (item, value.asInstanceOf[Comparable[Any]])
-                    }
-                  }
-                } yield {
-                  val sorted = itemValuePairs.toSeq.sortBy(_._2)
-                  if asc then sorted.map(_._1) else sorted.reverse.map(_._1)
-                }
+    ctx.get("this") match {
+      case Some((maybeIterable, lens)) =>
+        unwrapOption("[]", maybeIterable, Some(ConstantFn(Nil)), false) match {
+          case Left(err) => ZIO.fail(err)
+          case Right(Left(fallback)) => fallback.resolve(ctx)
+          case Right(Right(value)) =>
+            value match
+              case v: Iterable[?] =>
+                lens match
+                  case Some(dlens: DynaLens[?]) =>
+                    path match
+                      case Some(pth) =>
+                        ZIO.foreach(v) { item =>
+                          dlens
+                            .asInstanceOf[DynaLens[Any]]
+                            .get(pth, item.asInstanceOf[dlens.ThisT])
+                            .map { value =>
+                              (item, value.asInstanceOf[Comparable[Any]])
+                            }
+                        }.map { itemValuePairs =>
+                          val sorted = itemValuePairs.toSeq.sortBy(_._2)
+                          if (asc) sorted.map(_._1) else sorted.reverse.map(_._1)
+                        }
 
-              case None =>
-                sortV(v)
-          case None =>
-            sortV(v)
+                      case None =>
+                        sortV(v)
 
-      case Some((other, _)) =>
-        ZIO.fail(DynaLensError(s"sort${if asc then "Asc" else "Desc"}() may only be applied to Iterable types, but got: ${other.getClass.getSimpleName}"))
+                  case None =>
+                    sortV(v)
 
-      case None =>
-        ZIO.fail(DynaLensError(s"'this' not found in context"))
+              case _ =>
+                ZIO.fail(
+                  DynaLensError(
+                    s"sort${if (asc) "Asc" else "Desc"}() may only be applied to Iterable types, but got: ${value.getClass.getSimpleName}"
+                  )
+                )
+        }
+    case None =>
+      ZIO.fail(DynaLensError(s"'this' not found in context"))
+  }
 
 case class DistinctFn(fieldPath: Option[String]) extends Fn[Any]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =

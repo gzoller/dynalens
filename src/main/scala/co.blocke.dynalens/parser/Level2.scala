@@ -168,9 +168,19 @@ trait Level2 extends Level1:
       ValStmt(name, value)
     }
 
+  private val pattern = """LengthFn\(GetFn\(\w+\[\]""".r
   private def updateOrMapStmt[$: P](): P[Statement] =
     P(path.map(_._1) ~ WS0 ~ "=" ~/ WS0 ~ valueExpr).map { case (p, v) =>
-      if p.contains("[]") then MapStmt(p, v) else UpdateStmt(p, v)
+      if p.contains("[]") then
+        // warn user if they try to use foo[].len() in predicate--won't work!
+        if pattern.findFirstIn(v.toString).isDefined then
+          throw new RuntimeException("Sorry...we don't support len() function on collections in a predicate (LHS).\nConsider using an intermediate val")
+        else
+          MapStmt(p, v)
+      else
+        v match
+          case g: GetFn if g.elseValue.isEmpty => UpdateStmt(p, g.copy(useRawValue = true))
+          case _ => UpdateStmt(p, v)
     }
 
   private def ifStmt[$: P]: P[IfStmt] =

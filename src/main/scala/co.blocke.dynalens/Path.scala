@@ -42,6 +42,6 @@ object Path:
       .map {
         case IndexedField(name, i) if i >= 0 => s"$name[$i]"
         case Field(name)                     => name
-        case IndexedField(name, _)           => s"$name"
+        case IndexedField(name, _)           => name
       }
       .mkString(".")

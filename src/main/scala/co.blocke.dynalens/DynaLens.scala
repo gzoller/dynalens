@@ -109,7 +109,19 @@ case class DynaLens[T](
                   }
 
               case other =>
-                ZIO.fail(DynaLensError(s"Expected sequence at '$f', but got ${other.getClass.getSimpleName}"))
+                other match {
+                  case Some(elem) =>
+                    currentLens._registry.get(f) match {
+                      case Some(elemLens) =>
+                        step(elem, elemLens, rest)
+                      case None =>
+                        if rest.isEmpty then ZIO.succeed(elem)
+                        else ZIO.fail(DynaLensError(s"No registry for '$f' to recurse into index"))
+                    }
+                  case None => ZIO.fail(DynaLensError(s"Boom 2"))
+                  case _ =>
+                    ZIO.fail(DynaLensError(s"Expected sequence at '$f', but got ${other.getClass.getSimpleName}"))
+                }
             }
       }
 
@@ -240,6 +252,8 @@ case class DynaLens[T](
               listVal <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
               iterable <- ZIO.fromEither(listVal match {
                 case i: Iterable[?] => Right(i)
+                case Some(i: Iterable[?]) => Right(i)
+                case None => Right(Nil)
                 case other =>
                   Left(DynaLensError(s"Expected iterable at path '$partialPath', but found: ${other.getClass.getName}"))
               })
@@ -297,6 +311,18 @@ object DynaLens:
                       val keyExpr = Expr(field.name)
                       Some('{ $keyExpr -> $lensExpr })
                 case _ => None
+            case c: OptionRef[?] if c.optionParamType.isInstanceOf[SeqRef[?]] =>
+              c.optionParamType match
+                case s: SeqRef[?] =>
+                  s.elementRef match
+                    case d: ScalaClassRef[?] if d.isCaseClass =>
+                      d.refType match
+                        case '[t] =>
+                          val lensExpr = generateDynaLensImpl[t]
+                          val keyExpr = Expr(field.name)
+                          Some('{ $keyExpr -> $lensExpr })
+                    case _ => None
+                case _ => None
             case _ => None
           }
         }
@@ -332,25 +358,11 @@ object DynaLens:
           classFields.map { f =>
             val fieldName = f.name
             val fieldRef = f.fieldRef
-
             val fieldAccess = Select.unique(targetParam, fieldName)
-
-            val unwrapped = fieldRef match
-              case _: OptionRef[?] =>
-                val fieldExpr = fieldAccess.asExprOf[Option[Any]]
-                '{
-                  $fieldExpr match {
-                    case Some(v) => v
-                    case None => null
-                  }
-                }.asTerm
-
-              case _ => fieldAccess
-
             CaseDef(
               Literal(StringConstant(fieldName)),
               None,
-              '{ ZIO.succeed(${ unwrapped.asExpr }) }.asTerm
+              '{ ZIO.succeed(${ fieldAccess.asExpr }) }.asTerm
             )
           } :+ CaseDef(
             Wildcard(),
