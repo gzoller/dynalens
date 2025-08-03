@@ -32,9 +32,9 @@ case class Order(id: String, pack: Pack)
 
 case class Ticket(id: java.util.UUID, when: java.util.Date)
 
-case class Registry( id: String, giftNums: List[Int], giftDesc: List[String] )
+case class Registry(id: String, giftNums: List[Int], giftDesc: List[String])
 
-case class Maybe( id: String, dunno: Option[String] = None, interest: Option[List[Item]] = None )
+case class Maybe(id: String, dunno: Option[String] = None, interest: Option[List[Item]] = None)
 
 // Utility fn for testing
 def toStringCtx(ctx: DynaContext): String = {

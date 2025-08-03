@@ -52,16 +52,12 @@ case class GetFn(path: String, searchThis: Boolean = false, elseValue: Option[Fn
             ZIO.succeed(obj)
 
           case Some((obj, Some(dynalens))) =>
-            if rest.isEmpty then
-              ZIO.succeed(obj)
-            else
-              dynalens.get(partialPath(rest), obj.asInstanceOf[dynalens.ThisT])
+            if rest.isEmpty then ZIO.succeed(obj)
+            else dynalens.get(partialPath(rest), obj.asInstanceOf[dynalens.ThisT])
 
           case None =>
-            if searchThis then
-              GetFn(path = "this." + path, elseValue = elseValue).resolve(ctx)
-            else
-              ZIO.fail(DynaLensError(s"Field $path not found in context"))
+            if searchThis then GetFn(path = "this." + path, elseValue = elseValue).resolve(ctx)
+            else ZIO.fail(DynaLensError(s"Field $path not found in context"))
         }
 
       // Single-part path
@@ -77,16 +73,17 @@ case class GetFn(path: String, searchThis: Boolean = false, elseValue: Option[Fn
             ZIO.fail(DynaLensError(s"Field $path not found"))
         }
     }
-  .flatMap { obj => unwrapOption(path, obj, elseValue, isDefined, useRawValue ) match
-    case Left(err) =>
-      ZIO.fail(err)
+      .flatMap { obj =>
+        unwrapOption(path, obj, elseValue, isDefined, useRawValue) match
+          case Left(err) =>
+            ZIO.fail(err)
 
-    case Right(Left(altFn)) =>
-      altFn.resolve(ctx)
+          case Right(Left(altFn)) =>
+            altFn.resolve(ctx)
 
-    case Right(Right(value)) =>
-      ZIO.succeed(value)
-  }
+          case Right(Right(value)) =>
+            ZIO.succeed(value)
+      }
 
 case class IfFn[R](
     condition: Fn[Boolean],
@@ -290,9 +287,9 @@ case class IsDefinedFn(inner: Fn[Any]) extends BooleanFn {
     for {
       value <- inner.resolve(ctx)
     } yield value match {
-      case opt: Option[_] => opt.isDefined
-      case null => false
-      case _ =>
+      case opt: Option[?] => opt.isDefined
+      case null           => false
+      case _              =>
         // Non-option types are always considered defined
         true
     }
@@ -693,7 +690,7 @@ case class SortFn(
     ctx.get("this") match {
       case Some((maybeIterable, lens)) =>
         unwrapOption("[]", maybeIterable, Some(ConstantFn(Nil)), false) match {
-          case Left(err) => ZIO.fail(err)
+          case Left(err)             => ZIO.fail(err)
           case Right(Left(fallback)) => fallback.resolve(ctx)
           case Right(Right(value)) =>
             value match
@@ -702,17 +699,19 @@ case class SortFn(
                   case Some(dlens: DynaLens[?]) =>
                     path match
                       case Some(pth) =>
-                        ZIO.foreach(v) { item =>
-                          dlens
-                            .asInstanceOf[DynaLens[Any]]
-                            .get(pth, item.asInstanceOf[dlens.ThisT])
-                            .map { value =>
-                              (item, value.asInstanceOf[Comparable[Any]])
-                            }
-                        }.map { itemValuePairs =>
-                          val sorted = itemValuePairs.toSeq.sortBy(_._2)
-                          if (asc) sorted.map(_._1) else sorted.reverse.map(_._1)
-                        }
+                        ZIO
+                          .foreach(v) { item =>
+                            dlens
+                              .asInstanceOf[DynaLens[Any]]
+                              .get(pth, item.asInstanceOf[dlens.ThisT])
+                              .map { value =>
+                                (item, value.asInstanceOf[Comparable[Any]])
+                              }
+                          }
+                          .map { itemValuePairs =>
+                            val sorted = itemValuePairs.toSeq.sortBy(_._2)
+                            if asc then sorted.map(_._1) else sorted.reverse.map(_._1)
+                          }
 
                       case None =>
                         sortV(v)
@@ -723,13 +722,13 @@ case class SortFn(
               case _ =>
                 ZIO.fail(
                   DynaLensError(
-                    s"sort${if (asc) "Asc" else "Desc"}() may only be applied to Iterable types, but got: ${value.getClass.getSimpleName}"
+                    s"sort${if asc then "Asc" else "Desc"}() may only be applied to Iterable types, but got: ${value.getClass.getSimpleName}"
                   )
                 )
         }
-    case None =>
-      ZIO.fail(DynaLensError(s"'this' not found in context"))
-  }
+      case None =>
+        ZIO.fail(DynaLensError(s"'this' not found in context"))
+    }
 
 case class DistinctFn(fieldPath: Option[String]) extends Fn[Any]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
@@ -834,12 +833,14 @@ case class MapFwdFn(mapName: String) extends Fn[Any]:
           registry.get(mapName) match
             case Some(bimap) =>
               value match
-                case iter: Iterable[_] =>
-                  ZIO.foreach(iter) { item =>
-                    bimap.getForward(item.toString) match
-                      case Some(res) => ZIO.succeed(res)
-                      case None      => ZIO.fail(DynaLensError(s"Key '$item' not found in forward map '$mapName'"))
-                  }.map(_.toList)
+                case iter: Iterable[?] =>
+                  ZIO
+                    .foreach(iter) { item =>
+                      bimap.getForward(item.toString) match
+                        case Some(res) => ZIO.succeed(res)
+                        case None      => ZIO.fail(DynaLensError(s"Key '$item' not found in forward map '$mapName'"))
+                    }
+                    .map(_.toList)
                 case _ =>
                   bimap.getForward(value.toString) match
                     case Some(result) => ZIO.succeed(result)
@@ -858,12 +859,14 @@ case class MapRevFn(mapName: String) extends Fn[Any]:
           registry.get(mapName) match
             case Some(bimap) =>
               value match
-                case iter: Iterable[_] =>
-                  ZIO.foreach(iter) { item =>
-                    bimap.getReverse(item.toString) match
-                      case Some(res) => ZIO.succeed(res)
-                      case None      => ZIO.fail(DynaLensError(s"Key '$item' not found in reverse map '$mapName'"))
-                  }.map(_.toList)
+                case iter: Iterable[?] =>
+                  ZIO
+                    .foreach(iter) { item =>
+                      bimap.getReverse(item.toString) match
+                        case Some(res) => ZIO.succeed(res)
+                        case None      => ZIO.fail(DynaLensError(s"Key '$item' not found in reverse map '$mapName'"))
+                    }
+                    .map(_.toList)
                 case _ =>
                   bimap.getReverse(value.toString) match
                     case Some(result) => ZIO.succeed(result)

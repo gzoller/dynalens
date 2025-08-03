@@ -71,7 +71,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val script = """val x = name > 5""" // name is String, not Int
       val a = dynalens[Person]
 
-      val result = Parser.parseScriptNoZIO(script).flatMap{compiled => a.runNoZIO(compiled, Person("bob", 35))}
+      val result = Parser.parseScriptNoZIO(script).flatMap(compiled => a.runNoZIO(compiled, Person("bob", 35)))
       result match {
         case Left(err: DynaLensError) =>
           assertTrue(err.msg.contains("Cannot compare types: class java.lang.String and class java.lang.Integer"))
@@ -145,7 +145,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
         """
           |  interest[].qty = interest[].len() * 5
           |""".stripMargin
-      val inst = Maybe("abc",Some("wow"),Some(List(Item("abc", 2, 5), Item("xyz", 1, 7))))
+      val inst = Maybe("abc", Some("wow"), Some(List(Item("abc", 2, 5), Item("xyz", 1, 7))))
       val a = dynalens[Maybe]
 
       val result = for {
@@ -163,5 +163,5 @@ object NegativeAndLimits extends ZIOSpecDefault:
         case _ =>
           assertTrue(false).label("Expected mapTo key failure")
       }
-    },
+    }
   )

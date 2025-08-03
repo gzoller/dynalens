@@ -49,11 +49,11 @@ trait Level2 extends Level1:
       case (first, Nil) =>
         first match
           case b: BooleanFn => P(Pass(b))
-          case _ => P(Fail) // ensure this is a BooleanFn, or backtrack
+          case _            => P(Fail) // ensure this is a BooleanFn, or backtrack
       case (first, rest) =>
         first match
           case b: BooleanFn => P(Pass(rest.foldLeft(b)(OrFn(_, _))))
-          case _ => P(Fail)
+          case _            => P(Fail)
     }
 
   private def booleanAnd[$: P](using ctx: ExprContext): P[BooleanFn] =
@@ -107,8 +107,7 @@ trait Level2 extends Level1:
       baseExpr(valueExpr) | // already handles its own methodChain
         numberLiteral |
         stringLiteral |
-        ("(" ~/ valueExpr ~ ")").flatMap(expr =>
-          methodChain(expr, valueExpr) // <-- now attaches .methods to parenthesized expressions
+        ("(" ~/ valueExpr ~ ")").flatMap(expr => methodChain(expr, valueExpr) // <-- now attaches .methods to parenthesized expressions
         )
     )
 
@@ -123,10 +122,9 @@ trait Level2 extends Level1:
       arithmeticExpr ~
         (WS0 ~ "::" ~ WS0 ~ arithmeticExpr).rep ~
         &(WS0 ~ !CharIn("=<>!")) // Lookahead to reject comparisons
-    ).map {
-      case (first, rest: Seq[Fn[Any]] @unchecked) =>
-        if rest.isEmpty then first
-        else ConcatFn((first +: rest).toList)
+    ).map { case (first, rest: Seq[Fn[Any]] @unchecked) =>
+      if rest.isEmpty then first
+      else ConcatFn((first +: rest).toList)
     }
 
   // ---- valueExpr => Top-Level Expr ----
@@ -173,14 +171,12 @@ trait Level2 extends Level1:
     P(path.map(_._1) ~ WS0 ~ "=" ~/ WS0 ~ valueExpr).map { case (p, v) =>
       if p.contains("[]") then
         // warn user if they try to use foo[].len() in predicate--won't work!
-        if pattern.findFirstIn(v.toString).isDefined then
-          throw new RuntimeException("Sorry...we don't support len() function on collections in a predicate (LHS).\nConsider using an intermediate val")
-        else
-          MapStmt(p, v)
+        if pattern.findFirstIn(v.toString).isDefined then throw new RuntimeException("Sorry...we don't support len() function on collections in a predicate (LHS).\nConsider using an intermediate val")
+        else MapStmt(p, v)
       else
         v match
           case g: GetFn if g.elseValue.isEmpty => UpdateStmt(p, g.copy(useRawValue = true))
-          case _ => UpdateStmt(p, v)
+          case _                               => UpdateStmt(p, v)
     }
 
   private def ifStmt[$: P]: P[IfStmt] =

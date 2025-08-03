@@ -41,13 +41,13 @@ object Options extends ZIOSpecDefault:
       val expectedResult =
         """top -> Maybe(abc,Some(foom),None)
           |""".stripMargin
-      val inst = Maybe("abc",None,Some(List(Item("abc", 2, 5))))
+      val inst = Maybe("abc", None, Some(List(Item("abc", 2, 5))))
       val a = dynalens[Maybe]
       for {
         compiledScript <- Parser.parseScript(script)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Maybe("abc",Some("foom")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Maybe("abc", Some("foom")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Expression-based option assignment") {
       val script =
@@ -64,13 +64,13 @@ object Options extends ZIOSpecDefault:
           |x -> yay
           |y -> None
           |""".stripMargin
-      val inst = Maybe("abc",None,Some(List(Item("abc", 2, 5))))
+      val inst = Maybe("abc", None, Some(List(Item("abc", 2, 5))))
       val a = dynalens[Maybe]
       for {
         compiledScript <- Parser.parseScript(script)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Maybe("abc",Some("yay")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Maybe("abc", Some("yay")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Get option value (with isDefined)") {
       val script =
@@ -91,13 +91,13 @@ object Options extends ZIOSpecDefault:
           |x -> wow
           |y -> WOW ok
           |""".stripMargin
-      val inst = Maybe("abc",Some("wow"))
+      val inst = Maybe("abc", Some("wow"))
       val a = dynalens[Maybe]
       for {
         compiledScript <- Parser.parseScript(script)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Maybe("abc",Some("wow")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Maybe("abc", Some("wow")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Get option value--List (with isDefined)") {
       val script =
@@ -112,13 +112,13 @@ object Options extends ZIOSpecDefault:
           |x -> List(Item(abc,2,5))
           |y -> 1
           |""".stripMargin
-      val inst = Maybe("abc",Some("wow"),Some(List(Item("abc", 2, 5))))
+      val inst = Maybe("abc", Some("wow"), Some(List(Item("abc", 2, 5))))
       val a = dynalens[Maybe]
       for {
         compiledScript <- Parser.parseScript(script)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Maybe("abc",Some("wow"),Some(List(Item("abc",2,5)))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Maybe("abc", Some("wow"), Some(List(Item("abc", 2, 5)))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Update and Map with optional list") {
       val script =
@@ -133,14 +133,14 @@ object Options extends ZIOSpecDefault:
         """top -> Maybe(abc,Some(wow),Some(List(Item(xyz,10,7), Item(abc,10,5))))
           |x -> 2
           |""".stripMargin
-      val inst = Maybe("abc",Some("wow"),Some(List(Item("abc", 2, 5), Item("xyz", 1, 7))))
+      val inst = Maybe("abc", Some("wow"), Some(List(Item("abc", 2, 5), Item("xyz", 1, 7))))
       val a = dynalens[Maybe]
       for {
         compiledScript <- Parser.parseScript(script)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Maybe("abc",Some("wow"),Some(List(Item("xyz",10,7),Item("abc",10,5)))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
-    },
+      } yield assertTrue(x == Maybe("abc", Some("wow"), Some(List(Item("xyz", 10, 7), Item("abc", 10, 5)))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    }
   )
 
 //  _ <- ZIO.succeed(println("&&& " + compiledScript))

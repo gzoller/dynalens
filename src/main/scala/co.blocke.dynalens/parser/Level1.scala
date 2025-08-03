@@ -104,7 +104,7 @@ trait Level1 extends Level0:
       chain.foldLeft(base) { case (inner, (fnName, args)) =>
         methodFunctions.get(fnName) match
           case Some(fnBuilder) => fnBuilder(inner, args).asInstanceOf[Fn[Any]]
-          case None => throw new RuntimeException(s"Unknown method: $fnName")
+          case None            => throw new RuntimeException(s"Unknown method: $fnName")
       }
     }
 
