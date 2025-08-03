@@ -58,7 +58,7 @@ lazy val root = project
   .in(file("."))
   .settings(
     name := "dynalens",
-    moduleName := "dynalens_3",
+    moduleName := "dynalens",
     Compile / packageBin / mappings += {
       (baseDirectory.value / "plugin.properties") -> "plugin.properties"
     },
