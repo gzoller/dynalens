@@ -40,12 +40,12 @@ case class ConstantFn[R](out: R) extends Fn[R]:
     ZIO.succeed(out)
 
 case class GetFn(
-                  path: String,
-                  searchThis: Boolean = false,
-                  elseValue: Option[Fn[Any]] = None,
-                  isDefined: Boolean = false,
-                  useRawValue: Boolean = false
-                ) extends Fn[Any]:
+    path: String,
+    searchThis: Boolean = false,
+    elseValue: Option[Fn[Any]] = None,
+    isDefined: Boolean = false,
+    useRawValue: Boolean = false
+) extends Fn[Any]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     (parsePath(path) match {
       case Nil =>
@@ -76,7 +76,7 @@ case class GetFn(
           case _ =>
             ZIO.fail(DynaLensError(s"Field $path not found"))
         }
-    }).flatMap { obj =>  // <- match wrapped in parens
+    }).flatMap { obj => // <- match wrapped in parens
       unwrapOption(path, obj, elseValue, isDefined, useRawValue) match
         case Left(err)           => ZIO.fail(err)
         case Right(Left(altFn))  => altFn.resolve(ctx)

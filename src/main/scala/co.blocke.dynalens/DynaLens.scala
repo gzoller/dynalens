@@ -241,7 +241,7 @@ case class DynaLens[T](
                 in <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
                 maybeLens = pathParts.last match {
                   case IndexedField(p, _) => lens._registry.get(p).orElse(None)
-                  case Field(p) => None
+                  case Field(p)           => None
                 }
                 _ = ctx.put("this", (in, maybeLens)) // assign loop param variable
                 enrichedCtx = outerCtx ++ ctx.toMap // <-- merge loop context with outer context
@@ -255,9 +255,9 @@ case class DynaLens[T](
               for {
                 listVal <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
                 iterable <- ZIO.fromEither(listVal match {
-                  case i: Iterable[?] => Right(i)
+                  case i: Iterable[?]       => Right(i)
                   case Some(i: Iterable[?]) => Right(i)
-                  case None => Right(Nil)
+                  case None                 => Right(Nil)
                   case other =>
                     Left(DynaLensError(s"Expected iterable at path '$partialPath', but found: ${other.getClass.getName}"))
                 })
@@ -276,7 +276,8 @@ case class DynaLens[T](
             case Nil =>
               ZIO.fail(DynaLensError("Should Never Happen(tm)"))
           }
-        ).orNull
+        )
+        .orNull
 
     val parsed = parsePath(path)
     for {
