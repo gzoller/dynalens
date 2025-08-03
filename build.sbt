@@ -57,6 +57,8 @@ ThisBuild / githubWorkflowPublishTargetBranches := Seq(
 lazy val root = project
   .in(file("."))
   .settings(
+    name := "dynalens",
+    moduleName := "dynalens_3",
     Compile / packageBin / mappings += {
       (baseDirectory.value / "plugin.properties") -> "plugin.properties"
     },
