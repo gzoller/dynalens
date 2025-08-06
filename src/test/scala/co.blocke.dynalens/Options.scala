@@ -25,7 +25,7 @@ import zio.*
 import zio.test.*
 
 import DynaLens.*
-import parser.Parser
+import parser.Script
 
 object Options extends ZIOSpecDefault:
 
@@ -44,7 +44,7 @@ object Options extends ZIOSpecDefault:
       val inst = Maybe("abc", None, Some(List(Item("abc", 2, 5))))
       val a = dynalens[Maybe]
       for {
-        compiledScript <- Parser.parseScript(script)
+        compiledScript <- Script.compile(script)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Maybe("abc", Some("foom")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
@@ -55,10 +55,10 @@ object Options extends ZIOSpecDefault:
           |  val x = "yay"
           |  val y = None
           |  dunno = x
-          |  interest[] = y.else(None)
+          |  interest[] = y
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,ConstantFn(yay)), ValStmt(y,ConstantFn(None)), UpdateStmt(dunno,GetFn(x,false,None,false,true)), MapStmt(interest[],GetFn(y,false,Some(ConstantFn(None)),false,false))))"""
+        """BlockStmt(List(ValStmt(x,ConstantFn(yay)), ValStmt(y,ConstantFn(None)), UpdateStmt(dunno,GetFn(x,false)), MapStmt(interest[],GetFn(y,false))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(yay),None)
           |x -> yay
@@ -67,7 +67,7 @@ object Options extends ZIOSpecDefault:
       val inst = Maybe("abc", None, Some(List(Item("abc", 2, 5))))
       val a = dynalens[Maybe]
       for {
-        compiledScript <- Parser.parseScript(script)
+        compiledScript <- Script.compile(script)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Maybe("abc", Some("yay")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
@@ -82,7 +82,7 @@ object Options extends ZIOSpecDefault:
           |  val s = None.isDefined()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,GetFn(dunno,false,Some(ConstantFn(unknown)),false,false)), ValStmt(y,ConcatFn(List(ToUpperFn(GetFn(x,false,None,false,false)), ConstantFn( ok)))), ValStmt(q,GetFn(dunno,false,None,true,false)), ValStmt(r,GetFn(interest,false,None,true,false)), ValStmt(s,IsDefinedFn(ConstantFn(None)))))"""
+        """BlockStmt(List(ValStmt(x,ElseFn(GetFn(dunno,false),ConstantFn(unknown))), ValStmt(y,ConcatFn(List(ToUpperFn(GetFn(x,false)), ConstantFn( ok)))), ValStmt(q,IsDefinedFn(GetFn(dunno,false))), ValStmt(r,IsDefinedFn(GetFn(interest,false))), ValStmt(s,IsDefinedFn(ConstantFn(None)))))"""
       val expectedResult =
         """q -> true
           |r -> false
@@ -94,7 +94,7 @@ object Options extends ZIOSpecDefault:
       val inst = Maybe("abc", Some("wow"))
       val a = dynalens[Maybe]
       for {
-        compiledScript <- Parser.parseScript(script)
+        compiledScript <- Script.compile(script)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Maybe("abc", Some("wow")) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
@@ -106,16 +106,16 @@ object Options extends ZIOSpecDefault:
           |  val y = interest[].len()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,GetFn(interest[],false,None,true,false)), ValStmt(y,LengthFn(GetFn(interest[],false,None,false,false)))))"""
+        """BlockStmt(List(ValStmt(x,IsDefinedFn(GetFn(interest[],false))), ValStmt(y,LengthFn(GetFn(interest[],false)))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),Some(List(Item(abc,2,5))))
-          |x -> List(Item(abc,2,5))
+          |x -> true
           |y -> 1
           |""".stripMargin
       val inst = Maybe("abc", Some("wow"), Some(List(Item("abc", 2, 5))))
       val a = dynalens[Maybe]
       for {
-        compiledScript <- Parser.parseScript(script)
+        compiledScript <- Script.compile(script)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Maybe("abc", Some("wow"), Some(List(Item("abc", 2, 5)))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
@@ -128,7 +128,7 @@ object Options extends ZIOSpecDefault:
           |  interest[].sortDesc(number)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,LengthFn(GetFn(interest[],false,None,false,false))), MapStmt(interest[].qty,MultiplyFn(GetFn(x,false,None,false,false),ConstantFn(5))), MapStmt(interest[],SortFn(Some(number),false))))"""
+        """BlockStmt(List(ValStmt(x,LengthFn(GetFn(interest[],false))), MapStmt(interest[].qty,MultiplyFn(GetFn(x,false),ConstantFn(5))), MapStmt(interest[],SortFn(Some(number),false))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),Some(List(Item(xyz,10,7), Item(abc,10,5))))
           |x -> 2
@@ -136,7 +136,7 @@ object Options extends ZIOSpecDefault:
       val inst = Maybe("abc", Some("wow"), Some(List(Item("abc", 2, 5), Item("xyz", 1, 7))))
       val a = dynalens[Maybe]
       for {
-        compiledScript <- Parser.parseScript(script)
+        compiledScript <- Script.compile(script)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Maybe("abc", Some("wow"), Some(List(Item("xyz", 10, 7), Item("abc", 10, 5)))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)

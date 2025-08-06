@@ -25,7 +25,7 @@ import zio.*
 import zio.test.*
 
 import DynaLens.*
-import parser.Parser
+import parser.Script
 
 object NegativeAndLimits extends ZIOSpecDefault:
 
@@ -41,13 +41,13 @@ object NegativeAndLimits extends ZIOSpecDefault:
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(flag,IfFn(GreaterThanFn(GetFn(qty,false,None,false,false),ConstantFn(5)),BlockFn(List(),ConstantFn(big)),BlockFn(List(),ConstantFn(small))))))"""
+        """BlockStmt(List(ValStmt(flag,IfFn(GreaterThanFn(GetFn(qty,false),ConstantFn(5)),BlockFn(List(),ConstantFn(big)),BlockFn(List(),ConstantFn(small))))))"""
 
       val inst = Item("abc", 6)
       val a = dynalens[Item]
 
       for {
-        compiled <- Parser.parseScript(script)
+        compiled <- Script.compile(script)
         (_, ctx) <- a.run(compiled, inst)
       } yield assertTrue(
         ctx("flag")._1 == "big",
@@ -58,7 +58,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val script = "bogus = 99"
       val a = dynalens[Item]
 
-      val result = Parser.parseScriptNoZIO(script).flatMap(compiled => a.runNoZIO(compiled, Item("abc", 2)))
+      val result = Script.compileNoZIO(script).flatMap(compiled => a.runNoZIO(compiled, Item("abc", 2)))
 
       result match {
         case Left(err: DynaLensError) =>
@@ -71,7 +71,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val script = """val x = name > 5""" // name is String, not Int
       val a = dynalens[Person]
 
-      val result = Parser.parseScriptNoZIO(script).flatMap(compiled => a.runNoZIO(compiled, Person("bob", 35)))
+      val result = Script.compileNoZIO(script).flatMap(compiled => a.runNoZIO(compiled, Person("bob", 35)))
       result match {
         case Left(err: DynaLensError) =>
           assertTrue(err.msg.contains("Cannot compare types: class java.lang.String and class java.lang.Integer"))
@@ -87,7 +87,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
 
       val script = """giftDesc[].mapTo("testmap")"""
       val result = for {
-        compiled <- Parser.parseScript(script)
+        compiled <- Script.compile(script)
         output <- a.run(compiled, inst, ctx)
       } yield output
 
@@ -112,7 +112,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val expectedResult = "top -> Registry(r1,List(),List(a, b))\n"
 
       for {
-        compiled <- Parser.parseScript(script)
+        compiled <- Script.compile(script)
         (x, ctx) <- a.run(compiled, inst)
         ctxStr = toStringCtx(ctx)
       } yield assertTrue(
@@ -127,11 +127,11 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Registry]
 
       val expected = Registry("r1", List(3, 4), Nil)
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums[],FilterFn(toBooleanFn(GreaterThanFn(GetFn(this,true,None,false,false),ConstantFn(2)))))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums[],FilterFn(GreaterThanFn(GetFn(this,true),ConstantFn(2))))))"""
       val expectedResult = "top -> Registry(r1,List(3, 4),List())\n"
 
       for {
-        compiled <- Parser.parseScript(script)
+        compiled <- Script.compile(script)
         (x, ctx) <- a.run(compiled, inst)
         ctxStr = toStringCtx(ctx)
       } yield assertTrue(
@@ -149,7 +149,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Maybe]
 
       val result = for {
-        compiled <- Parser.parseScript(script)
+        compiled <- Script.compile(script)
         output <- a.run(compiled, inst)
       } yield output
 

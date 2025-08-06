@@ -24,12 +24,17 @@ package parser
 
 import fastparse.*, NoWhitespace.*
 
+
 object Grammar extends Level2 {
 
   // Top-level script block — no `{}`, just a list of statements
-  def topLevelBlock[$: P]: P[BlockStmt] =
-    P(WS0 ~ statement.rep ~ WS0).map(BlockStmt(_))
-
+  def topLevelBlock[$: P]: P[Either[DLCompileError, BlockStmt]] =
+    P(WS0 ~ statement.rep ~ WS0).map { stmtsE =>
+      val (errs, oks) = stmtsE.partitionMap(identity)  // stmtsE: Seq[ParseStmtResult]
+      if errs.nonEmpty then Left(errs.head)
+      else Right(BlockStmt(oks.toList))
+    }
+    
   /*
       expr
        ├── ifFn

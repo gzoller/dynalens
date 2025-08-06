@@ -1,0 +1,73 @@
+
+
+    val unique = items[].id.distinct()
+    maybe.skills[].name = maybe.skills.len() :: "wow"  <- For Option[List[?]], None == Nil
+    val x = maybe.desc  <-- may be None (desc is Option[String])
+    maybe.desc = x -> _ :: "wow"  // like x.map(_+"wow")
+
+    foo.things[].filter(this.startsWith("x"))
+
+
+    Possible additions:
+
+    * Options and Collections as first-class values
+    * Simple map -> for Option
+    * Tracking course types: simple, Option, Collection, Map:
+        maybe use foo, foo[], foo{}, foo? foo[]?, foo{}? to denote the type
+    * Support Map mutation
+    * More detailed error messages w/line,pos
+
+
+    I think that’s a good default for a lens‑focused language:
+
+    Within collection predicates (and other per‑item transforms), if the projected field is Option[T], treat None as “absent” and simply skip it.
+    i.e., work over items.flatMap(_.blah) rather than items.map(_.blah).
+
+    Why this makes sense here
+    	•	Lens semantics > GP language: You’re shaping data, not proving total functions. Skipping missing leaves is usually what users intend.
+    	•	Predictable filtering: filter(_.blah?) should keep elements where blah is present and satisfies the predicate; elements with blah = None are naturally dropped from consideration for that predicate.
+    	•	Reduces boilerplate: Avoids forcing x.isDefined checks or .else(...) inside every predicate.
+
+    Where to apply the rule
+    	•	In collection predicates and mappers that iterate items (e.g., filter, map, distinct, sortAsc(field)):
+    	•	When dereferencing a path ending in ? (optional) within the item scope, ignore None:
+    	•	filter(this.blah? > 10) → keep items with blah = Some(v) and v > 10; items with None neither pass nor fail (they’re dropped).
+    	•	map(this.blah?) → produce only the Some values (effectively flatMap).
+    	•	In scalar contexts (outside an iterable), keep current behavior:
+    	•	val x = foo.blah? → Option[...] value, not silently dropped.
+    	•	You still need .else(...) when you want a default.
+
+    Edge cases & clarity
+    	•	Sorting with optional keys: Two good defaults:
+    	1.	Stable skip: exclude items where the sort key is None.
+    	2.	Group last: treat None as larger than all Some for total ordering.
+    Pick one and document it (I’d choose group last for stability and to avoid surprising count drops).
+    	•	Distinct on optional field: Define on the present values only; decide whether items with None collapse to a single bucket or are excluded. I’d exclude them to avoid ambiguous grouping.
+    	•	Length / stats after skipping: Be explicit: methods like .len() on a mapped optional field inside a collection operate on the post‑skip stream. Document: “None values are not counted.”
+
+    Give users an explicit escape hatch
+
+    Even if skip is the default, offer knobs so advanced users can control it:
+    	•	.present (predicate): keep only items where the optional field is defined.
+    items[].filter(this.blah?.present) → explicit, self‑documenting.
+    	•	.flattenOption() (function on collections): turns List[Option[T]] into List[T].
+    This might happen implicitly in map; exposing it allows standalone use.
+    	•	.keepNone() (flag/variant) on ops like sort/distinct: include None with defined ordering/bucket.
+    	•	e.g., items[].sortAsc(this.blah?).keepNoneFirst() / .keepNoneLast().
+    	•	.default(v) (alias of .else(v) in per‑item scope) when you don’t want skipping:
+    	•	items[].map(this.blah?.default(0)) → totalize before mapping.
+
+    Implementation sketch
+    	•	In per‑item evaluation (the iterator lens):
+    	•	When you see a terminal path with ?, have the accessor return Iterator.empty for None and Iterator(v) for Some(v).
+    That makes the surrounding op naturally flatMap over options.
+    	•	For boolean predicates:
+    	•	Evaluate to tri‑state: True, False, Absent. Treat Absent as not matching (i.e., drop item).
+    	•	For sort/distinct:
+    	•	Accept a KeyResult = Present(T) | Absent. Use chosen policy for Absent.
+
+    Documentation snippet (to set expectations)
+
+    Option‑aware collection ops. Inside collection transforms (e.g., items[]), optional fields (?) are treated as absent values: None is skipped by default. Predicates only consider present values; mappers flatten out None. Use .default(...) to supply a value instead of skipping, or .present to filter to only present entries. For sorting/distinct, absent keys are grouped last (default).
+
+    This keeps the language ergonomic for its core purpose, while still giving control when users need stricter behavior.

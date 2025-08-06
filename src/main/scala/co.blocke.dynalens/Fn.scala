@@ -41,13 +41,14 @@ case class ConstantFn[R](out: R) extends Fn[R]:
 
 case class GetFn(
     path: String,
-    searchThis: Boolean = false,
-    elseValue: Option[Fn[Any]] = None,
-    isDefined: Boolean = false,
-    useRawValue: Boolean = false
+    searchThis: Boolean = false
+//    elseValue: Option[Fn[Any]] = None,
+//    isDefined: Boolean = false,
+//    useRawValue: Boolean = false
 ) extends Fn[Any]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
-    (parsePath(path) match {
+//    (
+    parsePath(path) match {
       case Nil =>
         ZIO.fail(DynaLensError("get requires a path"))
 
@@ -61,7 +62,7 @@ case class GetFn(
             else dynalens.get(partialPath(rest), obj.asInstanceOf[dynalens.ThisT])
 
           case None =>
-            if searchThis then GetFn(path = "this." + path, elseValue = elseValue).resolve(ctx)
+            if searchThis then GetFn(path = "this." + path).resolve(ctx)
             else ZIO.fail(DynaLensError(s"Field $path not found in context"))
         }
 
@@ -70,18 +71,19 @@ case class GetFn(
           case Some((obj, Some(dynalens))) =>
             dynalens.get(path, obj.asInstanceOf[dynalens.ThisT]).catchSome {
               case e: DynaLensError if e.msg.startsWith("Field not found") && searchThis =>
-                GetFn(path = "this." + path, elseValue = elseValue).resolve(ctx)
+                GetFn(path = "this." + path).resolve(ctx)
             }
 
           case _ =>
             ZIO.fail(DynaLensError(s"Field $path not found"))
         }
-    }).flatMap { obj => // <- match wrapped in parens
-      unwrapOption(path, obj, elseValue, isDefined, useRawValue) match
-        case Left(err)           => ZIO.fail(err)
-        case Right(Left(altFn))  => altFn.resolve(ctx)
-        case Right(Right(value)) => ZIO.succeed(value)
     }
+//      ).flatMap { obj => // <- match wrapped in parens
+//      unwrapOption(path, obj, elseValue, isDefined, useRawValue) match
+//        case Left(err)           => ZIO.fail(err)
+//        case Right(Left(altFn))  => altFn.resolve(ctx)
+//        case Right(Right(value)) => ZIO.succeed(value)
+//    }
 
 case class IfFn[R](
     condition: Fn[Boolean],
@@ -105,6 +107,15 @@ case class BlockFn[R](
     prepped.flatMap(finalFn.resolve)
 
 // --- Boolean Functions ----
+
+case class BooleanConstantFn(out: Boolean) extends BooleanFn:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+    ZIO.succeed(out)
+//case class BooleanConstantFn[Boolean](out: Boolean) extends BooleanFn:
+//  def resolve(
+//               ctx: DynaContext = scala.collection.mutable.Map.empty
+//             ): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+//    ZIO.succeed(out)
 
 case class EqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
@@ -648,9 +659,25 @@ case class ReplaceFn(in: Fn[Any], target: Fn[Any], replacement: Fn[Any]) extends
       r <- replacement.resolve(ctx).map(v => if v == null then "" else v.toString)
     } yield str.replace(t, r)
 
+// --- Option Functions ----
+
+case class ElseFn(primary: Fn[Any], fallback: Fn[Any]) extends Fn[Any] {
+  override def resolve(ctx: DynaContext)
+  : ZIO[_BiMapRegistry, DynaLensError, Any] =
+    primary.resolve(ctx).flatMap {
+      case opt: Option[_] =>
+        opt match {
+          case Some(v) => ZIO.succeed(v)           // pass-through value
+          case None    => fallback.resolve(ctx)    // only None triggers fallback
+        }
+      case v =>
+        ZIO.succeed(v)                             // non-Option: pass-through
+    }
+}
+
 // --- Collection (Iterable) Functions ----
 
-case class FilterFn(predicate: Fn[Boolean]) extends Fn[Any]:
+case class FilterFn(predicate: BooleanFn) extends Fn[Any]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ctx.get("this") match
       case Some((v: Iterable[?], lens)) =>

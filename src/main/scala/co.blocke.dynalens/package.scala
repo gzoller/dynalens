@@ -21,6 +21,10 @@
 
 package co.blocke.dynalens
 
+//
+// DynaContext used during runtime execution of compiled scripts
+//
+// Map[ symbol, (value, lens?) ]
 type DynaContext = scala.collection.mutable.Map[String, (Any, Option[DynaLens[?]])]
 
 object DynaContext:
@@ -35,7 +39,22 @@ extension (ctx: DynaContext)
     copy += (k -> v)
     copy
 
-case class ExprContext(searchThis: Boolean = false)
+
+final case class DynaLensError (msg: String) extends Exception(msg)
+//final case class CompileException (rendered: String) extends Exception (rendered)
+
+//
+// ExprContext used during compilation
+//
+enum SymbolType:
+  case Exempt // eg top
+  case Normal
+  case OptionalScalar
+  case OptionalScalaWithDefault
+  case OptionalList
+  case OptionalMap
+
+case class ExprContext(sym: Map[String, SymbolType] = Map.empty, searchThis: Boolean = false)
 
 given defaultExprContext: ExprContext = ExprContext()
 

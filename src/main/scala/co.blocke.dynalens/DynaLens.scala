@@ -31,7 +31,6 @@ import Path.*
 
 import scala.annotation.tailrec
 
-case class DynaLensError(msg: String)
 
 case class DynaLens[T](
     _update: (String, Any, T) => ZIO[Any, DynaLensError, T],
@@ -316,6 +315,7 @@ object DynaLens:
                       val keyExpr = Expr(field.name)
                       Some('{ $keyExpr -> $lensExpr })
                 case _ => None
+            // For Option[Seq] if option element type is a class make sure we put lens in registry    
             case c: OptionRef[?] if c.optionParamType.isInstanceOf[SeqRef[?]] =>
               c.optionParamType match
                 case s: SeqRef[?] =>

@@ -34,165 +34,275 @@ trait Level2 extends Level1:
 
   // ---- Boolean ----
 
-  private def booleanAtom[$: P](using ctx: ExprContext): P[BooleanFn] =
+  /** Helpers to combine boolean results left-to-right, short-circuiting on the first Left */
+  private inline def andCombine(a: ParseBoolResult, b: ParseBoolResult): ParseBoolResult =
+    (a, b) match
+      case (Left(e), _) => Left(e)
+      case (Right(_), Left(e)) => Left(e)
+      case (Right(a1), Right(b1)) => Right(AndFn(a1, b1))
+
+  private inline def orCombine(a: ParseBoolResult, b: ParseBoolResult): ParseBoolResult =
+    (a, b) match
+      case (Left(e), _) => Left(e)
+      case (Right(_), Left(e)) => Left(e)
+      case (Right(a1), Right(b1)) => Right(OrFn(a1, b1))
+
+  /** atom := '(' booleanExpr ')' | comparisonExpr | booleanLiteral | toBoolean(arithmeticExpr) */
+  private def booleanAtom[$: P](using ctx: ExprContext): P[ParseBoolResult] =
     P(
       WS0 ~ (
         "(" ~/ booleanExpr ~ ")" |
           comparisonExpr |
-          booleanLiteral2 |
-          arithmeticExpr.map(toBooleanFn.apply)
-      )
+          booleanLiteral.map(b => Right(b): ParseBoolResult) |
+          arithmeticExpr.map(_.map(toBooleanFn.apply): ParseBoolResult)
+        )
     )
 
-  def booleanExpr[$: P](using ctx: ExprContext): P[BooleanFn] =
-    P(booleanAnd ~ (WS0 ~ "||" ~ WS0 ~ booleanAnd).rep).flatMap {
-      case (first, Nil) =>
-        first match
-          case b: BooleanFn => P(Pass(b))
-          case null         => P(Fail) // ensure this is a BooleanFn, or backtrack
-      case (first, rest) =>
-        first match
-          case b: BooleanFn => P(Pass(rest.foldLeft(b)(OrFn(_, _))))
-          case null         => P(Fail)
+  /** booleanExpr := booleanAnd ('||' booleanAnd)* */
+  def booleanExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
+    P(booleanAnd ~ (WS0 ~ "||" ~ WS0 ~ booleanAnd).rep).map { (first, rest) =>
+      rest.foldLeft(first)(orCombine)
     }
 
-  private def booleanAnd[$: P](using ctx: ExprContext): P[BooleanFn] =
-    P(booleanNot ~ (WS0 ~ "&&" ~ WS0 ~ booleanNot).rep).map { case (first, rest) =>
-      rest.foldLeft(first)(AndFn(_, _))
+  /** booleanAnd := booleanNot ('&&' booleanNot)* */
+  private def booleanAnd[$: P](using ctx: ExprContext): P[ParseBoolResult] =
+    P(booleanNot ~ (WS0 ~ "&&" ~ WS0 ~ booleanNot).rep).map { (first, rest) =>
+      rest.foldLeft(first)(andCombine)
     }
 
-  private def booleanNot[$: P](using ctx: ExprContext): P[BooleanFn] =
-    P("!" ~ WS0 ~ booleanNot).map(NotFn(_)) | booleanAtom
+  /** booleanNot := '!' booleanNot | atom */
+  private def booleanNot[$: P](using ctx: ExprContext): P[ParseBoolResult] =
+    P(("!" ~ WS0 ~ booleanNot).map {
+      case Right(b) => Right(NotFn(b)): ParseBoolResult
+      case Left(e) => Left(e)
+    } | booleanAtom)
 
-  private def comparisonExpr[$: P](using ctx: ExprContext): P[BooleanFn] =
+  /** comparisonExpr := arithmeticExpr (==|!=|>=|<=|>|<) arithmeticExpr */
+  private def comparisonExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
     P(
       arithmeticExpr ~ WS0 ~
         StringIn("==", "!=", ">=", "<=", ">", "<").! ~
         WS0 ~ arithmeticExpr
-    ).map {
-      case (left, "==", right) => EqualFn(left, right)
-      case (left, "!=", right) => NotEqualFn(left, right)
-      case (left, ">=", right) => GreaterThanOrEqualFn(left, right)
-      case (left, "<=", right) => LessThanOrEqualFn(left, right)
-      case (left, ">", right)  => GreaterThanFn(left, right)
-      case (left, "<", right)  => LessThanFn(left, right)
-      case (_, op, _)          => throw new RuntimeException(s"Unknown operator $op")
+    ).map { case (lE, op, rE) =>
+      for {
+        left  <- lE
+        right <- rE
+      } yield op match
+        case "==" => EqualFn(left, right)
+        case "!=" => NotEqualFn(left, right)
+        case ">=" => GreaterThanOrEqualFn(left, right)
+        case "<=" => LessThanOrEqualFn(left, right)
+        case ">"  => GreaterThanFn(left, right)
+        case "<"  => LessThanFn(left, right)
     }
 
   // ---- Arithmetic ----
+  
+  private def arithmeticExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
+    arithmeticTerm
 
-  private def arithmeticExpr[$: P](using ctx: ExprContext): P[Fn[Any]] = arithmeticTerm
-
-  private def arithmeticTerm[$: P](using ctx: ExprContext): P[Fn[Any]] =
-    P(arithmeticFactor ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticFactor).rep).map { case (first, rest) =>
-      rest.foldLeft(first) {
-        case (left, ("+", right)) => AddFn(left, right)
-        case (left, ("-", right)) => SubtractFn(left, right)
-        case (_, (op, _))         => throw new RuntimeException(s"Unknown arithmetic operator $op")
-      }
+  private def arithmeticTerm[$: P](using ctx: ExprContext): P[ParseFnResult] =
+    P(Index ~ arithmeticFactor ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticFactor).rep).map {
+      case (off, first, rest) =>
+        rest.foldLeft(first) {
+          case (Left(e), _) => Left(e) // short-circuit error
+          case (Right(acc), (op, right)) =>
+            right match {
+              case Left(e) => Left(e)
+              case Right(r) =>
+                op match
+                  case "+" => Right(AddFn(acc, r))
+                  case "-" => Right(SubtractFn(acc, r))
+                  case _ =>
+                    Left(DLCompileError(off, s"Unsupported arithmetic operator: $op"))
+            }
+        }
     }
 
-  private def arithmeticFactor[$: P](using ctx: ExprContext): P[Fn[Any]] =
-    P(unaryMinus ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ unaryMinus).rep).map { case (first, rest) =>
-      rest.foldLeft(first) {
-        case (left, ("*", right)) => MultiplyFn(left, right)
-        case (left, ("/", right)) => DivideFn(left, right)
-        case (left, ("%", right)) => ModuloFn(left, right)
-        case (_, (op, _))         => throw new RuntimeException(s"Unknown arithmetic operator $op")
-      }
+  private def arithmeticFactor[$: P](using ctx: ExprContext): P[ParseFnResult] =
+    P(Index ~ unaryMinus ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ unaryMinus).rep).map {
+      case (off, first, rest) =>
+        rest.foldLeft(first) {
+          case (Left(e), _) => Left(e) // propagate first error
+          case (Right(acc), (op, right)) =>
+            right match {
+              case Left(e) => Left(e)
+              case Right(r) =>
+                op match
+                  case "*" => Right(MultiplyFn(acc, r))
+                  case "/" => Right(DivideFn(acc, r))
+                  case "%" => Right(ModuloFn(acc, r))
+                  case _ =>
+                    Left(DLCompileError(off, s"Unsupported arithmetic operator: $op"))
+            }
+        }
     }
 
-  private def arithmeticAtom[$: P](using ctx: ExprContext): P[Fn[Any]] =
+  private def arithmeticAtom[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(
-      baseExpr(valueExpr) | // already handles its own methodChain
-        numberLiteral |
-        stringLiteral |
-        ("(" ~/ valueExpr ~ ")").flatMap(expr => methodChain(expr, valueExpr) // <-- now attaches .methods to parenthesized expressions
-        )
+      baseExpr(valueExpr) | // already P[ParseFnResult]
+        numberLiteral | // P[ParseFnResult]
+        stringLiteral | // P[ParseFnResult]
+        ("(" ~/ valueExpr ~ ")").flatMap {
+          case Right(expr) => methodChain(expr, valueExpr) // attach trailing .methods to parenthesized expr
+          case left@Left(_) => P(Pass(left))
+        }
     )
 
-  // support -x
-  private def unaryMinus[$: P](using ctx: ExprContext): P[Fn[Any]] =
-    P("-" ~/ WS0 ~ arithmeticAtom).map(NegateFn(_)) | arithmeticAtom
+  // support unary minus: -x
+  private def unaryMinus[$: P](using ctx: ExprContext): P[ParseFnResult] =
+    P("-" ~/ WS0 ~ arithmeticAtom).map {
+      case Right(fn) => Right(NegateFn(fn))
+      case Left(err) => Left(err)
+    } | arithmeticAtom
 
   // ---- String Concat ----
 
-  private def concatExpr[$: P](using ctx: ExprContext): P[Fn[Any]] =
+  private def concatExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(
       arithmeticExpr ~
         (WS0 ~ "::" ~ WS0 ~ arithmeticExpr).rep ~
         &(WS0 ~ !CharIn("=<>!")) // Lookahead to reject comparisons
-    ).map { case (first, rest: Seq[Fn[Any]] @unchecked) =>
-      if rest.isEmpty then first
-      else ConcatFn((first +: rest).toList)
+    ).map { case (firstE, restE) =>
+      val all: List[ParseFnResult] = firstE :: restE.toList
+
+      val (errs, oks) = all.partitionMap(identity)
+      if errs.nonEmpty then
+        Left(errs.head) // propagate first error
+      else {
+        val fns: List[Fn[Any]] = oks
+        if fns.lengthCompare(1) == 0 then
+          Right(fns.head) // a :: nothing => just the first
+        else
+          Right(ConcatFn(fns)) // a :: b :: c ...
+      }
     }
 
   // ---- valueExpr => Top-Level Expr ----
 
-  def valueExpr[$: P](using ctx: ExprContext): P[Fn[Any]] =
+  def valueExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(
       ifFn |
-        blockFn | // Optional block expression
-        concatExpr | // Includes hook into arithmeticExpr, which hooks into baseExpr (path+methods)
-        booleanExpr.map(b => b: Fn[Any]) // Boolean logic safely downgraded
+        blockFn | // optional block expression
+        concatExpr | // includes arithmeticExpr -> baseExpr (path+methods)
+        booleanExpr.map {
+          case Right(b) => Right(b.asInstanceOf[Fn[Any]]) // widen BooleanFn -> Fn[Any]
+          case Left(err) => Left(err)
+        }
     )
 
-  private def blockFn[$: P]: P[BlockFn[?]] =
+  private def blockFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(
       "{" ~/ WS0 ~
-        statement.rep(sep = WS0) ~ // zero or more val/update statements
-        valueExpr ~ // the final expression
+        statement.rep(sep = WS0) ~ // Seq[ParseStmtResult]
+        valueExpr ~ // ParseFnResult
         WS0 ~ "}"
-    ).map { case (stmts, result) =>
-      BlockFn(stmts.toList, result)
+    ).map { case (stmtResults, valueRes) =>
+      // propagate first statement error, if any
+      stmtResults.collectFirst { case Left(e) => e } match
+        case Some(err) => Left(err)
+        case None =>
+          valueRes match
+            case Left(err) => Left(err)
+            case Right(resultFn) =>
+              val stmts = stmtResults.collect { case Right(s) => s }.toList
+              Right(BlockFn(stmts, resultFn): Fn[Any]) // widen to Fn[Any]
     }
 
-  private def blockStmt[$: P]: P[BlockStmt] =
-    P("{" ~/ WS0 ~ statement.rep(sep = WS0) ~ WS0 ~ "}").map(BlockStmt.apply)
+  // block { ... } as a *statement* block
+  private def blockStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
+    P("{" ~/ WS0 ~ statement.rep(sep = WS0) ~ WS0 ~ "}").map { stmtResults =>
+      // bubble the first error, if any
+      stmtResults.collectFirst { case Left(e) => e } match
+        case Some(err) => Left(err)
+        case None =>
+          val stmts = stmtResults.collect { case Right(s) => s }.toList
+          Right(BlockStmt(stmts))
+    }
 
-  def statement[$: P]: P[Statement] =
+  // A single statement
+  def statement[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(
       WS0 ~ (
-        collectionStmt(booleanExpr) |
-          valDecl |
-          updateOrMapStmt() |
-          ifStmt |
-          blockStmt
+        valDecl |
+        updateOrMapStmt() |
+        ifStmt |
+        blockStmt |
+        collectionStmt(booleanExpr)
       ) ~ WS0
     )
 
-  private def valDecl[$: P]: P[ValStmt[?]] =
-    P("val" ~/ WS ~ identifier.! ~ WS0 ~ "=" ~ WS0 ~ valueExpr).map { case (name, value) =>
-      ValStmt(name, value)
+  // val x = <expr>
+  private def valDecl[$: P](using ctx: ExprContext): P[ParseStmtResult] =
+    P("val" ~/ WS ~ identifier.! ~ WS0 ~ "=" ~ WS0 ~ valueExpr).map {
+      case (name, Right(vfn)) => Right(ValStmt(name, vfn))
+      case (_, Left(err)) => Left(err)
     }
 
   private val pattern = """LengthFn\(GetFn\(\w+\[\]""".r
-  private def updateOrMapStmt[$: P](): P[Statement] =
-    P(path.map(_._1) ~ WS0 ~ "=" ~/ WS0 ~ valueExpr).map { case (p, v) =>
-      if p.contains("[]") then
-        // warn user if they try to use foo[].len() in predicate--won't work!
-        if pattern.findFirstIn(v.toString).isDefined then throw new RuntimeException("Sorry...we don't support len() function on collections in a predicate (LHS).\nConsider using an intermediate val")
-        else MapStmt(p, v)
-      else
-        v match
-          case g: GetFn if g.elseValue.isEmpty => UpdateStmt(p, g.copy(useRawValue = true))
-          case _                               => UpdateStmt(p, v)
+
+  private def updateOrMapStmt[$: P]()(using ctx: ExprContext): P[ParseStmtResult] =
+    P(Index ~ path.map(_._1) ~ WS0 ~ "=" ~/ WS0 ~ valueExpr).map {
+      case (offset, p, vres) =>
+        vres match
+          case Left(err) => Left(err)
+
+          case Right(v) =>
+            if p.contains("[]") then
+              // warn user if they try to use foo[].len() in predicate--won't work!
+              if pattern.findFirstIn(v.toString).isDefined then
+                Left(
+                  DLCompileError(
+                    offset,
+                    "Sorry...we don't support len() function on collections in a predicate (LHS).\nConsider using an intermediate val"
+                  )
+                )
+              else
+                Right(MapStmt(p, v))
+            else
+              Right(UpdateStmt(p, v))
+//              v match
+//                // keep your raw-get optimization
+//                case g: GetFn if g.elseValue.isEmpty =>
+//                  Right(UpdateStmt(p, g.copy(useRawValue = true)))
+//                case _ =>
+//                  Right(UpdateStmt(p, v))
     }
 
-  private def ifStmt[$: P]: P[IfStmt] =
+  private def ifStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(
       "if" ~/ WS ~ booleanExpr ~ WS0 ~
         "then" ~ WS0 ~ statement ~
         (WS0 ~ "else" ~ WS0 ~ statement).?
-    ).map { case (cond, thenPart, elseOpt) =>
-      IfStmt(cond, thenPart, elseOpt)
+    ).map {
+      case (condRes, thenRes, elseOptRes) =>
+        val base: Either[DLCompileError, (BooleanFn, Statement)] =
+          for
+            c <- condRes
+            t <- thenRes
+          yield (c, t)
+
+        elseOptRes match
+          case None =>
+            base.map { case (c, t) => IfStmt(c, t, None) }
+
+          case Some(er) =>
+            for
+              (c, t) <- base
+              e <- er
+            yield IfStmt(c, t, Some(e))
     }
 
-  private def ifFn[$: P]: P[Fn[Any]] =
+  private def ifFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(
       "if" ~/ WS ~ booleanExpr ~ WS0 ~
         "then" ~/ WS0 ~ valueExpr ~ WS0 ~
         "else" ~/ WS0 ~ valueExpr
-    ).map { case (cond, thenBranch, elseBranch) =>
-      IfFn(cond, thenBranch, elseBranch)
+    ).map {
+      case (condRes, thenRes, elseRes) =>
+        for
+          c <- condRes
+          t <- thenRes
+          e <- elseRes
+        yield IfFn(c, t, e)
     }

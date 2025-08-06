@@ -37,49 +37,46 @@ trait Level0:
   def WS[$: P]: P[Unit] = P((CharsWhileIn(" \n\r\t") | comment).rep(1)) // WS required
   def WS0[$: P]: P[Unit] = P((CharsWhileIn(" \n\r\t") | comment).rep) // WS optional
 
-  def Newline[$: P]: P[Unit] = P(CharsWhileIn(" \t").? ~ "\n" ~ CharsWhileIn(" \t").?)
-
   private def comment[$: P]: P[Unit] =
     P("#" ~ CharsWhile(_ != '\n', min = 0) ~ ("\n" | End))
 
   def identifier[$: P]: P[String] =
     P((CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").?).!).map(_.trim)
 
-  def stringLiteral[$: P]: P[Fn[Any]] =
-    P("\"" ~/ CharsWhile(_ != '"', 0).! ~ "\"").map(s => ConstantFn(s))
+  def stringLiteral[$: P]: P[ParseFnResult] =
+    P("\"" ~/ CharsWhile(_ != '"', 0).! ~ "\"")
+      .map(s => Right(ConstantFn(s)))
 
-  private def noneLiteral[$: P]: P[Fn[Any]] =
-    P("None").map(_ => ConstantFn(None))
+  private def noneLiteral[$: P]: P[ParseFnResult] =
+    P("None").map(_ => Right(ConstantFn(None)))
 
-  def numberLiteral[$: P]: P[Fn[Any]] =
-    P(
-      (CharIn("+\\-").? ~ CharsWhileIn("0-9") ~ ("." ~ CharsWhileIn("0-9")).?).!
-    ).map { raw =>
-      val trimmed = raw.trim
-      if trimmed.contains('.') then {
-        try ConstantFn(trimmed.toDouble)
-        catch
-          case _: NumberFormatException =>
-            throw new RuntimeException(s"Invalid double: $trimmed")
-      } else {
-        try ConstantFn(trimmed.toInt)
-        catch
-          case _: NumberFormatException =>
-            try ConstantFn(trimmed.toLong)
-            catch
-              case _: NumberFormatException =>
-                throw new RuntimeException(s"Invalid number: $trimmed")
-      }
+  def numberLiteral[$: P]: P[ParseFnResult] =
+    P(Index ~ (CharIn("+\\-").? ~ CharsWhileIn("0-9") ~ ("." ~ CharsWhileIn("0-9")).?).!).map {
+      case (offset, raw) =>
+        val trimmed = raw.trim
+        if trimmed.contains('.') then {
+          try Right(ConstantFn(trimmed.toDouble))
+          catch case _: NumberFormatException =>
+            Left(DLCompileError(offset, s"Invalid double literal: $trimmed"))
+        } else {
+          try Right(ConstantFn(trimmed.toInt))
+          catch case _: NumberFormatException =>
+            try Right(ConstantFn(trimmed.toLong))
+            catch case _: NumberFormatException =>
+              Left(DLCompileError(offset, s"Invalid numeric literal: $trimmed"))
+        }
     }
 
-  private def booleanLiteral[$: P]: P[Fn[Any]] =
+  def booleanLiteral[$: P]: P[BooleanFn] =
     P(StringIn("true", "false").!).map {
-      case "true"  => ConstantFn(true)
-      case "false" => ConstantFn(false)
+      case "true"  => BooleanConstantFn(true)
+      case "false" => BooleanConstantFn(false)
     } ~ WS.?
 
-  // Specially typed boolean literal (for use in booleanExpr)
-  def booleanLiteral2[$: P]: P[BooleanFn] = booleanLiteral.map(_.asInstanceOf[BooleanFn])
-
-  def constant[$: P]: P[Fn[Any]] =
-    P(stringLiteral | numberLiteral | booleanLiteral | noneLiteral)
+  def constant[$: P]: P[ParseFnResult] =
+    P(
+      stringLiteral |
+        numberLiteral |
+        noneLiteral |
+        booleanLiteral.map(b => Right(b: Fn[Any])) // Upcast BooleanFn to Fn[Any]
+    )
