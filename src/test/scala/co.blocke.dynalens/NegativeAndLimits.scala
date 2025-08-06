@@ -140,28 +140,4 @@ object NegativeAndLimits extends ZIOSpecDefault:
         ctxStr == expectedResult
       )
     },
-    test("collection len in predicate") {
-      val script =
-        """
-          |  interest[].qty = interest[].len() * 5
-          |""".stripMargin
-      val inst = Maybe("abc", Some("wow"), Some(List(Item("abc", 2, 5), Item("xyz", 1, 7))))
-      val a = dynalens[Maybe]
-
-      val result = for {
-        compiled <- Script.compile(script)
-        output <- a.run(compiled, inst)
-      } yield output
-
-      result.exit.map {
-        case Exit.Failure(cause) =>
-          cause.failureOption match
-            case Some(DynaLensError(message)) =>
-              assertTrue(message.contains("Sorry...we don't support len() function on collections"))
-            case _ =>
-              assertTrue(false).label("Unexpected error structure")
-        case _ =>
-          assertTrue(false).label("Expected mapTo key failure")
-      }
-    }
   )

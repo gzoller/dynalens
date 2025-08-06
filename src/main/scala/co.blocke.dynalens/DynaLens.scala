@@ -156,14 +156,44 @@ case class DynaLens[T](
           list <- ZIO
             .attempt(rawList.asInstanceOf[Seq[Any]])
             .mapError(_ => DynaLensError(s"Field '$f' is not a Seq"))
-          elem <- list.lift(i) match
-            case Some(e) => ZIO.succeed(e)
-            case None    => ZIO.fail(DynaLensError(s"Index $i out of bounds for field '$f'"))
-          nextLens <- currentLens._registry.get(f) match
-            case Some(a) => ZIO.succeed(a)
-            case None    => ZIO.fail(DynaLensError(s"No nested lens for collection field '$f'"))
-          updatedElem <- step(elem, nextLens, rest)
-          updatedList = list.updated(i, updatedElem)
+
+          updatedList <-
+            if i == -1 then
+              rest match
+                case Nil =>
+                  // Case: foo[] = value — replace whole list
+                  ZIO.succeed(value.asInstanceOf[Seq[Any]])
+
+                case _ =>
+                  // Case: foo[].bar = ... — map over list and apply step to each item
+                  for {
+                    nestedLens <- currentLens._registry.get(f) match
+                      case Some(lens) => ZIO.succeed(lens)
+                      case None       => ZIO.fail(DynaLensError(s"No nested lens for collection field '$f'"))
+                    updatedItems <- ZIO.foreach(list)(elem => step(elem, nestedLens, rest))
+                  } yield updatedItems
+
+            else
+              rest match
+                case Nil =>
+                  // Case: foo[2] = value
+                  list.lift(i) match
+                    case Some(_) =>
+                      ZIO.succeed(list.updated(i, value))
+                    case None =>
+                      ZIO.fail(DynaLensError(s"Index $i out of bounds for field '$f'"))
+
+                case _ =>
+                  for {
+                    elem <- list.lift(i) match
+                      case Some(e) => ZIO.succeed(e)
+                      case None    => ZIO.fail(DynaLensError(s"Index $i out of bounds for field '$f'"))
+                    nestedLens <- currentLens._registry.get(f) match
+                      case Some(lens) => ZIO.succeed(lens)
+                      case None       => ZIO.fail(DynaLensError(s"No nested lens for collection field '$f'"))
+                    updatedElem <- step(elem, nestedLens, rest)
+                  } yield list.updated(i, updatedElem)
+
           updated <- currentLens._update(f, updatedList, current.asInstanceOf[currentLens.ThisT])
         } yield updated
     }

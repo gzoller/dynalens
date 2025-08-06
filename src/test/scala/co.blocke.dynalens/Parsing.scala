@@ -30,7 +30,6 @@ import parser.Script
 object Parsing extends ZIOSpecDefault:
 
   def spec = suite("Parsing Tests")(
-    /*
     test("Simple val assignment script test") {
       val script =
         """
@@ -98,7 +97,6 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 2, 1), Item("xyz", 1, 7)), 5) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
-    */
     test("Non-empty statement BlockFn") {
       val script =
         """
@@ -671,5 +669,21 @@ object Parsing extends ZIOSpecDefault:
         case Left(err: DynaLensError) =>
           assertTrue(false).label(s"DynaLens failed with error: ${err.msg}")
       }
-    }
+    },
+    // corner case 1 is defined in the script
+    test("corner case 1 must work") {
+      val script =
+        """
+          |  items[].qty = items[].len() * 2
+          |""".stripMargin
+      val expectedCompiled = """BlockStmt(List(MapStmt(items[].qty,MultiplyFn(LengthFn(GetFn(items[],false)),ConstantFn(2)))))"""
+      val expectedResult = """top -> Shipment(aaa,List(Item(abc,10,5), Item(abc,10,44), Item(xyz,10,7), Item(foo,10,7), Item(bar,10,7)),1)""".stripMargin + "\n"
+      val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("abc", 3, 44), Item("xyz", 1, 7), Item("foo", 1, 7), Item("bar", 1, 7)), 1)
+      val a = dynalens[Shipment]
+      for {
+        compiledScript <- Script.compile(script)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 10, 5), Item("abc", 10, 44), Item("xyz", 10, 7), Item("foo", 10, 7), Item("bar", 10, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
   )

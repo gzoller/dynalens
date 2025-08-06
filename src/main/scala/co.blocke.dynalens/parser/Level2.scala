@@ -97,7 +97,7 @@ trait Level2 extends Level1:
     }
 
   // ---- Arithmetic ----
-  
+
   private def arithmeticExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
     arithmeticTerm
 
@@ -249,16 +249,16 @@ trait Level2 extends Level1:
 
           case Right(v) =>
             if p.contains("[]") then
-              // warn user if they try to use foo[].len() in predicate--won't work!
-              if pattern.findFirstIn(v.toString).isDefined then
-                Left(
-                  DLCompileError(
-                    offset,
-                    "Sorry...we don't support len() function on collections in a predicate (LHS).\nConsider using an intermediate val"
-                  )
-                )
-              else
-                Right(MapStmt(p, v))
+//              // warn user if they try to use foo[].len() in predicate--won't work!
+//              if pattern.findFirstIn(v.toString).isDefined then
+//                Left(
+//                  DLCompileError(
+//                    offset,
+//                    "Sorry...we don't support len() function on collections in a predicate (LHS).\nConsider using an intermediate val"
+//                  )
+//                )
+//              else
+              Right(MapStmt(p, v))
             else
               Right(UpdateStmt(p, v))
 //              v match

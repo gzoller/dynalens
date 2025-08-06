@@ -42,15 +42,25 @@ case class ConstantFn[R](out: R) extends Fn[R]:
 case class GetFn(
     path: String,
     searchThis: Boolean = false
-//    elseValue: Option[Fn[Any]] = None,
-//    isDefined: Boolean = false,
-//    useRawValue: Boolean = false
 ) extends Fn[Any]:
+  private def getTop(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ctx.get("top") match {
+      case Some((obj, Some(dynalens))) =>
+        dynalens.get(path, obj.asInstanceOf[dynalens.ThisT]).catchSome {
+          case e: DynaLensError if e.msg.startsWith("Field not found") && searchThis =>
+            GetFn(path = "this." + path).resolve(ctx)
+        }
+      case _ =>
+        ZIO.fail(DynaLensError(s"Field $path not found"))
+    }
+
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
-//    (
     parsePath(path) match {
       case Nil =>
         ZIO.fail(DynaLensError("get requires a path"))
+
+      case (first: IndexedField) :: Nil if first.index < 0  =>
+        getTop(ctx)
 
       case first :: rest if ctx.contains(first.name) =>
         ctx.get(first.name) match {
@@ -67,23 +77,8 @@ case class GetFn(
         }
 
       case _ =>
-        ctx.get("top") match {
-          case Some((obj, Some(dynalens))) =>
-            dynalens.get(path, obj.asInstanceOf[dynalens.ThisT]).catchSome {
-              case e: DynaLensError if e.msg.startsWith("Field not found") && searchThis =>
-                GetFn(path = "this." + path).resolve(ctx)
-            }
-
-          case _ =>
-            ZIO.fail(DynaLensError(s"Field $path not found"))
-        }
+        getTop(ctx)
     }
-//      ).flatMap { obj => // <- match wrapped in parens
-//      unwrapOption(path, obj, elseValue, isDefined, useRawValue) match
-//        case Left(err)           => ZIO.fail(err)
-//        case Right(Left(altFn))  => altFn.resolve(ctx)
-//        case Right(Right(value)) => ZIO.succeed(value)
-//    }
 
 case class IfFn[R](
     condition: Fn[Boolean],
@@ -846,8 +841,10 @@ case class LengthFn(in: Fn[Any]) extends Fn[Int]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Int] =
     in.resolve(ctx).map {
       case null                        => 0
-      case c if c.isInstanceOf[Seq[?]] => c.asInstanceOf[Seq[?]].length
-      case s                           => s.toString.length
+      case c if c.isInstanceOf[Seq[?]] =>
+        c.asInstanceOf[Seq[?]].length
+      case s                           =>
+        s.toString.length
     }
 
 case class MapFwdFn(mapName: String) extends Fn[Any]:
