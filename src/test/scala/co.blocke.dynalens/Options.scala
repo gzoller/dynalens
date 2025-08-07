@@ -33,11 +33,11 @@ object Options extends ZIOSpecDefault:
     test("Simple option assignment") {
       val script =
         """
-          |  dunno = "foom"
-          |  interest = None
+          |  dunno? = "foom"
+          |  interest? = None
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(dunno,ConstantFn(foom)), UpdateStmt(interest,ConstantFn(None))))"""
+        """BlockStmt(List(UpdateStmt(dunno?,ConstantFn(foom)), UpdateStmt(interest?,ConstantFn(None))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(foom),None)
           |""".stripMargin
@@ -54,11 +54,11 @@ object Options extends ZIOSpecDefault:
         """
           |  val x = "yay"
           |  val y = None
-          |  dunno = x
-          |  interest[] = y
+          |  dunno? = x
+          |  interest[]? = y
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,ConstantFn(yay)), ValStmt(y,ConstantFn(None)), UpdateStmt(dunno,GetFn(x,false)), MapStmt(interest[],GetFn(y,false))))"""
+        """BlockStmt(List(ValStmt(x,ConstantFn(yay)), ValStmt(y,ConstantFn(None)), UpdateStmt(dunno?,GetFn(x,false)), MapStmt(interest[]?,GetFn(y,false))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(yay),None)
           |x -> yay
@@ -75,14 +75,14 @@ object Options extends ZIOSpecDefault:
     test("Get option value (with isDefined)") {
       val script =
         """
-          |  val x = dunno.else("unknown")
+          |  val x = dunno?.else("unknown")
           |  val y = x.toUpperCase() :: " ok"
-          |  val q = dunno.isDefined()
-          |  val r = interest.isDefined()
+          |  val q = dunno?.isDefined()
+          |  val r = interest[]?.isDefined()
           |  val s = None.isDefined()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,ElseFn(GetFn(dunno,false),ConstantFn(unknown))), ValStmt(y,ConcatFn(List(ToUpperFn(GetFn(x,false)), ConstantFn( ok)))), ValStmt(q,IsDefinedFn(GetFn(dunno,false))), ValStmt(r,IsDefinedFn(GetFn(interest,false))), ValStmt(s,IsDefinedFn(ConstantFn(None)))))"""
+        """BlockStmt(List(ValStmt(x,ElseFn(GetFn(dunno?,false),ConstantFn(unknown))), ValStmt(y,ConcatFn(List(ToUpperFn(GetFn(x,false)), ConstantFn( ok)))), ValStmt(q,IsDefinedFn(GetFn(dunno?,false))), ValStmt(r,IsDefinedFn(GetFn(interest[]?,false))), ValStmt(s,IsDefinedFn(ConstantFn(None)))))"""
       val expectedResult =
         """q -> true
           |r -> false
@@ -102,11 +102,11 @@ object Options extends ZIOSpecDefault:
     test("Get option value--List (with isDefined)") {
       val script =
         """
-          |  val x = interest[].isDefined()
-          |  val y = interest[].len()
+          |  val x = interest[]?.isDefined()
+          |  val y = interest[]?.len()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,IsDefinedFn(GetFn(interest[],false))), ValStmt(y,LengthFn(GetFn(interest[],false)))))"""
+        """BlockStmt(List(ValStmt(x,IsDefinedFn(GetFn(interest[]?,false))), ValStmt(y,LengthFn(GetFn(interest[]?,false)))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),Some(List(Item(abc,2,5))))
           |x -> true
@@ -123,12 +123,12 @@ object Options extends ZIOSpecDefault:
     test("Update and Map with optional list") {
       val script =
         """
-          |  val x = interest[].len()
-          |  interest[].qty = x * 5
-          |  interest[].sortDesc(number)
+          |  val x = interest[]?.len()
+          |  interest[]?.qty = x * 5
+          |  interest[]?.sortDesc(number)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,LengthFn(GetFn(interest[],false))), MapStmt(interest[].qty,MultiplyFn(GetFn(x,false),ConstantFn(5))), MapStmt(interest[],SortFn(Some(number),false))))"""
+        """BlockStmt(List(ValStmt(x,LengthFn(GetFn(interest[]?,false))), MapStmt(interest[]?.qty,MultiplyFn(GetFn(x,false),ConstantFn(5))), MapStmt(interest[]?,SortFn(Some(number),false))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),Some(List(Item(xyz,10,7), Item(abc,10,5))))
           |x -> 2

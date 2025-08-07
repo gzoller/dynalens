@@ -146,5 +146,30 @@ object Basic extends ZIOSpecDefault:
       for {
         v <- ar.map("items[].qty", GetFn("items[].num"), inst)
       } yield assertTrue(v == Shipment("abc", List(Item("a", 7), Item("b", 7), Item("c", 7))))
-    }
-  ).provide(BiMapRegistry.layer(EmptyBiMapRegistry))
+    },
+    test("Basic option field get/set") {
+      val inst = Maybe("foom", None, None)
+      val ar = dynalens[Maybe]
+      for {
+        v <- ar.update("dunno?", Some("wow"), inst)
+        w <- ar.get("dunno?", v)
+      } yield assertTrue(v == Maybe("foom", Some("wow"), None) && w == Some("wow"))
+    },
+    test("Basic option field get/set - Unwrapped set") {
+      val inst = Maybe("foom", None, None)
+      val ar = dynalens[Maybe]
+      for {
+        v <- ar.update("dunno?", "wow", inst)
+        w <- ar.get("dunno?", v)
+      } yield assertTrue(v == Maybe("foom", Some("wow"), None) && w == Some("wow"))
+    },
+    test("Basic option field get/set - None") {
+      val inst = Maybe("foom", Some("blah"), None)
+      val ar = dynalens[Maybe]
+      for {
+        v <- ar.update("dunno?", None, inst)
+        w <- ar.get("dunno?", v)
+      } yield assertTrue(v == Maybe("foom", None, None) && w == None)
+    },
+
+).provide(BiMapRegistry.layer(EmptyBiMapRegistry))

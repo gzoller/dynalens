@@ -39,28 +39,42 @@ trait Level1 extends Level0:
 
   def path[$: P]: P[(String, Option[String])] = {
 
+    def fieldName[$: P]: P[String] =
+      P(CharsWhileIn("a-zA-Z0-9_").!)
+
+    def optionalSuffix[$: P]: P[Boolean] =
+      P("?".!.?).map(_.isDefined)
+
+    def indexedWildcard[$: P]: P[Option[Int]] = P("[]").map(_ => None)
+
+    def indexPart[$: P]: P[Option[Int]] = P("[" ~ CharsWhileIn("0-9").!.map(i => Some(i.toInt)) ~ "]")
+
+    def segment[$: P]: P[String] =
+      P(fieldName ~ (indexedWildcard | indexPart).? ~ optionalSuffix).map {
+        case (name, Some(Some(i)), true) => s"$name[$i]?"
+        case (name, Some(Some(i)), false) => s"$name[$i]"
+        case (name, Some(None), true) => s"$name[]?"
+        case (name, Some(None), false) => s"$name[]"
+        case (name, None, true) => s"$name?"
+        case (name, None, false) => name
+      }
+      
     def fullPath[$: P]: P[String] =
-      P(CharsWhileIn("a-zA-Z0-9_.[]").rep(1).!)
+      P(segment.rep(1, sep = ".")).map(_.mkString("."))
 
-    // Lookahead to see if the *last identifier* is followed by a `(`
     def isFunc[$: P]: P[Boolean] =
-      P(
-        &("(").map(_ => true)
-          | Pass.map(_ => false)
-      )
+      P(&("(").map(_ => true) | Pass.map(_ => false))
 
-    P(fullPath ~ isFunc).flatMap { case (raw, hasFunc) =>
-      if hasFunc then
+    P(fullPath ~ isFunc).flatMap {
+      case (raw, true) =>
         val lastDot = raw.lastIndexOf('.')
-        if lastDot == -1 then
-          // This is like `foo()` — illegal in path context
-          Fail.opaque("Function call detected where path was expected")
+        if lastDot == -1 then Fail.opaque("Function call detected where path was expected")
         else {
           val base = raw.take(lastDot)
           val fn = raw.drop(lastDot + 1)
           Pass((base, Some(fn)))
         }
-      else Pass((raw, None))
+      case (raw, false) => Pass((raw, None))
     }
   }
 

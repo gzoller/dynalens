@@ -59,7 +59,7 @@ case class GetFn(
       case Nil =>
         ZIO.fail(DynaLensError("get requires a path"))
 
-      case (first: IndexedField) :: Nil if first.index < 0  =>
+      case (first: IndexedField) :: Nil if first.index.isEmpty  =>
         getTop(ctx)
 
       case first :: rest if ctx.contains(first.name) =>
@@ -106,11 +106,6 @@ case class BlockFn[R](
 case class BooleanConstantFn(out: Boolean) extends BooleanFn:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     ZIO.succeed(out)
-//case class BooleanConstantFn[Boolean](out: Boolean) extends BooleanFn:
-//  def resolve(
-//               ctx: DynaContext = scala.collection.mutable.Map.empty
-//             ): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
-//    ZIO.succeed(out)
 
 case class EqualFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
@@ -293,6 +288,7 @@ case class IsDefinedFn(inner: Fn[Any]) extends BooleanFn {
     } yield value match {
       case opt: Option[?] => opt.isDefined
       case null           => false
+      case Nil            => false
       case _              =>
         // Non-option types are always considered defined
         true

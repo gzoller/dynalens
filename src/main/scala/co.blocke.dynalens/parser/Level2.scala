@@ -238,9 +238,7 @@ trait Level2 extends Level1:
       case (name, Right(vfn)) => Right(ValStmt(name, vfn))
       case (_, Left(err)) => Left(err)
     }
-
-  private val pattern = """LengthFn\(GetFn\(\w+\[\]""".r
-
+  
   private def updateOrMapStmt[$: P]()(using ctx: ExprContext): P[ParseStmtResult] =
     P(Index ~ path.map(_._1) ~ WS0 ~ "=" ~/ WS0 ~ valueExpr).map {
       case (offset, p, vres) =>
@@ -249,24 +247,9 @@ trait Level2 extends Level1:
 
           case Right(v) =>
             if p.contains("[]") then
-//              // warn user if they try to use foo[].len() in predicate--won't work!
-//              if pattern.findFirstIn(v.toString).isDefined then
-//                Left(
-//                  DLCompileError(
-//                    offset,
-//                    "Sorry...we don't support len() function on collections in a predicate (LHS).\nConsider using an intermediate val"
-//                  )
-//                )
-//              else
               Right(MapStmt(p, v))
             else
               Right(UpdateStmt(p, v))
-//              v match
-//                // keep your raw-get optimization
-//                case g: GetFn if g.elseValue.isEmpty =>
-//                  Right(UpdateStmt(p, g.copy(useRawValue = true)))
-//                case _ =>
-//                  Right(UpdateStmt(p, v))
     }
 
   private def ifStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =

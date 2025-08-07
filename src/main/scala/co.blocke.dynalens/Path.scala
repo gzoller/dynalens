@@ -23,25 +23,36 @@ package co.blocke.dynalens
 
 object Path:
 
-  sealed trait PathElement:
-    val name: String
-  case class Field(name: String) extends PathElement
-  case class IndexedField(name: String, index: Int) extends PathElement
+  sealed trait PathElement {
+    def name: String
+    def isOptional: Boolean
+  }
+  case class Field(name: String, isOptional: Boolean = false) extends PathElement
+  case class IndexedField(name: String, index: Option[Int], isOptional: Boolean = false) extends PathElement
 
   def parsePath(path: String): List[PathElement] = {
-    val regex = """(\w+)(?:\[(\d*)\])?""".r
-    path.split("\\.").toList.map {
-      case regex(field, null)     => Field(field)
-      case regex(field, "")       => IndexedField(field, -1) // "[]" syntax
-      case regex(field, indexStr) => IndexedField(field, indexStr.toInt)
+    path.split("\\.").toList.map { segment =>
+      val isOptional = segment.endsWith("?")
+      val clean = if isOptional then segment.dropRight(1) else segment
+
+      if clean.matches(""".+\[\d+\]""") then
+        val name = clean.takeWhile(_ != '[')
+        val index = clean.dropWhile(_ != '[').drop(1).dropRight(1).toInt
+        IndexedField(name, Some(index), isOptional)
+      else if clean.endsWith("[]") then
+        val name = clean.dropRight(2)
+        IndexedField(name, None, isOptional)
+      else
+        Field(clean, isOptional)
     }
   }
 
+  // Strip all "noise" out of path--just raw path--for DynaLens low-level operations
   def partialPath(pathParts: List[PathElement]): String =
     pathParts
       .map {
-        case IndexedField(name, i) if i >= 0 => s"$name[$i]"
-        case Field(name)                     => name
-        case IndexedField(name, _)           => name
+        case IndexedField(name, Some(i), _)   => s"$name[$i]"
+        case Field(name, _)                   => name
+        case IndexedField(name, _, _)         => name
       }
       .mkString(".")
