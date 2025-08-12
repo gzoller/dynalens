@@ -22,7 +22,18 @@
 package co.blocke.dynalens
 package parser
 
-import fastparse.*, NoWhitespace.*
+import fastparse.*
+import NoWhitespace.*
+
+import scala.annotation.tailrec
+
+
+sealed trait Idx
+case object Wildcard extends Idx // []
+case class Fixed(i: Int) extends Idx // [3]
+case class Seg(base: String, idx: Option[Idx], opt: Boolean)
+
+private val segRx = "^([A-Za-z0-9_]+)(?:\\[(\\d*)\\])?(\\?)?$".r
 
 //
 // First level:
@@ -37,7 +48,7 @@ trait Level1 extends Level0:
   //   foo[].bar
   //   foo[3].bar
 
-  def path[$: P]: P[(String, Option[String])] = {
+  def path[$: P](using ctx: ExprContext): P[(String, Option[String])] = {
 
     def fieldName[$: P]: P[String] =
       P(CharsWhileIn("a-zA-Z0-9_").!)
@@ -65,16 +76,132 @@ trait Level1 extends Level0:
     def isFunc[$: P]: P[Boolean] =
       P(&("(").map(_ => true) | Pass.map(_ => false))
 
-    P(fullPath ~ isFunc).flatMap {
-      case (raw, true) =>
+
+    def parseSeg(name: String): Either[String, Seg] = name match
+      case segRx(base, idxStr, optStr) =>
+        val idx =
+          if (idxStr eq null) None
+          else if (idxStr.isEmpty) Some(Wildcard)
+          else Some(Fixed(idxStr.toInt))
+        Right(Seg(base, idx, opt = optStr != null))
+      case _ =>
+        Left(s"Invalid path segment '$name'")
+
+    def render(base: String, idx: Option[Idx], opt: Boolean): String =
+      val idxTxt = idx match
+        case Some(Wildcard) => "[]"
+        case Some(Fixed(i)) => s"[$i]"
+        case None => ""
+      val optTxt = if opt then "?" else ""
+      s"$base$idxTxt$optTxt"
+
+    // Force-correct suffix based on expected type, but preserve a fixed index when list-typed
+    def correct(seg: Seg, expectedType: String): Either[String, String] =
+      expectedType match
+        case "[]" =>
+          seg.idx match
+            case Some(Fixed(i)) => Right(render(seg.base, Some(Fixed(i)), opt = false))
+            case _ => Right(render(seg.base, Some(Wildcard), opt = false))
+        case "[]?" =>
+          seg.idx match
+            case Some(Fixed(i)) => Right(render(seg.base, Some(Fixed(i)), opt = true))
+            case _ => Right(render(seg.base, Some(Wildcard), opt = true))
+        case "{}" | "{}?" | "?" | "" =>
+          // Non-list types may not be indexed
+          seg.idx match
+            case Some(_) => Left(s"Cannot index into non-list field '${seg.base}'")
+            case None =>
+              val opt = expectedType.endsWith("?") || expectedType == "?"
+              Right(render(seg.base, None, opt))
+        case _ =>
+          Right(render(seg.base, seg.idx, seg.opt)) // fallback
+
+    // --- your checker ---------------------------------------------------------
+
+    def checkAndCorrectPath(rawPath: String, offset: Int)(using ctx: ExprContext): Either[DLCompileError, String] =
+      val segments = rawPath.split("\\.").toList
+      
+      @annotation.tailrec
+      def loop(current: Map[String, Any], segs: List[String], acc: List[String], isFirst: Boolean): Either[DLCompileError, List[String]] =
+        segs match
+          case Nil => Right(acc)
+
+          case segStr :: rest =>
+            parseSeg(segStr) match
+              case Left(msg) =>
+                Left(DLCompileError(offset, msg))
+
+              case Right(seg) =>
+                // Absolute lookup first
+                current.get(seg.base) match
+                  case None =>
+                    // If first segment and searchThis enabled, try relativeFields
+                    if isFirst && (ctx.searchThis || seg.base == "this") && ctx.relativeFields.nonEmpty then
+                      ctx.relativeFields.get(seg.base) match
+                        case Some(subtree: Map[String @unchecked, Any @unchecked]) =>
+                          val expectedType = subtree.get("__type").collect { case s: String => s }.getOrElse("{}")
+                          correct(seg, expectedType) match
+                            case Left(msg) => Left(DLCompileError(offset, msg))
+                            case Right(spelled) => loop(subtree, rest, acc :+ spelled, isFirst = false)
+
+                        case Some(expectedType: String) =>
+                          correct(seg, expectedType) match
+                            case Left(msg) => Left(DLCompileError(offset, msg))
+                            case Right(spelled) => loop(Map.empty, rest, acc :+ spelled, isFirst = false)
+
+                        case None =>
+                          // allow top-level val symbols
+                          val valKey = s"__val_${seg.base}"
+                          if ctx.typeInfo.contains(valKey) then
+                            loop(current, rest, acc :+ segStr, isFirst = false)
+                          else
+                            Left(DLCompileError(offset, s"Field '${seg.base}' does not exist in typeInfo or relativeFields"))
+
+                    else
+                      // No relative match — allow top-level val symbols
+                      val valKey = s"__val_${seg.base}"
+                      if ctx.typeInfo.contains(valKey) then
+                        loop(current, rest, acc :+ segStr, isFirst = false)
+                      else
+                        Left(DLCompileError(offset, s"Field '${seg.base}' does not exist in typeInfo"))
+
+                  case Some(subtree: Map[String @unchecked, Any @unchecked]) =>
+                    val expectedType = subtree.get("__type").collect { case s: String => s }.getOrElse("{}")
+                    correct(seg, expectedType) match
+                      case Left(msg) => Left(DLCompileError(offset, msg))
+                      case Right(spelled) => loop(subtree, rest, acc :+ spelled, isFirst = false)
+
+                  case Some(expectedType: String) =>
+                    correct(seg, expectedType) match
+                      case Left(msg) => Left(DLCompileError(offset, msg))
+                      case Right(spelled) => loop(Map.empty, rest, acc :+ spelled, isFirst = false)
+
+                  case _ =>
+                    Left(DLCompileError(offset, s"Unexpected structure for field '${seg.base}'"))
+
+      loop(ctx.typeInfo, segments, Nil, isFirst = true).map(_.mkString("."))
+
+    P(Index ~ fullPath ~ isFunc).flatMap {
+      case (offset, raw, true) =>
         val lastDot = raw.lastIndexOf('.')
-        if lastDot == -1 then Fail.opaque("Function call detected where path was expected")
+        if lastDot == -1 then
+          Fail.opaque("Function call detected where path was expected")
         else {
           val base = raw.take(lastDot)
           val fn = raw.drop(lastDot + 1)
-          Pass((base, Some(fn)))
+          checkAndCorrectPath(base, offset) match
+            case Left(err) =>
+              P(Index).flatMap(_ => Fail.opaque(err.msg)) // dummy to return a Parser
+            case Right(clean) =>
+              Pass((clean, Some(fn)))
         }
-      case (raw, false) => Pass((raw, None))
+
+      case (offset, raw, false) =>
+        checkAndCorrectPath(raw, offset) match
+          case Left(err) =>
+            P(Index).flatMap(_ => Fail.opaque(err.msg))
+          case Right(clean) =>
+            Pass((clean, None))
     }
   }
 
@@ -141,14 +268,15 @@ trait Level1 extends Level0:
       case err@Left(_) => P(Pass(err))
     } ~ WS0)
 
+
   // ---- Functions ----
 
   private def standaloneFn[$: P]: P[Fn[Any]] =
     P(
       StringIn("now", "uuid").! ~ "(" ~ WS0 ~ ")"
     ).map {
-      case "now"  => NowFn
-      case "uuid" => UUIDFn
+      case "now"  => NowFn()
+      case "uuid" => UUIDFn()
     }
 
   private def checkArgs(fnName: String, args: List[Fn[Any]], required: Int): Unit =
@@ -349,6 +477,14 @@ trait Level1 extends Level0:
     P(Index ~ path).flatMap { case (off0, (basePath, maybeFirstMethod)) =>
       maybeFirstMethod match {
         case Some(firstMethodName) =>
+          // Promote inner class' fields to top level (relativeFields)
+          val ctxForArgs =
+              ctx.copy(
+                relativeFields = Utility.elementSchemaFor(basePath, ctx.typeInfo),
+                searchThis = true
+              )
+
+          given ExprContext = ctxForArgs
           for {
             // Resolve and parse the first method’s args
             firstResolved <- lookupMethod(firstMethodName)
@@ -386,13 +522,12 @@ trait Level1 extends Level0:
             } yield {
               val all = f1 :: rxs
               val fn = if all.size == 1 then all.head else PolyFn(all)
-              MapStmt(basePath, fn): Statement
+              (ctx, MapStmt(basePath, fn))
             }): ParseStmtResult
           }
 
         case None =>
           P(Fail)
-//          P(Pass(Left(DLCompileError(off0, "Collection statement must have at least one method"))))
       }
     }
   }

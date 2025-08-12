@@ -24,17 +24,20 @@ package co.blocke.dynalens
 import zio.*
 
 import scala.quoted.*
-import co.blocke.scala_reflection.reflect.ReflectOnType
-import co.blocke.scala_reflection.reflect.rtypeRefs.{FieldInfoRef, OptionRef, ScalaClassRef, ScalaOptionRef, SeqRef}
+import co.blocke.scala_reflection.*
+import co.blocke.scala_reflection.reflect.*
+import co.blocke.scala_reflection.reflect.rtypeRefs.*
 import co.blocke.scala_reflection.TypedName
 import Path.*
 
 
 case class DynaLens[T](
-    _update: (String, Any, T) => ZIO[Any, DynaLensError, T],
-    _get: (String, T) => ZIO[Any, DynaLensError, Any],
-    _registry: Map[String, DynaLens[?]],
-    _typeName: String
+                        _update: (String, Any, T) => ZIO[Any, DynaLensError, T],
+                        _get: (String, T) => ZIO[Any, DynaLensError, Any],
+                        _registry: Map[String, DynaLens[?]],
+                        _typeName: String,
+                        _typeInfo: Map[String,Any],
+                        _elemIsOptional: Map[String, Boolean]   // per-field: Seq element is Option[_]?
 ):
   type ThisT = T
 
@@ -190,7 +193,9 @@ case class DynaLens[T](
               if isOptional then ZIO.succeed(Nil)
               else ZIO.fail(DynaLensError(s"Field '$f' is not a Seq"))
             case l: Seq[?] => ZIO.succeed(l)
-            case _ => ZIO.fail(DynaLensError(s"Field '$f' is not a Seq"))
+            case Some(wrapped: Seq[?]) => ZIO.succeed(wrapped)
+            case x =>
+              ZIO.fail(DynaLensError(s"Field '$f' is not a Seq"))
 
           updatedList <-
             maybeI match
@@ -200,7 +205,9 @@ case class DynaLens[T](
                     // Case: foo[2] = value
                     list.lift(i) match
                       case Some(_) =>
-                        ZIO.succeed(list.updated(i, wrapIfNeeded(isOptional, value)))
+                        val updatedValue =
+                          currentLens._elemIsOptional.get(f).map(elemIsOpt => if elemIsOpt then Some(value) else value).getOrElse(value)
+                        ZIO.succeed(list.updated(i, updatedValue))
                       case None =>
                         ZIO.fail(DynaLensError(s"Index $i out of bounds for field '$f'"))
 
@@ -218,7 +225,14 @@ case class DynaLens[T](
                 rest match
                   case Nil =>
                     // Case: foo[] = value — replace whole list
-                    ZIO.succeed(value.asInstanceOf[Seq[Any]])
+                    val finalValue =
+                      if isOptional then
+                        value match
+                          case Nil => None   // convert Nil->None for list
+                          case _ => value
+                      else
+                        value
+                    ZIO.succeed(finalValue)
 
                   case _ =>
                     // Case: foo[].bar = ... — map over list
@@ -393,6 +407,7 @@ case class DynaLens[T](
       updated <- processPaths(splitPaths, obj, Some(this), ctx)
     } yield updated.asInstanceOf[T]
 
+
 object DynaLens:
 
   inline def dynalens[T]: DynaLens[T] = ${ generateDynaLensImpl[T] }
@@ -443,9 +458,21 @@ object DynaLens:
           val listExpr: Expr[List[(String, DynaLens[?])]] = Expr.ofList(pairs)
           '{ Map.from[String, DynaLens[?]]($listExpr) }
         }
-        val typeNameExpr = Expr(s.typedName.toString)
 
-        '{ DynaLens[T]($updateLambdaExpr, $getLambdaExpr, $registryExpr, $typeNameExpr) }
+        val elemOptPairs =
+          s.fields.map { f =>
+            val isElemOpt = f.fieldRef match
+              case s: SeqRef[?] => s.elementRef.isInstanceOf[OptionRef[?]]
+              case _ => false
+            f.name -> isElemOpt
+          }
+        val elemIsOptionalExpr: Expr[Map[String, Boolean]] =
+          liftMapBoolean( elemOptPairs.toMap )
+
+        val typeNameExpr = Expr(s.typedName.toString)
+        val typeInfoExpr = liftTypeInfo( buildPathTree(s) )
+
+        '{ DynaLens[T]($updateLambdaExpr, $getLambdaExpr, $registryExpr, $typeNameExpr, $typeInfoExpr, $elemIsOptionalExpr) }
 
       case x => throw new Exception(s"Sorry, dynalens only supports Scala case classes but received ${x.name}")
     }
@@ -558,3 +585,67 @@ object DynaLens:
         Match(fieldParam, cases :+ fallback)
       }
     ).asExprOf[(String, Any, T) => ZIO[Any, DynaLensError, T]]
+
+
+  private def buildPathTree(r: RTypeRef[?]): Map[String, Any] = r match {
+    case c: ScalaClassRef[?] =>
+      c.fields.map { f =>
+        val fieldType = f.fieldRef
+        val key = f.name
+
+        fieldType match {
+          case o: OptionRef[?] =>
+            o.optionParamType match {
+              case scr: ScalaClassRef[?] =>
+                val inner = buildPathTree(scr) + ("__type" -> "{}?")
+                key -> inner
+              case s: SeqRef[?] =>
+                val inner = buildPathTree(s.elementRef) + ("__type" -> "[]?")
+                key -> inner
+              case _ =>
+                key -> "?"
+            }
+
+          case s: SeqRef[?] =>
+            s.elementRef match {
+              case c2: ScalaClassRef[?] =>
+                val inner = buildPathTree(c2) + ("__type" -> "[]")
+                key -> inner
+              case _ =>
+                key -> "[]"
+            }
+
+          case c3: ScalaClassRef[?] =>
+            val inner = buildPathTree(c3) + ("__type" -> "{}")
+            key -> inner
+
+          case _ =>
+            key -> "" // primitive
+        }
+      }.toMap
+
+    case _ =>
+      Map.empty
+  }
+
+  private def liftTypeInfo(map: Map[String, Any])(using Quotes): Expr[Map[String, Any]] = {
+    val liftedPairs: List[Expr[(String, Any)]] = map.toList.map {
+      case (k, v: String) =>
+        '{ Tuple2(${ Expr(k) }, ${ Expr(v) }) }
+      case (k, v: Map[String @unchecked, Any @unchecked]) =>
+        val nested: Expr[Map[String, Any]] = liftTypeInfo(v)
+        '{ Tuple2(${ Expr(k) }, $nested) }
+      case (k, _) =>
+        quotes.reflect.report.error(s"Unsupported type for key: $k"); '{ ??? }
+    }
+
+    val liftedListExpr: Expr[List[(String, Any)]] = Expr.ofList(liftedPairs)
+    '{ Map[String, Any]().++($liftedListExpr) }
+  }
+
+  def liftMapBoolean(map: Map[String, Boolean])(using Quotes): Expr[Map[String, Boolean]] = {
+    val pairs: List[Expr[(String, Boolean)]] =
+      map.toList.map { case (k, v) => '{ (${ Expr(k) }, ${ Expr(v) }) } }
+    '{ Map[String, Boolean](${ Varargs(pairs) } *) }
+  }
+

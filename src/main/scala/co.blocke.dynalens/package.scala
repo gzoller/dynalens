@@ -53,29 +53,3 @@ enum SymbolType:
   case OptionalScalaWithDefault
   case OptionalList
   case OptionalMap
-
-case class ExprContext(sym: Map[String, SymbolType] = Map.empty, searchThis: Boolean = false)
-
-given defaultExprContext: ExprContext = ExprContext()
-
-def unwrapOption(
-    path: String,
-    obj: Any,
-    elseValue: Option[Fn[Any]],
-    isDefined: Boolean,
-    useRawValue: Boolean = false // don't unwrap Option
-): Either[DynaLensError, Either[Fn[Any], Any]] =
-  obj match
-    case opt: Option[?] =>
-      if isDefined then Right(Right(opt.isDefined))
-      else if path.endsWith("[]") then Right(Right(opt.getOrElse(Nil)))
-      else if useRawValue then Right(Right(opt))
-      else if elseValue.isDefined then
-        opt match
-          case Some(actual) => Right(Right(actual))
-          case None =>
-            Right(Left(elseValue.get)) // defer resolution
-      else Left(DynaLensError(s"Access to optional field '$path' requires .else(...)"))
-
-    case other =>
-      Right(Right(other))

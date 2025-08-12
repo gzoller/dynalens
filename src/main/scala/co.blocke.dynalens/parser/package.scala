@@ -29,7 +29,7 @@ type ParseResult[A] = Either[DLCompileError, A]
 
 // concrete, readable aliases
 type ParseFnResult = ParseResult[Fn[Any]]
-type ParseStmtResult = ParseResult[Statement]
+type ParseStmtResult = ParseResult[(ExprContext, Statement)]
 type ParseBoolResult = ParseResult[BooleanFn]
 type ParseFnListResult = ParseResult[List[Fn[Any]]]
 
@@ -51,58 +51,24 @@ extension [A](parser: P[Either[DLCompileError, A]])
 // ExprContext used during compilation
 //
 enum SymbolType:
-//  case Exempt // eg top
-  case Simple  // Fn[Any]
+  case Scalar  // Fn[Any]
   case Boolean  // BooleanFn
   case Map
   case List
-  case OptionalSimple
-  case OptionalScalarWithDefault
+  case OptionalScalar
   case OptionalList
   case OptionalMap
+  case None
 
-case class ExprContext(sym: Map[String, SymbolType] = Map.empty, searchThis: Boolean = false)
+case class ExprContext(
+                        typeInfo: Map[String, Any],
+                        sym: Map[String, SymbolType] = Map.empty,
+                        searchThis: Boolean = false,
+                        relativeFields: Map[String, Any] = Map.empty
+                      ):
+  def merge(that: ExprContext): ExprContext =
+    this.copy(
+      typeInfo = this.typeInfo ++ that.typeInfo,
+      sym = this.sym ++ that.sym
+    )
 
-given defaultExprContext: ExprContext = ExprContext()
-
-// We can't tell Boolean of OptionalSclarWithDefault from path alone
-def getPathType(path: String): SymbolType = {
-  val segs = path.split("\\.")
-  var shape: SymbolType = SymbolType.Simple
-
-  var sawContainer = false                 // have we hit [] / [n] / {} yet?
-  var anyOptional = false                  // any ? anywhere
-  var containerOptional = false            // ? that applies before or on first container
-
-  segs.zipWithIndex.foreach { case (raw, i) =>
-    val isOpt = raw.endsWith("?")
-    val seg   = if (isOpt) raw.dropRight(1) else raw
-
-    val isList = seg.endsWith("[]") || seg.matches(""".*\[\d+\]$""")
-    val isMap  = seg.endsWith("{}")
-
-    // record optionality
-    if (isOpt) {
-      anyOptional = true
-      // optional that applies before we've entered a container, or on the container segment itself
-      if (!sawContainer || isList || isMap) containerOptional = true
-    }
-
-    // update shape
-    if (isList) { shape = SymbolType.List; sawContainer = true }
-    else if (isMap) { shape = SymbolType.Map; sawContainer = true }
-    // scalars don't change shape
-  }
-
-  // Wrap optional according to where the first relevant ? occurred
-  if (sawContainer) {
-    if (containerOptional) shape match {
-      case SymbolType.List => SymbolType.OptionalList
-      case SymbolType.Map  => SymbolType.OptionalMap
-      case other           => other // shouldn't occur, but safe
-    } else shape
-  } else {
-    // no container anywhere → scalar chain
-    if (anyOptional) SymbolType.OptionalSimple else SymbolType.Simple
-  }
-}

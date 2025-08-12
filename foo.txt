@@ -8,6 +8,11 @@
     foo.things[].filter(this.startsWith("x"))
 
 
+TODO:
+
+* Make sure working code in Grammar is also propagated into BlockFn and BlockStmt -- test both
+
+
     Possible additions:
 
     * Options and Collections as first-class values

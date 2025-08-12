@@ -31,6 +31,9 @@ trait Fn[+R]:
 // Marker trait for boolean-returning functions
 trait BooleanFn extends Fn[Boolean]
 
+case class NoneFn() extends Fn[Any]:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, None.type] = ZIO.succeed(None)
+
 // --- Core Functions ----
 
 case class ConstantFn[R](out: R) extends Fn[R]:
@@ -704,44 +707,39 @@ case class SortFn(
 
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ctx.get("this") match {
-      case Some((maybeIterable, lens)) =>
-        unwrapOption("[]", maybeIterable, Some(ConstantFn(Nil)), false) match {
-          case Left(err)             => ZIO.fail(err)
-          case Right(Left(fallback)) => fallback.resolve(ctx)
-          case Right(Right(value)) =>
-            value match
-              case v: Iterable[?] =>
-                lens match
-                  case Some(dlens: DynaLens[?]) =>
-                    path match
-                      case Some(pth) =>
-                        ZIO
-                          .foreach(v) { item =>
-                            dlens
-                              .asInstanceOf[DynaLens[Any]]
-                              .get(pth, item.asInstanceOf[dlens.ThisT])
-                              .map { value =>
-                                (item, value.asInstanceOf[Comparable[Any]])
-                              }
+      case Some((value, lens)) =>
+        value match
+          case v: Iterable[?] =>
+            lens match
+              case Some(dlens: DynaLens[?]) =>
+                path match
+                  case Some(pth) =>
+                    ZIO
+                      .foreach(v) { item =>
+                        dlens
+                          .asInstanceOf[DynaLens[Any]]
+                          .get(pth, item.asInstanceOf[dlens.ThisT])
+                          .map { value =>
+                            (item, value.asInstanceOf[Comparable[Any]])
                           }
-                          .map { itemValuePairs =>
-                            val sorted = itemValuePairs.toSeq.sortBy(_._2)
-                            if asc then sorted.map(_._1) else sorted.reverse.map(_._1)
-                          }
-
-                      case None =>
-                        sortV(v)
+                      }
+                      .map { itemValuePairs =>
+                        val sorted = itemValuePairs.toSeq.sortBy(_._2)
+                        if asc then sorted.map(_._1) else sorted.reverse.map(_._1)
+                      }
 
                   case None =>
                     sortV(v)
 
-              case _ =>
-                ZIO.fail(
-                  DynaLensError(
-                    s"sort${if asc then "Asc" else "Desc"}() may only be applied to Iterable types, but got: ${value.getClass.getSimpleName}"
-                  )
-                )
-        }
+              case None =>
+                sortV(v)
+
+          case _ =>
+            ZIO.fail(
+              DynaLensError(
+                s"sort${if asc then "Asc" else "Desc"}() may only be applied to Iterable types, but got: ${value.getClass.getSimpleName}"
+              )
+            )
       case None =>
         ZIO.fail(DynaLensError(s"'this' not found in context"))
     }
@@ -933,12 +931,12 @@ case class ParseDateFn(strExpr: Fn[Any], pattern: Fn[String]) extends Fn[Any] {
 
 // --- Stand-Alone Functions ----
 
-case object NowFn extends Fn[Any] {
+case class NowFn() extends Fn[Any] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ZIO.succeed(new java.util.Date())
 }
 
-case object UUIDFn extends Fn[Any] {
+case class UUIDFn() extends Fn[Any] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ZIO.succeed(java.util.UUID.randomUUID())
 }

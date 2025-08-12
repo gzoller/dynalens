@@ -38,7 +38,7 @@ trait Level0:
   def WS0[$: P]: P[Unit] = P((CharsWhileIn(" \n\r\t") | comment).rep) // WS optional
 
   private def comment[$: P]: P[Unit] =
-    P("#" ~ CharsWhile(_ != '\n', min = 0) ~ ("\n" | End))
+    P("#" ~ CharsWhile(c => c != '\n' && c != '\r').rep ~ ("\r\n" | "\n" | End))
 
   def identifier[$: P]: P[String] =
     P((CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").?).!).map(_.trim)
@@ -48,7 +48,7 @@ trait Level0:
       .map(s => Right(ConstantFn(s)))
 
   private def noneLiteral[$: P]: P[ParseFnResult] =
-    P("None").map(_ => Right(ConstantFn(None)))
+    P("None").map(_ => Right(NoneFn()))
 
   def numberLiteral[$: P]: P[ParseFnResult] =
     P(Index ~ (CharIn("+\\-").? ~ CharsWhileIn("0-9") ~ ("." ~ CharsWhileIn("0-9")).?).!).map {

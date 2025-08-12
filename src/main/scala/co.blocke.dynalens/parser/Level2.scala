@@ -22,7 +22,9 @@
 package co.blocke.dynalens
 package parser
 
-import fastparse.*, NoWhitespace.*
+import fastparse.*
+import NoWhitespace.*
+import co.blocke.dynalens.parser.SymbolType.OptionalList
 
 //
 // Second level:
@@ -191,33 +193,72 @@ trait Level2 extends Level1:
         }
     )
 
+  def statementSeq[$: P](using ctx0: ExprContext): P[List[ParseStmtResult]] = {
+    def loop(currentCtx: ExprContext): P[List[ParseStmtResult]] =
+      P {
+        given ExprContext = currentCtx
+
+        statement.flatMap {
+          case err@Left(_) =>
+            // Fail-fast, return singleton error list
+            Pass.map(_ => List(err))
+
+          case Right((newCtx, stmt)) =>
+            loop(newCtx).map(rest => Right((newCtx, stmt)) :: rest)
+        } | Pass.map(_ => Nil) // end of sequence
+      }
+
+    loop(ctx0)
+  }
+
   private def blockFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(
-      "{" ~/ WS0 ~
-        statement.rep(sep = WS0) ~ // Seq[ParseStmtResult]
-        valueExpr ~ // ParseFnResult
-        WS0 ~ "}"
-    ).map { case (stmtResults, valueRes) =>
-      // propagate first statement error, if any
-      stmtResults.collectFirst { case Left(e) => e } match
-        case Some(err) => Left(err)
-        case None =>
-          valueRes match
-            case Left(err) => Left(err)
-            case Right(resultFn) =>
-              val stmts = stmtResults.collect { case Right(s) => s }.toList
-              Right(BlockFn(stmts, resultFn): Fn[Any]) // widen to Fn[Any]
+    // Parse "{", WS, and the threaded statements first
+    P("{" ~/ WS0 ~ {
+      given ExprContext = ctx; statementSeq
+    }).flatMap { stmtResults =>
+      // Fold statements: merge ctx & collect stmts
+      val folded: Either[DLCompileError, (ExprContext, List[Statement])] =
+        stmtResults.foldLeft[Either[DLCompileError, (ExprContext, List[Statement])]](Right(ctx -> Nil)) {
+          case (Left(e), _) => Left(e)
+          case (_, Left(e)) => Left(e)
+          case (Right((ctxAcc, acc)), Right((newCtx, s))) =>
+            Right(ctxAcc.merge(newCtx) -> (acc :+ s))
+        }
+
+      folded match
+        // If statements failed, still consume the closing '}' so parser stays in sync
+        case Left(err) =>
+          P(WS0 ~ "}").map(_ => Left(err): ParseFnResult)
+
+        case Right((finalCtx, stmts)) =>
+          // Now parse the final expression under the merged context
+          given ExprContext = finalCtx
+
+          P(valueExpr).flatMap {
+            case Left(e) =>
+              P(WS0 ~ "}").map(_ => Left(e): ParseFnResult)
+
+            case Right(fn) =>
+              P(WS0 ~ "}").map(_ => Right(BlockFn(stmts, fn): Fn[Any]))
+          }
     }
 
   // block { ... } as a *statement* block
   private def blockStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
-    P("{" ~/ WS0 ~ statement.rep(sep = WS0) ~ WS0 ~ "}").map { stmtResults =>
-      // bubble the first error, if any
-      stmtResults.collectFirst { case Left(e) => e } match
-        case Some(err) => Left(err)
-        case None =>
-          val stmts = stmtResults.collect { case Right(s) => s }.toList
-          Right(BlockStmt(stmts))
+    P(
+      "{" ~/ WS0 ~
+        { given ExprContext = ctx; statementSeq } ~
+        WS0 ~ "}"
+    ).map { stmtResults =>
+      stmtResults.foldLeft[Either[DLCompileError, (ExprContext, List[Statement])]](Right(ctx -> Nil)) {
+        case (Left(e), _) => Left(e)
+        case (_, Left(e)) => Left(e)
+        case (Right((ctxAcc, stmts)), Right((newCtx, stmt))) =>
+          Right(ctxAcc.merge(newCtx) -> (stmts :+ stmt))
+      } match {
+        case Left(err)             => Left(err)
+        case Right((finalCtx, ss)) => Right((finalCtx, BlockStmt(ss)))
+      }
     }
 
   // A single statement
@@ -234,22 +275,58 @@ trait Level2 extends Level1:
 
   // val x = <expr>
   private def valDecl[$: P](using ctx: ExprContext): P[ParseStmtResult] =
-    P("val" ~/ WS ~ identifier.! ~ WS0 ~ "=" ~ WS0 ~ valueExpr).map {
-      case (name, Right(vfn)) => Right(ValStmt(name, vfn))
-      case (_, Left(err)) => Left(err)
-    }
-  
-  private def updateOrMapStmt[$: P]()(using ctx: ExprContext): P[ParseStmtResult] =
-    P(Index ~ path.map(_._1) ~ WS0 ~ "=" ~/ WS0 ~ valueExpr).map {
-      case (offset, p, vres) =>
-        vres match
-          case Left(err) => Left(err)
+    P("val" ~/ WS ~ identifier.! ~ WS0 ~ "=" ~ WS0 ~ Index ~ valueExpr).map {
+      case (name, offset, Right(vfn)) =>
+        Utility.rhsType(vfn) match
+          case Some(symT) =>
+            val newCtx = ctx.copy(
+              typeInfo = ctx.typeInfo + (s"__val_$name" -> ""),
+              sym      = ctx.sym + (name -> symT)
+            )
+            Right((newCtx, ValStmt(name, vfn)))
 
-          case Right(v) =>
-            if p.contains("[]") then
-              Right(MapStmt(p, v))
-            else
-              Right(UpdateStmt(p, v))
+          case None =>
+            Left(DLCompileError(offset, s"Unable to infer type for val '$name' from RHS: ${vfn.getClass.getSimpleName}"))
+
+      case (_, _, Left(err)) =>
+        Left(err)
+    }
+
+  private def updateOrMapStmt[$: P]()(using ctx: ExprContext): P[ParseStmtResult] =
+    P(path.map(_._1) ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (p, offset) =>
+      val targetSym: SymbolType = Utility.getPathType(p)
+
+      val endsAtElement = {
+        val last = p.split("\\.").lastOption.getOrElse("")
+        last.matches(""".*\[(\d+)?\]\??$""")
+      }
+
+      val thisFields: Map[String, Any] =
+        if (endsAtElement) Utility.elementSchemaFor(p, ctx.typeInfo) // element schema (minus __type)
+        else Map.empty // field value is scalar/leaf so no schema
+
+      given ExprContext = ctx.copy(
+        relativeFields = ctx.relativeFields + ("this" -> thisFields),
+        // NOTE: do NOT set searchThis here
+        sym = ctx.sym + ("this" -> targetSym)
+      )
+
+      valueExpr.map {
+        case Left(err) =>
+          Left(err)
+        case Right(vfn) =>
+          Utility.rhsType(vfn) match
+            case None =>
+              Left(DLCompileError(offset, s"Unable to infer type of RHS: ${vfn.getClass.getSimpleName}"))
+            case Some(rhsSym) =>
+              val isMap =
+                p.contains("[]") &&
+                  !(targetSym == SymbolType.OptionalList &&
+                    (rhsSym == SymbolType.None || rhsSym == SymbolType.OptionalList || rhsSym == SymbolType.List))
+
+              if isMap then Right((ctx, MapStmt(p, vfn)))
+              else Right((ctx, UpdateStmt(p, vfn)))
+      }
     }
 
   private def ifStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
@@ -259,7 +336,7 @@ trait Level2 extends Level1:
         (WS0 ~ "else" ~ WS0 ~ statement).?
     ).map {
       case (condRes, thenRes, elseOptRes) =>
-        val base: Either[DLCompileError, (BooleanFn, Statement)] =
+        val base: Either[DLCompileError, (BooleanFn, (ExprContext, Statement))] =
           for
             c <- condRes
             t <- thenRes
@@ -267,13 +344,15 @@ trait Level2 extends Level1:
 
         elseOptRes match
           case None =>
-            base.map { case (c, t) => IfStmt(c, t, None) }
+            base.map { case (c, (_, tStmt)) =>
+              (ctx, IfStmt(c, tStmt, None))
+            }
 
           case Some(er) =>
             for
-              (c, t) <- base
-              e <- er
-            yield IfStmt(c, t, Some(e))
+              (c, (_, tStmt)) <- base
+              (_, eStmt) <- er
+            yield (ctx, IfStmt(c, tStmt, Some(eStmt)))
     }
 
   private def ifFn[$: P](using ctx: ExprContext): P[ParseFnResult] =

@@ -35,6 +35,8 @@ case class Ticket(id: java.util.UUID, when: java.util.Date)
 case class Registry(id: String, giftNums: List[Int], giftDesc: List[String])
 
 case class Maybe(id: String, dunno: Option[String] = None, interest: Option[List[Item]] = None)
+case class MyLists(id: Int, l1: List[Int], l2: Option[List[Int]])
+case class ListOfOpt(id: Int, l1: List[Option[Int]])
 
 // Utility fn for testing
 def toStringCtx(ctx: DynaContext): String = {
