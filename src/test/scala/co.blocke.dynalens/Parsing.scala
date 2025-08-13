@@ -30,7 +30,6 @@ import parser.Script
 object Parsing extends ZIOSpecDefault:
 
   def spec = suite("Parsing Tests")(
-    /*
     test("Simple val assignment script test") {
       val script =
         """
@@ -552,7 +551,6 @@ object Parsing extends ZIOSpecDefault:
         formattedWhen == "1972-07-09" // Confirm parsed date
       )
     },
-    */
     test("filter and sort on simple type must work") {
       val script =
         """
@@ -572,7 +570,6 @@ object Parsing extends ZIOSpecDefault:
         compiledScript.toString == expectedCompiled
       )
     },
-    /*
     test("reverse and clean on simple type must work") {
       val script =
         """
@@ -689,5 +686,4 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 10, 5), Item("abc", 10, 44), Item("xyz", 10, 7), Item("foo", 10, 7), Item("bar", 10, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
-    */
   )

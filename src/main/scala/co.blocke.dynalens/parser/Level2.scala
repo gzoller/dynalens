@@ -262,7 +262,7 @@ trait Level2 extends Level1:
     }
 
   // A single statement
-  def statement[$: P](using ctx: ExprContext): P[ParseStmtResult] =
+  private def statement[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(
       WS0 ~ (
         valDecl |
@@ -293,23 +293,11 @@ trait Level2 extends Level1:
     }
 
   private def updateOrMapStmt[$: P]()(using ctx: ExprContext): P[ParseStmtResult] =
-    P(path.map(_._1) ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (p, offset) =>
+    P(path ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (p, offset) =>
       val targetSym: SymbolType = Utility.getPathType(p)
 
-      val endsAtElement = {
-        val last = p.split("\\.").lastOption.getOrElse("")
-        last.matches(""".*\[(\d+)?\]\??$""")
-      }
-
-      val thisFields: Map[String, Any] =
-        if (endsAtElement) Utility.elementSchemaFor(p, ctx.typeInfo) // element schema (minus __type)
-        else Map.empty // field value is scalar/leaf so no schema
-
-      given ExprContext = ctx.copy(
-        relativeFields = ctx.relativeFields + ("this" -> thisFields),
-        // NOTE: do NOT set searchThis here
-        sym = ctx.sym + ("this" -> targetSym)
-      )
+      val newCtx = Utility.addThisType(p, ctx) // add 'this', properly typed, to ctx
+      given ExprContext = newCtx
 
       valueExpr.map {
         case Left(err) =>
@@ -324,8 +312,10 @@ trait Level2 extends Level1:
                   !(targetSym == SymbolType.OptionalList &&
                     (rhsSym == SymbolType.None || rhsSym == SymbolType.OptionalList || rhsSym == SymbolType.List))
 
-              if isMap then Right((ctx, MapStmt(p, vfn)))
-              else Right((ctx, UpdateStmt(p, vfn)))
+              if isMap then
+                Right((newCtx, MapStmt(p, vfn)))
+              else
+                Right((ctx, UpdateStmt(p, vfn)))
       }
     }
 

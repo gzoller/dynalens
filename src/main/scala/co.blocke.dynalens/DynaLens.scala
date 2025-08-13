@@ -353,6 +353,7 @@ case class DynaLens[T](
         dynalens: Option[DynaLens[?]],
         ctx: DynaContext
     ): ZIO[_BiMapRegistry, DynaLensError, Any] =
+      println("PARTS: "+paths)
       dynalens
         .map(lens =>
           paths match {
@@ -374,7 +375,9 @@ case class DynaLens[T](
               val partialPath = Path.partialPath(pathParts)
               val loopKey = pathParts.last.name
               for {
+                _ <- ZIO.succeed(println("Get: "+partialPath+  " on "+refObj))
                 listVal <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
+                _ <- ZIO.succeed(println("listVal: "+listVal))
                 iterable <- ZIO.fromEither(listVal match {
                   case i: Iterable[?]       => Right(i)
                   case Some(i: Iterable[?]) => Right(i)

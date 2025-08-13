@@ -1,6 +1,9 @@
 package co.blocke.dynalens
 package parser
 
+import fastparse.*
+import NoWhitespace.*
+
 object Utility:
 
   // We can't tell Boolean from path alone
@@ -154,7 +157,7 @@ object Utility:
       case Some(s: String) => s
       case _ => "" // fallback: treat as scalar
 
-  def addThisType(path: String, ctx: ExprContext): ExprContext = 
+  def addThisType(path: String, ctx: ExprContext): ExprContext =
     if path != "this" && !ctx.relativeFields.contains("this") then
       val targetSym: SymbolType = getPathType(path)
       val endsAtElement = {
@@ -170,3 +173,4 @@ object Utility:
         sym = ctx.sym + ("this" -> targetSym)
       )
     else ctx
+

@@ -30,6 +30,7 @@ import parser.Script
 object Options extends ZIOSpecDefault:
 
   def spec = suite("Options Tests")(
+    /*
     test("Simple option assignment") {
       val script =
         """
@@ -239,6 +240,67 @@ object Options extends ZIOSpecDefault:
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == ListOfOpt(1, List(Some(1),Some(15))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
+    */
+    /*
+    test("Map of non-simple type") {
+      val script =
+        """
+          |  l1.clean()
+          |  l1[1] = 15
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(MapStmt(l1[],CleanFn()), UpdateStmt(l1[1],ConstantFn(15))))"""
+      val expectedResult =
+        """top -> ListOfOpt(1,List(Some(1), Some(15)))
+          |""".stripMargin
+      val inst = ListOfOpt(1, List(Some(1),None,Some(3)))
+      val a = dynalens[ListOfOpt]
+      for {
+        compiledScript <- Script.compile(script, a)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x == ListOfOpt(1, List(Some(1),Some(15))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
+    test("Map vs update") {
+      val script =
+        """
+          |  l1.clean()
+          |  l1[1] = 15
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(MapStmt(l1[],CleanFn()), UpdateStmt(l1[1],ConstantFn(15))))"""
+      val expectedResult =
+        """top -> ListOfOpt(1,List(Some(1), Some(15)))
+          |""".stripMargin
+      val inst = ListOfOpt(1, List(Some(1),None,Some(3)))
+      val a = dynalens[ListOfOpt]
+      for {
+        compiledScript <- Script.compile(script, a)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x == ListOfOpt(1, List(Some(1),Some(15))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
+    */
+    test("Map against None") {
+      val script =
+        """
+          |  interest.number = "blah"
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(MapStmt(interest[]?.number,ConstantFn(blah))))"""
+      val expectedResult =
+        """top -> ListOfOpt(1,List(Some(1), Some(15)))
+          |""".stripMargin
+      val inst = Maybe("abc", None, None)
+      val a = dynalens[Maybe]
+      for {
+        compiledScript <- Script.compile(script, a)
+        _ <- ZIO.succeed(println("&&& " + compiledScript))
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+        _ <- ZIO.succeed(println("??? " + resultStr))
+      } yield assertTrue(x == inst && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
   )
 

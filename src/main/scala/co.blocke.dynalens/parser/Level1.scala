@@ -48,184 +48,52 @@ trait Level1 extends Level0:
   //   foo[].bar
   //   foo[3].bar
 
-  def path[$: P](using ctx: ExprContext): P[(String, Option[String])] = {
+  def path[$: P](using ctx: ExprContext): P[String] = {
 
-    def fieldName[$: P]: P[String] =
-      P(CharsWhileIn("a-zA-Z0-9_").!)
+    def identS[$: P]: P[String] =
+      P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep).!
 
-    def optionalSuffix[$: P]: P[Boolean] =
-      P("?".!.?).map(_.isDefined)
+    def identU[$: P]: P[Unit] =
+      P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep)
 
-    def indexedWildcard[$: P]: P[Option[Int]] = P("[]").map(_ => None)
+    def indexPart[$: P]: P[String] =
+      P("[" ~ CharsWhileIn("0-9").! ~ "]").map(i => s"[$i]")
 
-    def indexPart[$: P]: P[Option[Int]] = P("[" ~ CharsWhileIn("0-9").!.map(i => Some(i.toInt)) ~ "]")
+    def wildcardIndex[$: P]: P[String] =
+      P("[]").!
+
+    def curlyBraces[$: P]: P[String] =
+      P("{}").!
+
+    def optSuffix[$: P]: P[String] =
+      P("?".!.?).map(_.getOrElse(""))
 
     def segment[$: P]: P[String] =
-      P(fieldName ~ (indexedWildcard | indexPart).? ~ optionalSuffix).map {
-        case (name, Some(Some(i)), true) => s"$name[$i]?"
-        case (name, Some(Some(i)), false) => s"$name[$i]"
-        case (name, Some(None), true) => s"$name[]?"
-        case (name, Some(None), false) => s"$name[]"
-        case (name, None, true) => s"$name?"
-        case (name, None, false) => name
+      P(identS ~ (wildcardIndex | indexPart | curlyBraces).? ~ optSuffix).map {
+        case (name, Some(suffixPart), suf) => s"$name$suffixPart$suf"
+        case (name, None, suf) => s"$name$suf"
       }
-      
-    def fullPath[$: P]: P[String] =
-      P(segment.rep(1, sep = ".")).map(_.mkString("."))
 
-    def isFunc[$: P]: P[Boolean] =
-      P(&("(").map(_ => true) | Pass.map(_ => false))
+    def pathBase[$: P]: P[String] =
+      P(segment ~ (!("." ~ identU ~ "(") ~ "." ~ segment).rep).map {
+        case (head, tail) => (head +: tail.toList).mkString(".")
+      }
 
-
-    def parseSeg(name: String): Either[String, Seg] = name match
-      case segRx(base, idxStr, optStr) =>
-        val idx =
-          if (idxStr eq null) None
-          else if (idxStr.isEmpty) Some(Wildcard)
-          else Some(Fixed(idxStr.toInt))
-        Right(Seg(base, idx, opt = optStr != null))
-      case _ =>
-        Left(s"Invalid path segment '$name'")
-
-    def render(base: String, idx: Option[Idx], opt: Boolean): String =
-      val idxTxt = idx match
-        case Some(Wildcard) => "[]"
-        case Some(Fixed(i)) => s"[$i]"
-        case None => ""
-      val optTxt = if opt then "?" else ""
-      s"$base$idxTxt$optTxt"
-
-    // Force-correct suffix based on expected type, but preserve a fixed index when list-typed
-    def correct(seg: Seg, expectedType: String): Either[String, String] =
-      expectedType match
-        case "[]" =>
-          seg.idx match
-            case Some(Fixed(i)) => Right(render(seg.base, Some(Fixed(i)), opt = false))
-            case _ => Right(render(seg.base, Some(Wildcard), opt = false))
-        case "[]?" =>
-          seg.idx match
-            case Some(Fixed(i)) => Right(render(seg.base, Some(Fixed(i)), opt = true))
-            case _ => Right(render(seg.base, Some(Wildcard), opt = true))
-        case "{}" | "{}?" | "?" | "" =>
-          // Non-list types may not be indexed
-          seg.idx match
-            case Some(_) => Left(s"Cannot index into non-list field '${seg.base}'")
-            case None =>
-              val opt = expectedType.endsWith("?") || expectedType == "?"
-              Right(render(seg.base, None, opt))
-        case _ =>
-          Right(render(seg.base, seg.idx, seg.opt)) // fallback
-
-    // --- your checker ---------------------------------------------------------
-
-    def checkAndCorrectPath(rawPath: String, offset: Int)(using ctx: ExprContext): Either[DLCompileError, String] =
-      val segments = rawPath.split("\\.").toList
-      
-      @annotation.tailrec
-      def loop(current: Map[String, Any], segs: List[String], acc: List[String], isFirst: Boolean): Either[DLCompileError, List[String]] =
-        segs match
-          case Nil => Right(acc)
-
-          case segStr :: rest =>
-            parseSeg(segStr) match
-              case Left(msg) =>
-                Left(DLCompileError(offset, msg))
-
-              case Right(seg) =>
-                // Absolute lookup first
-                current.get(seg.base) match
-                  case None =>
-                    // If first segment and searchThis enabled, try relativeFields
-                    if isFirst && (ctx.searchThis || seg.base == "this") && ctx.relativeFields.nonEmpty then
-                      ctx.relativeFields.get(seg.base) match
-                        case Some(subtree: Map[String @unchecked, Any @unchecked]) =>
-                          val expectedType = subtree.get("__type").collect { case s: String => s }.getOrElse("{}")
-                          correct(seg, expectedType) match
-                            case Left(msg) => Left(DLCompileError(offset, msg))
-                            case Right(spelled) => loop(subtree, rest, acc :+ spelled, isFirst = false)
-
-                        case Some(expectedType: String) =>
-                          correct(seg, expectedType) match
-                            case Left(msg) => Left(DLCompileError(offset, msg))
-                            case Right(spelled) => loop(Map.empty, rest, acc :+ spelled, isFirst = false)
-
-                        case None =>
-                          // allow top-level val symbols
-                          val valKey = s"__val_${seg.base}"
-                          if ctx.typeInfo.contains(valKey) then
-                            loop(current, rest, acc :+ segStr, isFirst = false)
-                          else
-                            Left(DLCompileError(offset, s"Field '${seg.base}' does not exist in typeInfo or relativeFields"))
-
-                    else
-                      // No relative match — allow top-level val symbols
-                      val valKey = s"__val_${seg.base}"
-                      if ctx.typeInfo.contains(valKey) then
-                        loop(current, rest, acc :+ segStr, isFirst = false)
-                      else
-                        Left(DLCompileError(offset, s"Field '${seg.base}' does not exist in typeInfo"))
-
-                  case Some(subtree: Map[String @unchecked, Any @unchecked]) =>
-                    val expectedType = subtree.get("__type").collect { case s: String => s }.getOrElse("{}")
-                    correct(seg, expectedType) match
-                      case Left(msg) => Left(DLCompileError(offset, msg))
-                      case Right(spelled) => loop(subtree, rest, acc :+ spelled, isFirst = false)
-
-                  case Some(expectedType: String) =>
-                    correct(seg, expectedType) match
-                      case Left(msg) => Left(DLCompileError(offset, msg))
-                      case Right(spelled) => loop(Map.empty, rest, acc :+ spelled, isFirst = false)
-
-                  case _ =>
-                    Left(DLCompileError(offset, s"Unexpected structure for field '${seg.base}'"))
-
-      loop(ctx.typeInfo, segments, Nil, isFirst = true).map(_.mkString("."))
-
-    P(Index ~ fullPath ~ isFunc).flatMap {
-      case (offset, raw, true) =>
-        val lastDot = raw.lastIndexOf('.')
-        if lastDot == -1 then
-          Fail.opaque("Function call detected where path was expected")
-        else {
-          val base = raw.take(lastDot)
-          val fn = raw.drop(lastDot + 1)
-          checkAndCorrectPath(base, offset) match
-            case Left(err) =>
-              P(Index).flatMap(_ => Fail.opaque(err.msg)) // dummy to return a Parser
-            case Right(clean) =>
-              Pass((clean, Some(fn)))
-        }
-
-      case (offset, raw, false) =>
-        checkAndCorrectPath(raw, offset) match
+    P(Index ~ pathBase).flatMap {
+      case (offset, raw) =>
+        // Debugging from here.... so far, __val_y IS in typeInfo, so that's ok. Something fails in rewritePath
+        CorrectPath.rewritePath(raw, offset) match
           case Left(err) =>
             P(Index).flatMap(_ => Fail.opaque(err.msg))
           case Right(clean) =>
-            Pass((clean, None))
+            Pass(clean)
     }
   }
 
   private def pathFn[$: P](valueExpr: => P[ParseFnResult])(using ctx: ExprContext): P[ParseFnResult] =
-    P(path).flatMap { case (rawPath, maybeMethod) =>
-      val baseFn = GetFn(rawPath, searchThis = ctx.searchThis)
-
-      maybeMethod match
-        case None =>
-          P(Pass(Right(baseFn)))
-
-        case Some(methodName) =>
-          methodFunctions.get(methodName) match
-            case Some(fnBuilder) =>
-              methodArgs(valueExpr).flatMap {
-                case Right(args) =>
-                  P(Pass(Right(fnBuilder(baseFn, args))))
-                case Left(err) =>
-                  P(Pass(Left(err)))
-              }
-            case None =>
-              val offset = implicitly[ParsingRun[?]].index
-              P(Pass(Left(DLCompileError(offset, s"Unknown method: $methodName"))))
-    }
+    P(path).map( p =>
+      Right( GetFn(p, searchThis = ctx.searchThis))
+    )
 
   // Parse a method's argument list, with error propagation
   private def methodArgs[$: P](valueExpr: => P[ParseFnResult]): P[Either[DLCompileError, List[Fn[Any]]]] =
@@ -473,61 +341,112 @@ trait Level1 extends Level0:
           .toRight(DLCompileError(off, s"Unknown collection method: $name"))
       }
 
-    // Parse: path followed by first method, then zero+ of ".method"
-    P(Index ~ path).flatMap { case (off0, (basePath, maybeFirstMethod)) =>
-      maybeFirstMethod match {
-        case Some(firstMethodName) =>
-          // Promote inner class' fields to top level (relativeFields)
-          val ctxForArgs =
-              ctx.copy(
-                relativeFields = Utility.elementSchemaFor(basePath, ctx.typeInfo),
-                searchThis = true
-              )
 
-          given ExprContext = ctxForArgs
-          for {
-            // Resolve and parse the first method’s args
-            firstResolved <- lookupMethod(firstMethodName)
-            firstResult <- firstResolved match {
-              case Left(err) => P(Pass(Left(err)))
-              case Right(par) => parseMethodArgs(par) // ParseFnResult
-            }
+    /*
+    P(Index ~ path).flatMap { case (off0, basePath) =>
 
-            // Zero or more ".identifier"
-            methodNames <- P((WS0 ~ "." ~ identifier.!).rep)
+      // Promote inner class' fields to top level (relativeFields)
+      val ctxForArgs =
+          ctx.copy(
+            relativeFields = Utility.elementSchemaFor(basePath, ctx.typeInfo),
+            searchThis = true
+          )
 
-            // Resolve & parse each subsequent "(...)" and collect
-            restFns <- methodNames.foldLeft(Pass(Right(Nil): ParseFnListResult): P[ParseFnListResult]) {
-              case (accP, methodName) =>
-                accP.flatMap {
-                  case left@Left(_) => P(Pass(left)) // keep first error
-                  case Right(accum) =>
-                    for {
-                      resolved <- lookupMethod(methodName)
-                      fnRes <- resolved match {
-                        case Left(err) => P(Pass(Left(err)))
-                        case Right(par) => parseMethodArgs(par)
-                      }
-                    } yield fnRes match {
-                      case Left(err) => Left(err)
-                      case Right(fn) => Right(accum :+ fn)
-                    }
+      given ExprContext = ctxForArgs
+      for {
+        // Zero or more ".identifier"
+        methodNames <- P((WS0 ~ "." ~ identifier.!).rep)
+
+        // Resolve & parse each subsequent "(...)" and collect
+        restFns <- methodNames.foldLeft(Pass(Right(Nil): ParseFnListResult): P[ParseFnListResult]) {
+          case (accP, methodName) =>
+            accP.flatMap {
+              case left@Left(_) => P(Pass(left)) // keep first error
+              case Right(accum) =>
+                for {
+                  resolved <- lookupMethod(methodName)
+                  fnRes <- resolved match {
+                    case Left(err) => P(Pass(Left(err)))
+                    case Right(par) => parseMethodArgs(par)
+                  }
+                } yield fnRes match {
+                  case Left(err) => Left(err)
+                  case Right(fn) => Right(accum :+ fn)
                 }
             }
-          } yield {
-            // Combine into a single Fn, then into a MapStmt, and wrap as ParseStmtResult
-            (for {
-              f1 <- firstResult
-              rxs <- restFns
-            } yield {
-              val all = f1 :: rxs
-              val fn = if all.size == 1 then all.head else PolyFn(all)
-              (ctx, MapStmt(basePath, fn))
-            }): ParseStmtResult
-          }
+        }
+      } yield {
+        // Combine into a single Fn, then into a MapStmt, and wrap as ParseStmtResult
+        (for {
+          allFn <- restFns
+        } yield {
+          val fn = if allFn.size == 1 then allFn.head else PolyFn(allFn)
+          (ctx, MapStmt(basePath, fn))
+        }): ParseStmtResult
+      }
+    }
+     */
+    P(Index ~ path).flatMap { case (off0, basePath) =>
 
-        case None =>
-          P(Fail)
+      val ctxWithThis = Utility.addThisType(basePath, ctx)
+
+      // Promote inner class' fields to top level (relativeFields)
+      val ctxForArgs =
+        ctxWithThis.copy(
+          relativeFields = ctxWithThis.relativeFields ++ Utility.elementSchemaFor(basePath, ctxWithThis.typeInfo),
+          searchThis = true
+        )
+
+      given ExprContext = ctxForArgs
+
+      // resolve + parse a single method's args into a Fn
+      def parseOneMethod(name: String): P[ParseFnResult] =
+        for {
+          resolved <- lookupMethod(name)
+          fnRes <- resolved match {
+            case Left(err) => P(Pass(Left(err)))
+            case Right(par) => parseMethodArgs(par)
+          }
+        } yield fnRes
+
+      // --- REQUIRE a first method: ".name(" ---
+      // parse ".name", then *peek* "(" separately and return the name
+      val firstMethodNameP: P[String] =
+        P(WS0 ~ "." ~ identifier.!).flatMap { name =>
+          P(&("(")).map(_ => name)
+        }
+
+      firstMethodNameP.flatMap { firstMethodName =>
+        for {
+          firstResult <- parseOneMethod(firstMethodName)
+
+          // zero+ additional methods, each must also be followed by '('
+          moreNames <- P((WS0 ~ "." ~ identifier.!).flatMap { n =>
+            P(&("(")).map(_ => n)
+          }).rep
+
+          restFns <- moreNames.foldLeft(Pass(Right(Nil): ParseFnListResult): P[ParseFnListResult]) {
+            case (accP, methodName) =>
+              accP.flatMap {
+                case left@Left(_) => P(Pass(left)) // keep first error
+                case Right(accum) =>
+                  parseOneMethod(methodName).map {
+                    case Left(err) => Left(err)
+                    case Right(fn) => Right(accum :+ fn)
+                  }
+              }
+          }
+        } yield {
+          // Combine into a single Fn, then into a MapStmt, and wrap as ParseStmtResult
+          (for {
+            f1 <- firstResult
+            rxs <- restFns
+          } yield {
+            val all = f1 :: rxs
+            val fn = if all.size == 1 then all.head else PolyFn(all)
+            (ctx, MapStmt(basePath, fn))
+          }): ParseStmtResult
+        }
       }
     }
   }
