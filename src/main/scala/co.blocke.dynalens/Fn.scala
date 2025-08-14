@@ -671,6 +671,19 @@ case class ElseFn(primary: Fn[Any], fallback: Fn[Any]) extends Fn[Any] {
 
 // --- Collection (Iterable) Functions ----
 
+case class LoopFn(predicate: Fn[Any]) extends Fn[Any] {
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ctx.get("this") match {
+      case Some((v: Iterable[?], lens)) =>
+        ZIO.foreach(v) { item =>
+          val localCtx = ctx.updatedWith("this", (item, lens))
+          predicate.resolve(localCtx)
+        }.map(_.toList) // replace with same type if you need
+      case None =>
+        ZIO.fail(DynaLensError("LoopFn resolve() missing root object in context"))
+    }
+  }
+
 case class FilterFn(predicate: BooleanFn) extends Fn[Any]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ctx.get("this") match

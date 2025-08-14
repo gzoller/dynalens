@@ -68,8 +68,10 @@ case class DynaLens[T](
         .getOrThrow()
     }
 
-  def get(path: String, obj: T): ZIO[Any, DynaLensError, Any] = {
-    val parsed = parsePath(path)
+  def get(path: String, obj: T): ZIO[Any, DynaLensError, Any] =
+    _getValue( parsePath(path), obj)
+
+  private def _getValue(pathElements: List[PathElement], obj: T): ZIO[Any, DynaLensError, Any] = {
 
     def step(current: Any, currentLens: DynaLens[?], path: List[PathElement]): ZIO[Any, DynaLensError, Any] =
       path match {
@@ -152,11 +154,13 @@ case class DynaLens[T](
             }
       }
 
-    step(obj, this, parsed)
+    step(obj, this, pathElements)
   }
 
-  def update(path: String, value: Any, obj: T): ZIO[Any, DynaLensError, T] = {
-    val parsed = parsePath(path)
+  def update(path: String, value: Any, obj: T): ZIO[Any, DynaLensError, T] =
+    _updateValue(parsePath(path), value, obj)
+
+  private def _updateValue(pathElements: List[PathElement], value: Any, obj: T): ZIO[Any, DynaLensError, T] = {
 
     def wrapIfNeeded(opt: Boolean, v: Any): Any =
       if opt then
@@ -247,7 +251,7 @@ case class DynaLens[T](
         } yield updated
     }
 
-    step(obj, this, parsed).asInstanceOf[ZIO[Any, DynaLensError, T]]
+    step(obj, this, pathElements).asInstanceOf[ZIO[Any, DynaLensError, T]]
   }
 
   private def walkPath(
@@ -353,14 +357,13 @@ case class DynaLens[T](
         dynalens: Option[DynaLens[?]],
         ctx: DynaContext
     ): ZIO[_BiMapRegistry, DynaLensError, Any] =
-      println("PARTS: "+paths)
       dynalens
         .map(lens =>
           paths match {
             case pathParts :: Nil =>
               val partialPath = Path.partialPath(pathParts)
               for {
-                in <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
+                in <- lens._getValue(pathParts, refObj.asInstanceOf[lens.ThisT])
                 maybeLens = pathParts.last match {
                   case IndexedField(p, _, _) => lens._registry.get(p).orElse(None)
                   case Field(p, _)           => None
@@ -375,9 +378,7 @@ case class DynaLens[T](
               val partialPath = Path.partialPath(pathParts)
               val loopKey = pathParts.last.name
               for {
-                _ <- ZIO.succeed(println("Get: "+partialPath+  " on "+refObj))
-                listVal <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
-                _ <- ZIO.succeed(println("listVal: "+listVal))
+                listVal <- lens._getValue(pathParts, refObj.asInstanceOf[lens.ThisT])
                 iterable <- ZIO.fromEither(listVal match {
                   case i: Iterable[?]       => Right(i)
                   case Some(i: Iterable[?]) => Right(i)
@@ -385,16 +386,18 @@ case class DynaLens[T](
                   case other =>
                     Left(DynaLensError(s"Expected iterable at path '$partialPath', but found: ${other.getClass.getName}"))
                 })
+
                 maybeLensForList <- ctx.get(loopKey) match {
                   case Some((_, existingLens)) => ZIO.succeed(existingLens)
-                  case None =>
+                  case None if iterable.nonEmpty =>
                     ZIO.fail(DynaLensError(s"No existing lens found in ctx for key: $loopKey"))
+                  case None => ZIO.succeed(None)
                 }
                 updatedIterable <- ZIO.foreach(iterable) { item =>
                   ctx.update(loopKey, (item, maybeLensForList)) // update ctx with current item
                   processPaths(rest, item, maybeLensForList, ctx) // recurse
                 }
-                updatedRefObj <- lens.update(partialPath, updatedIterable, refObj.asInstanceOf[lens.ThisT])
+                updatedRefObj <- lens._updateValue(pathParts, updatedIterable, refObj.asInstanceOf[lens.ThisT])
               } yield updatedRefObj
 
             case Nil =>

@@ -313,7 +313,10 @@ trait Level2 extends Level1:
                     (rhsSym == SymbolType.None || rhsSym == SymbolType.OptionalList || rhsSym == SymbolType.List))
 
               if isMap then
-                Right((newCtx, MapStmt(p, vfn)))
+                if targetSym == SymbolType.List || targetSym == SymbolType.OptionalList then  // foo[] = 9
+                  Right((newCtx, MapStmt(p, LoopFn(vfn))))
+                else  // foo[].qty = 9
+                  Right((newCtx, MapStmt(p, vfn)))
               else
                 Right((ctx, UpdateStmt(p, vfn)))
       }

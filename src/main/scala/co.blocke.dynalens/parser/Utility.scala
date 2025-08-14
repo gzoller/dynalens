@@ -98,27 +98,6 @@ object Utility:
     "UUIDFn" -> SymbolType.Scalar,
   )
 
-  /*
-  private def normalize(seg: String): String =
-    seg.replaceAll("""\[\d*\]""", "").stripSuffix("?")
-
-  def elementSchemaFor(basePath: String, ti: Map[String, Any]): Map[String, Any] = {
-    val segs = basePath.split("\\.").toList
-
-    @annotation.tailrec
-    def loop(cur: Map[String, Any], rest: List[String]): Map[String, Any] = rest match
-      case Nil => cur
-      case seg :: tail =>
-        cur.get(normalize(seg)) match
-          case Some(m: Map[String @unchecked, Any @unchecked]) => loop(m, tail)
-          case _                                                => Map.empty
-
-    val node = loop(ti, segs)
-    node.get("__type").collect { case s: String => s } match
-      case Some("[]") | Some("[]?") | Some("{}") | Some("{}?") => node - "__type"
-      case _                                                   => Map.empty // primitive or unknown → no relative fields
-  }
-  */
 
   private def normalize(seg: String): String =
     seg.replaceAll("""\[\d*\]""", "").stripSuffix("?")

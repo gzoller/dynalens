@@ -686,4 +686,19 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 10, 5), Item("abc", 10, 44), Item("xyz", 10, 7), Item("foo", 10, 7), Item("bar", 10, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
+    test("Map over list of primitives") {
+      val script =
+        """
+          |  giftNums = 0
+          |""".stripMargin
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums[],LoopFn(ConstantFn(0)))))"""
+      val expectedResult = """top -> Registry(abc,List(0, 0, 0, 0, 0),List())""".stripMargin + "\n"
+      val inst = Registry("abc", List(9, 2, 5, 6, 1), Nil)
+      val a = dynalens[Registry]
+      for {
+        compiledScript <- Script.compile(script, a)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x == Registry("abc", List(0, 0, 0, 0, 0), Nil) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
   )
