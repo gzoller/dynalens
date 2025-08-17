@@ -22,7 +22,7 @@
 package co.blocke.dynalens
 package parser
 
-import fastparse.*, NoWhitespace.*
+import fastparse.*
 
 object Grammar extends Level2 {
 
@@ -32,18 +32,21 @@ object Grammar extends Level2 {
     given ExprContext = ctx
     statementSeq.map { stmtsE =>
       stmtsE.foldLeft[Either[DLCompileError, (ExprContext, List[Statement])]](Right(ctx -> Nil)) {
-        case (Left(err), _) => Left(err)
-        case (_, Left(err)) => Left(err)
+        case (Left(err), _) =>
+          Left(err)
+        case (_, Left(err)) =>
+          Left(err)
         case (Right((ctxAcc, stmts)), Right((newCtx, stmt))) =>
           val mergedCtx = ctxAcc.merge(newCtx)
           Right(mergedCtx -> (stmts :+ stmt))
       } match {
         case Left(err)         => Left(err)
-        case Right((_, stmts)) => Right(BlockStmt(stmts))
+        case Right((_, stmts)) =>
+          Right(BlockStmt(stmts))
       }
     }
   }
-    
+
   /*
       expr
        ├── ifFn

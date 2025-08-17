@@ -48,36 +48,36 @@ trait Level1 extends Level0:
   //   foo[].bar
   //   foo[3].bar
 
+  private def identS[$: P]: P[String] =
+    P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep).!
+
+  private def identU[$: P]: P[Unit] =
+    P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep)
+
+  private def indexPart[$: P]: P[String] =
+    P("[" ~ CharsWhileIn("0-9").! ~ "]").map(i => s"[$i]")
+
+  private def wildcardIndex[$: P]: P[String] =
+    P("[]").!
+
+  private def curlyBraces[$: P]: P[String] =
+    P("{}").!
+
+  private def optSuffix[$: P]: P[String] =
+    P("?".!.?).map(_.getOrElse(""))
+
+  private def segment[$: P]: P[String] =
+    P(identS ~ (wildcardIndex | indexPart | curlyBraces).? ~ optSuffix).map {
+      case (name, Some(suffixPart), suf) => s"$name$suffixPart$suf"
+      case (name, None, suf) => s"$name$suf"
+    }
+
+  def pathBase[$: P]: P[String] =
+    P(segment ~ (!("." ~ identU ~ "(") ~ "." ~ segment).rep).map {
+      case (head, tail) => (head +: tail.toList).mkString(".")
+    }
+
   def path[$: P](using ctx: ExprContext): P[String] = {
-
-    def identS[$: P]: P[String] =
-      P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep).!
-
-    def identU[$: P]: P[Unit] =
-      P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep)
-
-    def indexPart[$: P]: P[String] =
-      P("[" ~ CharsWhileIn("0-9").! ~ "]").map(i => s"[$i]")
-
-    def wildcardIndex[$: P]: P[String] =
-      P("[]").!
-
-    def curlyBraces[$: P]: P[String] =
-      P("{}").!
-
-    def optSuffix[$: P]: P[String] =
-      P("?".!.?).map(_.getOrElse(""))
-
-    def segment[$: P]: P[String] =
-      P(identS ~ (wildcardIndex | indexPart | curlyBraces).? ~ optSuffix).map {
-        case (name, Some(suffixPart), suf) => s"$name$suffixPart$suf"
-        case (name, None, suf) => s"$name$suf"
-      }
-
-    def pathBase[$: P]: P[String] =
-      P(segment ~ (!("." ~ identU ~ "(") ~ "." ~ segment).rep).map {
-        case (head, tail) => (head +: tail.toList).mkString(".")
-      }
 
     P(Index ~ pathBase).flatMap {
       case (offset, raw) =>
@@ -90,7 +90,7 @@ trait Level1 extends Level0:
     }
   }
 
-  private def pathFn[$: P](valueExpr: => P[ParseFnResult])(using ctx: ExprContext): P[ParseFnResult] =
+  private def pathFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(path).map( p =>
       Right( GetFn(p, searchThis = ctx.searchThis))
     )
@@ -131,7 +131,7 @@ trait Level1 extends Level0:
     }
 
   def baseExpr[$: P](valueExpr: => P[ParseFnResult])(using ctx: ExprContext): P[ParseFnResult] =
-    P((standaloneFn.map(Right(_)) | constant | pathFn(valueExpr)).flatMap {
+    P((standaloneFn.map(Right(_)) | constant | pathFn).flatMap {
       case Right(fn) => methodChain(fn, valueExpr)
       case err@Left(_) => P(Pass(err))
     } ~ WS0)
@@ -342,50 +342,6 @@ trait Level1 extends Level0:
       }
 
 
-    /*
-    P(Index ~ path).flatMap { case (off0, basePath) =>
-
-      // Promote inner class' fields to top level (relativeFields)
-      val ctxForArgs =
-          ctx.copy(
-            relativeFields = Utility.elementSchemaFor(basePath, ctx.typeInfo),
-            searchThis = true
-          )
-
-      given ExprContext = ctxForArgs
-      for {
-        // Zero or more ".identifier"
-        methodNames <- P((WS0 ~ "." ~ identifier.!).rep)
-
-        // Resolve & parse each subsequent "(...)" and collect
-        restFns <- methodNames.foldLeft(Pass(Right(Nil): ParseFnListResult): P[ParseFnListResult]) {
-          case (accP, methodName) =>
-            accP.flatMap {
-              case left@Left(_) => P(Pass(left)) // keep first error
-              case Right(accum) =>
-                for {
-                  resolved <- lookupMethod(methodName)
-                  fnRes <- resolved match {
-                    case Left(err) => P(Pass(Left(err)))
-                    case Right(par) => parseMethodArgs(par)
-                  }
-                } yield fnRes match {
-                  case Left(err) => Left(err)
-                  case Right(fn) => Right(accum :+ fn)
-                }
-            }
-        }
-      } yield {
-        // Combine into a single Fn, then into a MapStmt, and wrap as ParseStmtResult
-        (for {
-          allFn <- restFns
-        } yield {
-          val fn = if allFn.size == 1 then allFn.head else PolyFn(allFn)
-          (ctx, MapStmt(basePath, fn))
-        }): ParseStmtResult
-      }
-    }
-     */
     P(Index ~ path).flatMap { case (off0, basePath) =>
 
       val ctxWithThis = Utility.addThisType(basePath, ctx)

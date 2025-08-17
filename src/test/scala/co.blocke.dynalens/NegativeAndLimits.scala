@@ -30,7 +30,6 @@ import parser.Script
 object NegativeAndLimits extends ZIOSpecDefault:
 
   def spec = suite("Negative and Limits Tests")(
-    /*
     test("Minimal if-block as function result must work") {
       val script =
         """
@@ -63,18 +62,16 @@ object NegativeAndLimits extends ZIOSpecDefault:
 
       result match {
         case Left(err: DynaLensError) =>
-          assertTrue(err.msg.contains("Field not found: bogus"))
+          assertTrue(err.msg.contains("Error: Field 'bogus' does not exist in typeInfo"))
         case _ =>
           assertTrue(false).label("Expected error did not occur")
       }
     },
-    */
     test("Type mismatch: comparing string to int should fail") {
       val script = """val x = name > 5""" // name is String, not Int
       val a = dynalens[Person]
 
       val result = Script.compileNoZIO(script, a).flatMap(compiled => a.runNoZIO(compiled, Person("bob", 35)))
-      println("HERE: "+result)
       result match {
         case Left(err: DynaLensError) =>
           assertTrue(err.msg.contains("Cannot compare types: class java.lang.String and class java.lang.Integer"))
@@ -82,7 +79,6 @@ object NegativeAndLimits extends ZIOSpecDefault:
           assertTrue(false).label("Expected type mismatch error")
       }
     },
-    /*
     test("mapTo with missing key should fail") {
       val bimap = BiMap.fromMap(Map("abc" -> "123"))
       val ctx = new BiMapRegistry().register("testmap", bimap)
@@ -164,10 +160,4 @@ object NegativeAndLimits extends ZIOSpecDefault:
           assertTrue(false).label("Expected a DynaLensError, but got success")
       }
     },
-    */
   )
-
-/*
-  TODO: 
-   * l1[1] = 5 where l1 == None
-  */

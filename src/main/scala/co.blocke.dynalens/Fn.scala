@@ -679,7 +679,7 @@ case class LoopFn(predicate: Fn[Any]) extends Fn[Any] {
           val localCtx = ctx.updatedWith("this", (item, lens))
           predicate.resolve(localCtx)
         }.map(_.toList) // replace with same type if you need
-      case None =>
+      case _ =>
         ZIO.fail(DynaLensError("LoopFn resolve() missing root object in context"))
     }
   }

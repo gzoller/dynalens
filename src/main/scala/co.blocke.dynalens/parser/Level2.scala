@@ -24,7 +24,6 @@ package parser
 
 import fastparse.*
 import NoWhitespace.*
-import co.blocke.dynalens.parser.SymbolType.OptionalList
 
 //
 // Second level:
@@ -261,13 +260,12 @@ trait Level2 extends Level1:
       }
     }
 
-  // A single statement
   private def statement[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(
       WS0 ~ (
         valDecl |
-        updateOrMapStmt() |
         ifStmt |
+        updateOrMapStmt() |
         blockStmt |
         collectionStmt(booleanExpr)
       ) ~ WS0
@@ -291,34 +289,47 @@ trait Level2 extends Level1:
       case (_, _, Left(err)) =>
         Left(err)
     }
-
+  
   private def updateOrMapStmt[$: P]()(using ctx: ExprContext): P[ParseStmtResult] =
-    P(path ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (p, offset) =>
-      val targetSym: SymbolType = Utility.getPathType(p)
-
-      val newCtx = Utility.addThisType(p, ctx) // add 'this', properly typed, to ctx
-      given ExprContext = newCtx
-
-      valueExpr.map {
+    P(Index ~ pathBase ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
+      CorrectPath.rewritePath(rawPath, pathOff) match {
         case Left(err) =>
-          Left(err)
-        case Right(vfn) =>
-          Utility.rhsType(vfn) match
-            case None =>
-              Left(DLCompileError(offset, s"Unable to infer type of RHS: ${vfn.getClass.getSimpleName}"))
-            case Some(rhsSym) =>
-              val isMap =
-                p.contains("[]") &&
-                  !(targetSym == SymbolType.OptionalList &&
-                    (rhsSym == SymbolType.None || rhsSym == SymbolType.OptionalList || rhsSym == SymbolType.List))
+          // Surface domain error as a successful parse that returns Left(...)
+          P(Pass(Left(err): ParseStmtResult))
 
-              if isMap then
-                if targetSym == SymbolType.List || targetSym == SymbolType.OptionalList then  // foo[] = 9
-                  Right((newCtx, MapStmt(p, LoopFn(vfn))))
-                else  // foo[].qty = 9
-                  Right((newCtx, MapStmt(p, vfn)))
-              else
-                Right((ctx, UpdateStmt(p, vfn)))
+        case Right(cleanPath) =>
+          // 1) Re-introduce 'this' typing for RHS parsing
+          val ctxForRhs = Utility.addThisType(cleanPath, ctx)
+          given ExprContext = ctxForRhs
+
+          P(valueExpr ~ WS0).map {
+            case Left(e) => Left(e)
+
+            case Right(vfn) =>
+              val lhsSym = Utility.getPathType(cleanPath)
+
+              Utility.rhsType(vfn) match {
+                case None =>
+                  Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${vfn.getClass.getSimpleName}"))
+
+                case Some(rhsSym) =>
+                  // Same map/update discriminator as before
+                  val isMap =
+                    cleanPath.contains("[]") &&
+                      !(lhsSym == SymbolType.OptionalList &&
+                        (rhsSym == SymbolType.None || rhsSym == SymbolType.OptionalList || rhsSym == SymbolType.List))
+
+                  if (isMap) {
+                    // 2) Restore the terminal-list loop case: foo[] = 9
+                    val needsLoop = lhsSym == SymbolType.List || lhsSym == SymbolType.OptionalList
+                    val body = if (needsLoop) LoopFn(vfn) else vfn
+                    Right((ctxForRhs, MapStmt(cleanPath, body)))
+                  } else {
+                    // Do not leak 'this' into outer scope for plain updates
+                    Right((ctx, UpdateStmt(cleanPath, vfn)))
+                  }
+              }
+          }
       }
     }
 

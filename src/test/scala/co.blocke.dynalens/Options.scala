@@ -261,12 +261,12 @@ object Options extends ZIOSpecDefault:
     test("Map vs Update (map)") {
       val script =
         """
-          |  l2 = 9
+          |  l2 = this + 9
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(l2[]?,LoopFn(ConstantFn(9)))))"""
+        """BlockStmt(List(MapStmt(l2[]?,LoopFn(AddFn(GetFn(this,false),ConstantFn(9))))))"""
       val expectedResult =
-        """top -> MyLists(1,List(1, 2, 3),Some(List(9, 9, 9)))
+        """top -> MyLists(1,List(1, 2, 3),Some(List(13, 14, 15)))
           |""".stripMargin
       val inst = MyLists(1, List(1,2,3), Some(List(4,5,6)))
       val a = dynalens[MyLists]
@@ -274,7 +274,7 @@ object Options extends ZIOSpecDefault:
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == MyLists(1, List(1,2,3), Some(List(9,9,9))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == MyLists(1, List(1,2,3), Some(List(13,14,15))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Map against None") {
       val script =

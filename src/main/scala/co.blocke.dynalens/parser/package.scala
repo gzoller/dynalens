@@ -22,8 +22,6 @@
 package co.blocke.dynalens
 package parser
 
-import fastparse.*
-
 // one generic error-or wrapper
 type ParseResult[A] = Either[DLCompileError, A]
 
@@ -44,8 +42,8 @@ case class DLCompileError(offset: Int, msg: String):
     (line, col)
 
 
-extension [A](parser: P[Either[DLCompileError, A]])
-  def withExprCtx(using ExprContext): P[Either[DLCompileError, A]] = parser
+//extension [A](parser: P[Either[DLCompileError, A]])
+//  def withExprCtx(using ExprContext): P[Either[DLCompileError, A]] = parser
 
 //
 // ExprContext used during compilation
