@@ -69,4 +69,3 @@ case class ExprContext(
       typeInfo = this.typeInfo ++ that.typeInfo,
       sym = this.sym ++ that.sym
     )
-

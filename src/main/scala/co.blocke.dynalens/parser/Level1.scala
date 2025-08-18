@@ -112,6 +112,7 @@ trait Level1 extends Level0:
       case (_, Left(err))            => Left(err)
     }
 
+  /*
   def methodChain[$: P](base: Fn[Any], valueExpr: => P[ParseFnResult]): P[ParseFnResult] =
     P(WS0 ~ Index ~ methodCall(valueExpr).rep).map {
       case (offset, chain) =>
@@ -127,6 +128,23 @@ trait Level1 extends Level0:
                   Right(fnBuilder(inner, args).asInstanceOf[Fn[Any]])
                 case None =>
                   Left(DLCompileError(offset, s"Unknown method: $fnName"))
+
+            case (err@Left(_), _) => err
+          }
+    }
+    */
+  def methodChain[$: P](base: Fn[Any], valueExpr: => P[ParseFnResult]): P[ParseFnResult] =
+    P(WS0 ~ Index ~ methodCall(valueExpr).rep).map {
+      case (offset, chain) =>
+        val (errs, oks) = chain.partitionMap(identity)
+
+        if (errs.nonEmpty) Left(errs.head)
+        else
+          oks.foldLeft[ParseFnResult](Right(base)) {
+            case (Right(inner), (fnName, args)) =>
+              methodFunctions.get(fnName) match
+                case Some(build) => build(inner, args, offset) // <-- returns Either
+                case None => Left(DLCompileError(offset, s"Unknown method: $fnName"))
 
             case (err@Left(_), _) => err
           }
@@ -149,9 +167,114 @@ trait Level1 extends Level0:
       case "uuid" => UUIDFn()
     }
 
-  private def checkArgs(fnName: String, args: List[Fn[Any]], required: Int): Unit =
-    if args.length != required then throw new RuntimeException(s"Function $fnName() expected $required argument(s), got ${args.length}")
+  private def checkArgs(
+                          fnName: String,
+                          args: List[Fn[Any]],
+                          required: Int,
+                          offset: Int
+                        ): Either[DLCompileError, Unit] =
+    if (args.length != required)
+      Left(DLCompileError(offset, s"Function $fnName() expected $required argument(s), got ${args.length}"))
+    else
+      Right(())
 
+  private val methodFunctions
+  : Map[String, (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]] = Map(
+    "startsWith" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("startsWith", args, 1, off)
+      } yield StartsWithFn(recv.as[String], args.head.as[String])
+    },
+    "endsWith" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("endsWith", args, 1, off)
+      } yield EndsWithFn(recv.as[String], args.head.as[String])
+    },
+    "contains" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("contains", args, 1, off)
+      } yield ContainsFn(recv.as[String], args.head.as[String])
+    },
+    "equalsIgnoreCase" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("equalsIgnoreCase", args, 1, off)
+      } yield EqualsIgnoreCaseFn(recv.as[String], args.head.as[String])
+    },
+    "matchesRegex" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("matchesRegex", args, 1, off)
+      } yield MatchesRegexFn(recv.as[String], args.head.as[String])
+    },
+    "else" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("else", args, 1, off)
+      } yield ElseFn(recv, args.head)
+    },
+    "isDefined" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("isDefined", args, 0, off)
+      } yield IsDefinedFn(recv)
+    },
+    "len" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("len", args, 0, off)
+      } yield LengthFn(recv)
+    },
+    "toUpperCase" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("toUpperCase", args, 0, off)
+      } yield ToUpperFn(recv)
+    },
+    "toLowerCase" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("toLowerCase", args, 0, off)
+      } yield ToLowerFn(recv)
+    },
+    "trim" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("trim", args, 0, off)
+      } yield TrimFn(recv)
+    },
+    "template" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("template", args, 0, off)
+      } yield {
+        val varMap = recv match
+          case ConstantFn(s: String) =>
+            TemplateUtils.extractVariables(s).map(v => v -> GetFn(v)).toMap
+          case _ =>
+            Map.empty[String, Fn[Any]] // template is not a constant, so defer resolution
+        InterpolateFn(recv, varMap)
+      }
+    },
+    "substr" -> { (recv, args, off) =>
+      if args.isEmpty then Left(DLCompileError(off, s"Function substr() expected at least 1 argument, but found none"))
+      else
+        val start = args.head.as[Int]
+        val endOpt = args.lift(1).map(_.as[Int])
+        Right(SubstringFn(recv, start, endOpt))
+    },
+    "replace" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("replace", args, 2, off)
+      } yield ReplaceFn(recv, args.head, args(1))
+    },
+    "dateFmt" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("dateFmt", args, 1, off)
+      } yield FormatDateFn(recv, args.head.as[String])
+    },
+    "toDate" -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs("toDate", args, 1, off)
+      } yield ParseDateFn(recv, args.head.as[String])
+    },
+  )
+
+//  private def checkArgs(fnName: String, args: List[Fn[Any]], required: Int): Unit =
+//    if args.length != required then throw new RuntimeException(s"Function $fnName() expected $required argument(s), got ${args.length}")
+
+  /*
   private val methodFunctions: Map[String, (Fn[Any], List[Fn[Any]]) => Fn[?]] = Map(
     "startsWith" -> { (recv, args) =>
       checkArgs("startsWith", args, 1)
@@ -220,6 +343,7 @@ trait Level1 extends Level0:
     }
     // TODO: Promote all the collection methods as regular functions too (predicates)
   )
+      */
 
   // ---- Collection Statements ----
 
