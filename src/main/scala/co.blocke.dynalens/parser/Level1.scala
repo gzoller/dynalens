@@ -77,23 +77,25 @@ trait Level1 extends Level0:
       case (head, tail) => (head +: tail.toList).mkString(".")
     }
 
-  def path[$: P](using ctx: ExprContext): P[String] = {
-
-    P(Index ~ pathBase).flatMap {
-      case (offset, raw) =>
-        // Debugging from here.... so far, __val_y IS in typeInfo, so that's ok. Something fails in rewritePath
-        CorrectPath.rewritePath(raw, offset) match
-          case Left(err) =>
-            P(Index).flatMap(_ => Fail.opaque(err.msg))
-          case Right(clean) =>
-            Pass(clean)
+  // 1) Non-failing path parser that *returns* the semantic error
+  private def pathEither[$: P](using ctx: ExprContext): P[Either[DLCompileError, String]] =
+    P(Index ~ pathBase).map { case (offset, raw) =>
+      CorrectPath.rewritePath(raw, offset) // Either[DLCompileError, String]
     }
-  }
 
+  // 2) Keep a strict version (for places where you *want* a hard parse error)
+  def path[$: P](using ctx: ExprContext): P[String] =
+    pathEither.flatMap {
+      case Right(clean) => P(Pass(clean))
+      case Left(err) => P(Fail.opaque(err.msg)) // <- only use where a hard parse failure is desired
+    }
+
+  // 3) Make pathFn propagate domain errors (no parser Fail here)
   private def pathFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(path).map( p =>
-      Right( GetFn(p, searchThis = ctx.searchThis))
-    )
+    pathEither.map {
+      case Left(err) => Left(err) // bubble semantic error
+      case Right(path) => Right(GetFn(path, searchThis = ctx.searchThis)) // success
+    }
 
   // Parse a method's argument list, with error propagation
   private def methodArgs[$: P](valueExpr: => P[ParseFnResult]): P[Either[DLCompileError, List[Fn[Any]]]] =
@@ -229,23 +231,39 @@ trait Level1 extends Level0:
   def collectionStmt[$: P](booleanExpr: ExprContext ?=> P[ParseBoolResult])
                           (using ctx: ExprContext): P[ParseStmtResult] = {
 
-    def simpleFieldPath[$: P]: P[String] =
-      P(CharsWhileIn("a-zA-Z0-9_.").!)
-
     case object SortAscMethod extends CollectionMethodParser {
       val name = "sortAsc"
+
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
-        P(Index ~ simpleFieldPath.?).map { case (offset, maybeField) =>
-          // No validation needed: field is optional by design
-          Right(SortFn(maybeField)) // ascending by default
+        P(Index ~ pathBase.?).map {
+          case (offset, None) =>
+            // sortAsc() — no key, natural ordering
+            Right(SortFn(None, true))
+
+          case (offset, Some(rawKey)) =>
+            // sortAsc(field) — rewrite/validate the (possibly relative) key
+            CorrectPath.rewritePath(rawKey, offset) match {
+              case Left(err) => Left(err) // bubble DLCompileError
+              case Right(cleanKey) => Right(SortFn(Some(cleanKey), true)) // ascending
+            }
         }
     }
 
     case object SortDescMethod extends CollectionMethodParser {
       val name = "sortDesc"
+
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
-        P(Index ~ simpleFieldPath.?).map { case (offset, maybeField) =>
-          Right(SortFn(maybeField, asc = false))
+        P(Index ~ pathBase.?).map {
+          case (offset, None) =>
+            // sortAsc() — no key, natural ordering
+            Right(SortFn(None, false))
+
+          case (offset, Some(rawKey)) =>
+            // sortAsc(field) — rewrite/validate the (possibly relative) key
+            CorrectPath.rewritePath(rawKey, offset) match {
+              case Left(err) => Left(err) // bubble DLCompileError
+              case Right(cleanKey) => Right(SortFn(Some(cleanKey), false)) // descending
+            }
         }
     }
 
@@ -261,9 +279,17 @@ trait Level1 extends Level0:
 
     case object DistinctMethod extends CollectionMethodParser {
       val name = "distinct"
+
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
-        P(Index ~ simpleFieldPath.?).map { case (offset, maybeField) =>
-          Right(DistinctFn(maybeField))
+        P(Index ~ pathBase.?).map {
+          case (offset, None) =>
+            Right(DistinctFn(None))
+
+          case (offset, Some(rawKey)) =>
+            CorrectPath.rewritePath(rawKey, offset) match {
+              case Left(err) => Left(err) // bubble DLCompileError
+              case Right(cleanKey) => Right(DistinctFn(Some(cleanKey)))
+            }
         }
     }
 

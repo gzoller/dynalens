@@ -289,7 +289,7 @@ trait Level2 extends Level1:
       case (_, _, Left(err)) =>
         Left(err)
     }
-  
+
   private def updateOrMapStmt[$: P]()(using ctx: ExprContext): P[ParseStmtResult] =
     P(Index ~ pathBase ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
       CorrectPath.rewritePath(rawPath, pathOff) match {
@@ -303,7 +303,8 @@ trait Level2 extends Level1:
           given ExprContext = ctxForRhs
 
           P(valueExpr ~ WS0).map {
-            case Left(e) => Left(e)
+            case Left(e) =>
+              Left(e)
 
             case Right(vfn) =>
               val lhsSym = Utility.getPathType(cleanPath)
