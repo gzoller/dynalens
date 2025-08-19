@@ -111,43 +111,40 @@ trait Level1 extends Level0:
       case (methodName, Right(args)) => Right((methodName, args))
       case (_, Left(err))            => Left(err)
     }
+  
+  def methodChain[$: P](base: Fn[Any], valueExpr: => P[ParseFnResult])
+                       (using ctx: ExprContext): P[ParseFnResult] =
+    P(WS0 ~ Index ~ methodCall(valueExpr).rep).map { (offset, chain) =>
+      // keep the given in scope for Utility.rhsType / other helpers
+      given ExprContext = ctx
 
-  /*
-  def methodChain[$: P](base: Fn[Any], valueExpr: => P[ParseFnResult]): P[ParseFnResult] =
-    P(WS0 ~ Index ~ methodCall(valueExpr).rep).map {
-      case (offset, chain) =>
-        val (errs, oks) = chain.partitionMap(identity)
+      val (errs, oks) = chain.partitionMap(identity)
+      if (errs.nonEmpty) Left(errs.head)
+      else {
+        val startT: Either[DLCompileError, SymbolType] =
+          Utility.rhsType(base).toRight(DLCompileError(offset, "Unable to infer receiver type for method chain"))
 
-        if errs.nonEmpty then
-          Left(errs.head)
-        else
-          oks.foldLeft[ParseFnResult](Right(base)) {
-            case (Right(inner), (fnName, args)) =>
-              methodFunctions.get(fnName) match
-                case Some(fnBuilder) =>
-                  Right(fnBuilder(inner, args).asInstanceOf[Fn[Any]])
-                case None =>
-                  Left(DLCompileError(offset, s"Unknown method: $fnName"))
+        val folded = oks.foldLeft[Either[DLCompileError, (Fn[Any], SymbolType)]](startT.map(t => (base, t))) {
+          case (Left(e), _) => Left(e)
+          case (Right((recvFn, recvT)), (fnName, args)) =>
+            MethodSig.methodSigs.get(fnName) match {
+              case None => Left(DLCompileError(offset, s"Unknown method: $fnName"))
+              case Some(sig) =>
+                if (!sig.upon.contains(recvT))
+                  Left(DLCompileError(offset, s"Method '$fnName' cannot be applied to ${pretty(recvT)}"))
+                else
+                  methodFunctions.get(fnName) match {
+                    case None => Left(DLCompileError(offset, s"No builder registered for method: $fnName"))
+                    case Some(build) =>
+                      build(recvFn, args, offset).map { built =>
+                        (built.asInstanceOf[Fn[Any]], sig.out(recvT))
+                      }
+                  }
+            }
+        }
 
-            case (err@Left(_), _) => err
-          }
-    }
-    */
-  def methodChain[$: P](base: Fn[Any], valueExpr: => P[ParseFnResult]): P[ParseFnResult] =
-    P(WS0 ~ Index ~ methodCall(valueExpr).rep).map {
-      case (offset, chain) =>
-        val (errs, oks) = chain.partitionMap(identity)
-
-        if (errs.nonEmpty) Left(errs.head)
-        else
-          oks.foldLeft[ParseFnResult](Right(base)) {
-            case (Right(inner), (fnName, args)) =>
-              methodFunctions.get(fnName) match
-                case Some(build) => build(inner, args, offset) // <-- returns Either
-                case None => Left(DLCompileError(offset, s"Unknown method: $fnName"))
-
-            case (err@Left(_), _) => err
-          }
+        folded.map(_._1)
+      }
     }
 
   def baseExpr[$: P](valueExpr: => P[ParseFnResult])(using ctx: ExprContext): P[ParseFnResult] =
@@ -167,6 +164,25 @@ trait Level1 extends Level0:
       case "uuid" => UUIDFn()
     }
 
+  private def expectGetPath(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, String] =
+    arg match {
+      case g: GetFn => Right(g.path) // already corrected by your path parser
+      case other => Left(DLCompileError(off, s"$name(...) expects a field path argument, got ${other.getClass.getSimpleName}"))
+    }
+
+  private def expectBoolean(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, BooleanFn] =
+    arg match {
+      case b: BooleanFn => Right(b)
+      case other => Left(DLCompileError(off, s"$name(...) requires a boolean expression, got ${other.getClass.getSimpleName}"))
+    }
+
+  private def expectConstInt(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, Int] =
+    arg match {
+      case ConstantFn(i: Int) => Right(i)
+      case ConstantFn(x) => Left(DLCompileError(off, s"$name(...) requires an integer literal, got ${x.getClass.getSimpleName}"))
+      case other => Left(DLCompileError(off, s"$name(...) requires an integer literal, got ${other.getClass.getSimpleName}"))
+    }
+
   private def checkArgs(
                           fnName: String,
                           args: List[Fn[Any]],
@@ -180,64 +196,64 @@ trait Level1 extends Level0:
 
   private val methodFunctions
   : Map[String, (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]] = Map(
-    "startsWith" -> { (recv, args, off) =>
+    M_STARTSWITH -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("startsWith", args, 1, off)
+        _ <- checkArgs(M_STARTSWITH, args, 1, off)
       } yield StartsWithFn(recv.as[String], args.head.as[String])
     },
-    "endsWith" -> { (recv, args, off) =>
+    M_ENDSWITH -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("endsWith", args, 1, off)
+        _ <- checkArgs(M_ENDSWITH, args, 1, off)
       } yield EndsWithFn(recv.as[String], args.head.as[String])
     },
-    "contains" -> { (recv, args, off) =>
+    M_CONTAINS -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("contains", args, 1, off)
+        _ <- checkArgs(M_CONTAINS, args, 1, off)
       } yield ContainsFn(recv.as[String], args.head.as[String])
     },
-    "equalsIgnoreCase" -> { (recv, args, off) =>
+    M_EQUALSIGNORECASE -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("equalsIgnoreCase", args, 1, off)
+        _ <- checkArgs(M_EQUALSIGNORECASE, args, 1, off)
       } yield EqualsIgnoreCaseFn(recv.as[String], args.head.as[String])
     },
-    "matchesRegex" -> { (recv, args, off) =>
+    M_MATCHESREGEX -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("matchesRegex", args, 1, off)
+        _ <- checkArgs(M_MATCHESREGEX, args, 1, off)
       } yield MatchesRegexFn(recv.as[String], args.head.as[String])
     },
-    "else" -> { (recv, args, off) =>
+    M_ELSE -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("else", args, 1, off)
+        _ <- checkArgs(M_ELSE, args, 1, off)
       } yield ElseFn(recv, args.head)
     },
-    "isDefined" -> { (recv, args, off) =>
+    M_ISDEFINED -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("isDefined", args, 0, off)
+        _ <- checkArgs(M_ISDEFINED, args, 0, off)
       } yield IsDefinedFn(recv)
     },
-    "len" -> { (recv, args, off) =>
+    M_LEN -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("len", args, 0, off)
+        _ <- checkArgs(M_LEN, args, 0, off)
       } yield LengthFn(recv)
     },
-    "toUpperCase" -> { (recv, args, off) =>
+    M_TOUPPERCASE -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("toUpperCase", args, 0, off)
+        _ <- checkArgs(M_TOUPPERCASE, args, 0, off)
       } yield ToUpperFn(recv)
     },
-    "toLowerCase" -> { (recv, args, off) =>
+    M_TOLOWERCASE -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("toLowerCase", args, 0, off)
+        _ <- checkArgs(M_TOLOWERCASE, args, 0, off)
       } yield ToLowerFn(recv)
     },
-    "trim" -> { (recv, args, off) =>
+    M_TRIM -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("trim", args, 0, off)
+        _ <- checkArgs(M_TRIM, args, 0, off)
       } yield TrimFn(recv)
     },
-    "template" -> { (recv, args, off) =>
+    M_TEMPLATE -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("template", args, 0, off)
+        _ <- checkArgs(M_TEMPLATE, args, 0, off)
       } yield {
         val varMap = recv match
           case ConstantFn(s: String) =>
@@ -247,103 +263,81 @@ trait Level1 extends Level0:
         InterpolateFn(recv, varMap)
       }
     },
-    "substr" -> { (recv, args, off) =>
+    M_SUBSTR -> { (recv, args, off) =>
       if args.isEmpty then Left(DLCompileError(off, s"Function substr() expected at least 1 argument, but found none"))
       else
         val start = args.head.as[Int]
         val endOpt = args.lift(1).map(_.as[Int])
         Right(SubstringFn(recv, start, endOpt))
     },
-    "replace" -> { (recv, args, off) =>
+    M_REPLACE -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("replace", args, 2, off)
+        _ <- checkArgs(M_REPLACE, args, 2, off)
       } yield ReplaceFn(recv, args.head, args(1))
     },
-    "dateFmt" -> { (recv, args, off) =>
+    M_DATEFMT -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("dateFmt", args, 1, off)
+        _ <- checkArgs(M_DATEFMT, args, 1, off)
       } yield FormatDateFn(recv, args.head.as[String])
     },
-    "toDate" -> { (recv, args, off) =>
+    M_TODATE -> { (recv, args, off) =>
       for {
-        _ <- checkArgs("toDate", args, 1, off)
+        _ <- checkArgs(M_TODATE, args, 1, off)
       } yield ParseDateFn(recv, args.head.as[String])
     },
-  )
-
-//  private def checkArgs(fnName: String, args: List[Fn[Any]], required: Int): Unit =
-//    if args.length != required then throw new RuntimeException(s"Function $fnName() expected $required argument(s), got ${args.length}")
-
-  /*
-  private val methodFunctions: Map[String, (Fn[Any], List[Fn[Any]]) => Fn[?]] = Map(
-    "startsWith" -> { (recv, args) =>
-      checkArgs("startsWith", args, 1)
-      StartsWithFn(recv.as[String], args.head.as[String])
-    },
-    "endsWith" -> { (recv, args) =>
-      checkArgs("endsWith", args, 1)
-      EndsWithFn(recv.as[String], args.head.as[String])
-    },
-    "contains" -> { (recv, args) =>
-      checkArgs("contains", args, 1)
-      ContainsFn(recv.as[String], args.head.as[String])
-    },
-    "equalsIgnoreCase" -> { (recv, args) =>
-      checkArgs("equalsIgnoreCase", args, 1)
-      EqualsIgnoreCaseFn(recv.as[String], args.head.as[String])
-    },
-    "matchesRegex" -> { (recv, args) =>
-      checkArgs("matchesRegex", args, 1)
-      MatchesRegexFn(recv.as[String], args.head.as[String])
-    },
-    "else" -> { (recv, args) =>
-      checkArgs("else", args, 1)
-      ElseFn(recv, args.head)
-    },
-    "isDefined" -> { (recv, _) =>
-      IsDefinedFn(recv)
-    },
-    "len" -> { (recv, _) =>
-      LengthFn(recv)
-    },
-    "toUpperCase" -> { (recv, _) =>
-      ToUpperFn(recv)
-    },
-    "toLowerCase" -> { (recv, _) =>
-      ToLowerFn(recv)
-    },
-    "trim" -> { (recv, _) =>
-      TrimFn(recv)
-    },
-    "template" -> { (recv, _) =>
-      val varMap = recv match
-        case ConstantFn(s: String) =>
-          TemplateUtils.extractVariables(s).map(v => v -> GetFn(v)).toMap
+    M_SORTASC -> { (_, args, off) =>
+      args match {
+        case Nil =>
+          Right(SortFn(None, asc = true))
+        case a1 :: Nil =>
+          expectGetPath(a1, M_SORTASC, off).map(p => SortFn(Some(p), asc = true))
         case _ =>
-          Map.empty[String, Fn[Any]] // template is not a constant, so defer resolution
-      InterpolateFn(recv, varMap)
+          Left(DLCompileError(off, s"Function sortAsc() expected 0 or 1 argument(s), got ${args.length}"))
+      }
     },
-    "substr" -> { (recv, args) =>
-      if args.isEmpty then throw new RuntimeException("substr() requires at least 1 argument")
-      val start = args.head.as[Int]
-      val endOpt = args.lift(1).map(_.as[Int])
-      SubstringFn(recv, start, endOpt)
+    M_SORTDESC -> { (_, args, off) =>
+      args match {
+        case Nil =>
+          Right(SortFn(None, asc = false))
+        case a1 :: Nil =>
+          expectGetPath(a1, M_SORTDESC, off).map(p => SortFn(Some(p), asc = false))
+        case _ =>
+          Left(DLCompileError(off, s"Function sortDesc() expected 0 or 1 argument(s), got ${args.length}"))
+      }
     },
-    "replace" -> { (recv, args) =>
-      checkArgs("replace", args, 2)
-      ReplaceFn(recv, args.head, args(1))
+    M_FILTER -> { (_, args, off) =>
+      for {
+        _     <- checkArgs(M_FILTER, args, 1, off)
+        pred  <- expectBoolean(args.head, M_FILTER, off)
+      } yield FilterFn(pred)
     },
-    "dateFmt" -> { (recv, args) =>
-      checkArgs("dateFmt", args, 1)
-      FormatDateFn(recv, args.head.as[String])
+    M_DISTINCT -> { (_, args, off) =>
+      args match {
+        case Nil =>
+          Right(DistinctFn(None))
+        case a1 :: Nil =>
+          expectGetPath(a1, M_DISTINCT, off).map(p => DistinctFn(Some(p)))
+        case _ =>
+          Left(DLCompileError(off, s"Function distinct() expected 0 or 1 argument(s), got ${args.length}"))
+      }
     },
-    "toDate" -> { (recv, args) =>
-      checkArgs("toDate", args, 1)
-      ParseDateFn(recv, args.head.as[String])
-    }
-    // TODO: Promote all the collection methods as regular functions too (predicates)
+    M_LIMIT -> { (_, args, off) =>
+      for {
+        _   <- checkArgs(M_LIMIT, args, 1, off)
+        n   <- expectConstInt(args.head, M_LIMIT, off)   // must be an int literal
+      } yield LimitFn(n)
+    },
+    M_REVERSE -> { (_, args, off) =>
+      for {
+        _ <- checkArgs(M_REVERSE, args, 0, off)
+      } yield ReverseFn()
+    },
+    M_CLEAN -> { (_, args, off) =>
+      for {
+        _ <- checkArgs(M_CLEAN, args, 0, off)
+      } yield CleanFn()
+    },
   )
-      */
 
   // ---- Collection Statements ----
 
@@ -356,7 +350,7 @@ trait Level1 extends Level0:
                           (using ctx: ExprContext): P[ParseStmtResult] = {
 
     case object SortAscMethod extends CollectionMethodParser {
-      val name = "sortAsc"
+      val name: String = M_SORTASC
 
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
         P(Index ~ pathBase.?).map {
@@ -374,7 +368,7 @@ trait Level1 extends Level0:
     }
 
     case object SortDescMethod extends CollectionMethodParser {
-      val name = "sortDesc"
+      val name: String = M_SORTDESC
 
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
         P(Index ~ pathBase.?).map {
@@ -392,7 +386,7 @@ trait Level1 extends Level0:
     }
 
     case object FilterMethod extends CollectionMethodParser {
-      val name = "filter"
+      val name: String = M_FILTER
 
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
         booleanExpr(using summon[ExprContext].copy(searchThis = true)).map {
@@ -402,7 +396,7 @@ trait Level1 extends Level0:
     }
 
     case object DistinctMethod extends CollectionMethodParser {
-      val name = "distinct"
+      val name: String = M_DISTINCT
 
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
         P(Index ~ pathBase.?).map {
@@ -418,7 +412,7 @@ trait Level1 extends Level0:
     }
 
     case object LimitMethod extends CollectionMethodParser {
-      val name = "limit"
+      val name: String = M_LIMIT
 
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
         P(Index ~ number).map {
@@ -431,7 +425,7 @@ trait Level1 extends Level0:
     }
 
     case object ReverseMethod extends CollectionMethodParser {
-      val name = "reverse"
+      val name: String = M_REVERSE
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
         P(Index ~ (("(" ~ WS0 ~ ")").?)).map { _ =>
           Right(ReverseFn())
@@ -439,7 +433,7 @@ trait Level1 extends Level0:
     }
 
     case object CleanMethod extends CollectionMethodParser {
-      val name = "clean"
+      val name: String = M_CLEAN
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
         P(Index ~ (("(" ~ WS0 ~ ")").?)).map { _ =>
           Right(CleanFn())

@@ -171,3 +171,15 @@ object Utility:
       )
     else ctx
 
+  def areTypesCompatible(lhs: SymbolType, rhs: SymbolType): Boolean =
+    (lhs, rhs) match {
+      case (SymbolType.Scalar, SymbolType.Scalar | SymbolType.Boolean) => true
+      case (SymbolType.Boolean, SymbolType.Boolean) => true
+      case (SymbolType.Map, SymbolType.Map) => true
+      case (SymbolType.List, SymbolType.List | SymbolType.OptionalList) => true
+      case (SymbolType.OptionalScalar, SymbolType.Scalar | SymbolType.OptionalScalar | SymbolType.None) => true
+      case (SymbolType.OptionalList, SymbolType.List | SymbolType.OptionalList | SymbolType.None) => true
+      case (SymbolType.OptionalMap, SymbolType.Map | SymbolType.OptionalMap | SymbolType.None) => true
+      case (SymbolType.None, SymbolType.None) => true
+      case _ => false
+    }

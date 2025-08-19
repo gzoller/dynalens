@@ -226,25 +226,25 @@ object NegativeAndLimits extends ZIOSpecDefault:
 //        case _         => assertTrue(false).label("Expected arrow misuse error")
 //      }
 //    },
-//    test("Optional scalar LHS with non-inferable RHS should fail") {
-//      // dunno?: Option[String], RHS is a boolean fn here
-//      val script = "dunno? = qty > 5"
-//      val a = dynalens[Maybe] // case class Maybe(id: String, dunno: Option[String], ...)
-//      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Maybe("id", None, None)))
-//      result match {
-//        case Left(err) => assertTrue(err.msg.contains("Unable to infer type of RHS"))
-//        case _         => assertTrue(false).label("Expected RHS inference/type error")
-//      }
-//    },
-//    test("Assigning None to non-optional field should fail") {
-//      val script = "qty = None"
-//      val a = dynalens[Item]
-//      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 3)))
-//      result match {
-//        case Left(err) => assertTrue(err.msg.contains("type mismatch"))
-//        case _         => assertTrue(false).label("Expected None→non-optional error")
-//      }
-//    }
+    test("Optional scalar LHS with non-inferable RHS should fail") {
+      // dunno?: Option[String], RHS is a boolean fn here
+      val script = "dunno? = 3 > 5"
+      val a = dynalens[Maybe] // case class Maybe(id: String, dunno: Option[String], ...)
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Maybe("id", None, None)))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Error: Type mismatch: cannot assign Boolean to OptionalScalar at dunno?"))
+        case _         => assertTrue(false).label("Expected RHS inference/type error")
+      }
+    },
+    test("Assigning None to non-optional field should fail") {
+      val script = "qty = None"
+      val a = dynalens[Item]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 3)))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Type mismatch: cannot assign None to Scalar at qty"))
+        case _         => assertTrue(false).label("Expected None→non-optional error")
+      }
+    },
     test("sortAsc with unknown key should fail") {
       val script = "pack.shipments.items.sortAsc(bogus)"
       val a = dynalens[Order] // whatever type has items[]
@@ -265,31 +265,35 @@ object NegativeAndLimits extends ZIOSpecDefault:
         case _         => assertTrue(false).label("Expected undeclared symbol error")
       }
     },
-
-    /* Fix (needs to Instance, not Item()) and re-enable after we have function kinds
     test("equalsIgnoreCase on non-strings should fail") {
       val script = """val b = items.equalsIgnoreCase("x")"""
       val a = dynalens[Shipment]
-      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("id", 7)))
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Shipment("aaa", List(Item("wow", 9, 5), Item("xyz", 1, 7), Item("abc", 19, 7)), 1)))
       result match {
-        case Left(err) => assertTrue(err.msg.contains("type mismatch"))
+        case Left(err) => assertTrue(err.msg.contains("Method 'equalsIgnoreCase' cannot be applied to list"))
         case _         => assertTrue(false).label("Expected string-only method type error")
       }
     },
-     */
-
-    /*
     test("Method not allowed on map/object receiver should fail") {
-      val script = "pack{}.filter(this > 0)" // if pack is an object/map-ish node
+      val script = "pack.filter(this > 0)" // if pack is an object/map-ish node
       val a = dynalens[Order]
-      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, /* instance */ ???))
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Order(
+        "ord1",
+        Pack(
+          "pallet",
+          2,
+          List(
+            Shipment("aaa", List(Item("wow", 9, 5), Item("xyz", 1, 7), Item("abc", 19, 7)), 1),
+            Shipment("bbb", List(Item("free", 7, 5), Item("ace", 5, 7), Item("xyz", 1, 7)), 1)
+          )
+        )
+      )
+      ))
       result match {
-        case Left(err) => assertTrue(err.msg.contains("not allowed on receiver"))
+        case Left(err) => assertTrue(err.msg.contains("filter() may only be applied to Iterable types, got: Pack"))
         case _         => assertTrue(false).label("Expected receiver kind error")
       }
     },
-    */
-
     test("filter using unknown relative field should fail") {
       val script = "giftNums[].filter(qty > 2)" // giftNums is List[Int], no 'qty' in element scope
       val inst = Registry("r1", List(1,2,3), Nil)

@@ -326,8 +326,11 @@ trait Level2 extends Level1:
                     val body = if (needsLoop) LoopFn(vfn) else vfn
                     Right((ctxForRhs, MapStmt(cleanPath, body)))
                   } else {
-                    // Do not leak 'this' into outer scope for plain updates
-                    Right((ctx, UpdateStmt(cleanPath, vfn)))
+                    if Utility.areTypesCompatible(lhsSym, rhsSym) then
+                        // Do not leak 'this' into outer scope for plain updates
+                      Right((ctx, UpdateStmt(cleanPath, vfn)))
+                    else
+                      Left(DLCompileError(rhsOff, s"Type mismatch: cannot assign $rhsSym to $lhsSym at $cleanPath"))
                   }
               }
           }

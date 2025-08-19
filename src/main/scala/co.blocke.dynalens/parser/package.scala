@@ -58,6 +58,18 @@ enum SymbolType:
   case OptionalMap
   case None
 
+private def pretty(sym: SymbolType): String =
+  sym match {
+    case SymbolType.Scalar => "scalar"
+    case SymbolType.Boolean => "boolean"
+    case SymbolType.Map => "map"
+    case SymbolType.List => "list"
+    case SymbolType.OptionalScalar => "optional scalar"
+    case SymbolType.OptionalList => "optional list"
+    case SymbolType.OptionalMap => "optional map"
+    case SymbolType.None => "none"
+  }
+
 case class ExprContext(
                         typeInfo: Map[String, Any],
                         sym: Map[String, SymbolType] = Map.empty,
@@ -69,3 +81,27 @@ case class ExprContext(
       typeInfo = this.typeInfo ++ that.typeInfo,
       sym = this.sym ++ that.sym
     )
+
+val M_STARTSWITH = "startsWith"
+val M_ENDSWITH = "endsWith"
+val M_CONTAINS = "contains"
+val M_EQUALSIGNORECASE = "equalsIgnoreCase"
+val M_MATCHESREGEX = "matchesRegex"
+val M_ELSE = "else"
+val M_ISDEFINED = "isDefined"
+val M_LEN = "len"
+val M_TOUPPERCASE = "toUpperCase"
+val M_TOLOWERCASE = "toLowerCase"
+val M_TRIM = "trim"
+val M_TEMPLATE = "template"
+val M_SUBSTR = "substr"
+val M_REPLACE = "replace"
+val M_DATEFMT = "dateFmt"
+val M_TODATE = "toDate"
+val M_SORTASC = "sortAsc"
+val M_SORTDESC = "sortDesc"
+val M_FILTER = "filter"
+val M_DISTINCT = "distinct"
+val M_LIMIT = "limit"
+val M_REVERSE = "reverse"
+val M_CLEAN = "clean"
