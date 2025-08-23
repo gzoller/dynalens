@@ -31,7 +31,7 @@ import NoWhitespace.*
 //   blocks (statement and fn)
 //   if support
 //
-trait Level2 extends Level1:
+trait Level2 extends Level1 with ValueExprModule:
 
   // ---- Boolean ----
 
@@ -141,11 +141,11 @@ trait Level2 extends Level1:
 
   private def arithmeticAtom[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(
-      baseExpr(valueExpr) | // already P[ParseFnResult]
+      baseExpr | // already P[ParseFnResult]
         numberLiteral | // P[ParseFnResult]
         stringLiteral | // P[ParseFnResult]
         ("(" ~/ valueExpr ~ ")").flatMap {
-          case Right(expr) => methodChain(expr, valueExpr) // attach trailing .methods to parenthesized expr
+          case Right(expr) => methodChain(expr) // attach trailing .methods to parenthesized expr
           case left@Left(_) => P(Pass(left))
         }
     )
@@ -192,6 +192,22 @@ trait Level2 extends Level1:
         }
     )
 
+//  def valueExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
+//    P(
+//      Index ~ (
+//        ifFn.map(r => ("ifFn", r))
+//          | blockFn.map(r => ("blockFn", r))
+//          | concatExpr.map(r => ("concatExpr", r))
+//          | booleanExpr.map {
+//          case Right(b) => ("booleanExpr", Right(b.asInstanceOf[Fn[Any]]))
+//          case Left(err) => ("booleanExpr", Left(err))
+//        }
+//        )
+//    ).map { case (i, (which, res)) =>
+//      println(s"[valueExpr]@${i}: chose $which -> ${res.fold(e => s"Left(${e.msg})", r => r.getClass.getSimpleName)}")
+//      res
+//      }
+
   def statementSeq[$: P](using ctx0: ExprContext): P[List[ParseStmtResult]] = {
     def loop(currentCtx: ExprContext): P[List[ParseStmtResult]] =
       P {
@@ -213,15 +229,17 @@ trait Level2 extends Level1:
   private def blockFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
     // Parse "{", WS, and the threaded statements first
     P("{" ~/ WS0 ~ {
-      given ExprContext = ctx; statementSeq
+      given ExprContext = ctx;
+      statementSeq
     }).flatMap { stmtResults =>
-      // Fold statements: merge ctx & collect stmts
+      // Fold statements: keep the latest threaded context and collect statements
       val folded: Either[DLCompileError, (ExprContext, List[Statement])] =
         stmtResults.foldLeft[Either[DLCompileError, (ExprContext, List[Statement])]](Right(ctx -> Nil)) {
           case (Left(e), _) => Left(e)
           case (_, Left(e)) => Left(e)
-          case (Right((ctxAcc, acc)), Right((newCtx, s))) =>
-            Right(ctxAcc.merge(newCtx) -> (acc :+ s))
+          case (Right((_, acc)), Right((newCtx, s))) =>
+            // newCtx already contains all prior updates; no merge needed
+            Right(newCtx -> (acc :+ s))
         }
 
       folded match
@@ -230,7 +248,7 @@ trait Level2 extends Level1:
           P(WS0 ~ "}").map(_ => Left(err): ParseFnResult)
 
         case Right((finalCtx, stmts)) =>
-          // Now parse the final expression under the merged context
+          // Now parse the final expression under the *final* threaded context
           given ExprContext = finalCtx
 
           P(valueExpr).flatMap {
@@ -245,17 +263,22 @@ trait Level2 extends Level1:
   // block { ... } as a *statement* block
   private def blockStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(
-      "{" ~/ WS0 ~
-        { given ExprContext = ctx; statementSeq } ~
+      "{" ~/ WS0 ~ {
+        given ExprContext = ctx; statementSeq
+      } ~
         WS0 ~ "}"
     ).map { stmtResults =>
-      stmtResults.foldLeft[Either[DLCompileError, (ExprContext, List[Statement])]](Right(ctx -> Nil)) {
-        case (Left(e), _) => Left(e)
-        case (_, Left(e)) => Left(e)
-        case (Right((ctxAcc, stmts)), Right((newCtx, stmt))) =>
-          Right(ctxAcc.merge(newCtx) -> (stmts :+ stmt))
-      } match {
-        case Left(err)             => Left(err)
+      val folded: Either[DLCompileError, (ExprContext, List[Statement])] =
+        stmtResults.foldLeft[Either[DLCompileError, (ExprContext, List[Statement])]](Right(ctx -> Nil)) {
+          case (Left(e), _) => Left(e)
+          case (_, Left(e)) => Left(e)
+          case (Right((_, acc)), Right((newCtx, stmt))) =>
+            // newCtx is already the threaded context after this stmt
+            Right(newCtx -> (acc :+ stmt))
+        }
+
+      folded match {
+        case Left(err) => Left(err)
         case Right((finalCtx, ss)) => Right((finalCtx, BlockStmt(ss)))
       }
     }
@@ -265,7 +288,8 @@ trait Level2 extends Level1:
       WS0 ~ (
         valDecl |
         ifStmt |
-        updateOrMapStmt() |
+        mapStmt |
+        updateStmt |
         blockStmt |
         collectionStmt(booleanExpr)
       ) ~ WS0
@@ -277,62 +301,64 @@ trait Level2 extends Level1:
       case (name, offset, Right(vfn)) =>
         Utility.rhsType(vfn) match
           case Some(symT) =>
-            val newCtx = ctx.copy(
-              typeInfo = ctx.typeInfo + (s"__val_$name" -> ""),
-              sym      = ctx.sym + (name -> symT)
-            )
+            // record the symbol in the lexical context; leave typeInfo (schema) untouched
+            val newCtx = ctx.withVals(name -> symT)
             Right((newCtx, ValStmt(name, vfn)))
-
           case None =>
-            Left(DLCompileError(offset, s"Unable to infer type for val '$name' from RHS: ${vfn.getClass.getSimpleName}"))
+            Left(DLCompileError(offset,
+              s"Unable to infer type for val '$name' from RHS: ${vfn.getClass.getSimpleName}"))
 
       case (_, _, Left(err)) =>
         Left(err)
     }
 
-  private def updateOrMapStmt[$: P]()(using ctx: ExprContext): P[ParseStmtResult] =
+  // '=': always assignment
+  private def updateStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(Index ~ pathBase ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
       CorrectPath.rewritePath(rawPath, pathOff) match {
-        case Left(err) =>
-          // Surface domain error as a successful parse that returns Left(...)
-          P(Pass(Left(err): ParseStmtResult))
-
+        case Left(err) => P(Pass(Left(err)))
         case Right(cleanPath) =>
-          // 1) Re-introduce 'this' typing for RHS parsing
           val ctxForRhs = Utility.addThisType(cleanPath, ctx)
+
           given ExprContext = ctxForRhs
 
           P(valueExpr ~ WS0).map {
-            case Left(e) =>
-              Left(e)
+            case Left(e) => Left(e)
+            case Right(vfn) =>
+              val lhsSym = Utility.getPathType(cleanPath)
+              Utility.rhsType(vfn) match {
+                case None => Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${vfn.getClass.getSimpleName}"))
+                case Some(rhsSym) =>
+                  if (Utility.areTypesCompatible(lhsSym, rhsSym))
+                    Right((ctx, UpdateStmt(cleanPath, vfn)))
+                  else
+                    Left(DLCompileError(rhsOff, s"Type mismatch: cannot assign $rhsSym to $lhsSym at $cleanPath"))
+              }
+          }
+      }
+    }
 
+  // '=>': always map
+  private def mapStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
+    P(Index ~ pathBase ~ WS0 ~ "=>" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
+      CorrectPath.rewritePath(rawPath, pathOff) match {
+        case Left(err) => P(Pass(Left(err)))
+        case Right(cleanPath) =>
+          // Set up receiver & scope so bare field names (`qty`) and `this` resolve relative to element
+          val ctxForRhs = Utility.addThisType(cleanPath, ctx)
+
+          given ExprContext = ctxForRhs
+
+          P(valueExpr ~ WS0).map {
+            case Left(e) => Left(e)
             case Right(vfn) =>
               val lhsSym = Utility.getPathType(cleanPath)
 
-              Utility.rhsType(vfn) match {
-                case None =>
-                  Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${vfn.getClass.getSimpleName}"))
+              // Decide whether the map body needs LoopFn (only when LHS is the terminal list itself)
+              val needsLoop = lhsSym == SymbolType.List || lhsSym == SymbolType.OptionalList
+              val body = if (needsLoop) LoopFn(vfn) else vfn
 
-                case Some(rhsSym) =>
-                  // Same map/update discriminator as before
-                  val isMap =
-                    cleanPath.contains("[]") &&
-                      !(lhsSym == SymbolType.OptionalList &&
-                        (rhsSym == SymbolType.None || rhsSym == SymbolType.OptionalList || rhsSym == SymbolType.List))
-
-                  if (isMap) {
-                    // 2) Restore the terminal-list loop case: foo[] = 9
-                    val needsLoop = lhsSym == SymbolType.List || lhsSym == SymbolType.OptionalList
-                    val body = if (needsLoop) LoopFn(vfn) else vfn
-                    Right((ctxForRhs, MapStmt(cleanPath, body)))
-                  } else {
-                    if Utility.areTypesCompatible(lhsSym, rhsSym) then
-                        // Do not leak 'this' into outer scope for plain updates
-                      Right((ctx, UpdateStmt(cleanPath, vfn)))
-                    else
-                      Left(DLCompileError(rhsOff, s"Type mismatch: cannot assign $rhsSym to $lhsSym at $cleanPath"))
-                  }
-              }
+              Right((ctx, MapStmt(cleanPath, body)))
           }
       }
     }

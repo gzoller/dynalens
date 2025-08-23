@@ -76,3 +76,98 @@ TODO:
     Option‑aware collection ops. Inside collection transforms (e.g., items[]), optional fields (?) are treated as absent values: None is skipped by default. Predicates only consider present values; mappers flatten out None. Use .default(...) to supply a value instead of skipping, or .present to filter to only present entries. For sorting/distinct, absent keys are grouped last (default).
 
     This keeps the language ergonomic for its core purpose, while still giving control when users need stricter behavior.
+
+
+final case class SortFn(recv: Fn[Any], keyPath: Option[String], ascending: Boolean)
+  extends Fn[Any] {
+
+  private def keyFn: Option[Fn[Any]] =
+    keyPath.map(p => GetFn(p, searchThis = true).asInstanceOf[Fn[Any]])
+
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    for {
+      raw   <- recv.resolve(ctx)
+      seq   <- ZIO.fromEither(asSeq(raw, "sort"))
+      out   <- keyFn match {
+                 case None =>
+                   // natural ordering of the elements themselves
+                   ZIO.attempt {
+                     val withAny = seq.asInstanceOf[Seq[Any]]
+                     val sorted = withAny.sortBy(_.asInstanceOf[Comparable[Any]]) // will throw if not comparable
+                     if (ascending) sorted else sorted.reverse
+                   }.mapError(t => DynaLensError(s"sort requires Comparable elements: ${t.getMessage}"))
+
+                 case Some(kf) =>
+                   // key-based ordering
+                   ZIO.foreach(seq){ e =>
+                     kf.resolve(withElemCtx(e, ctx)).map(k => (e, k))
+                   }.flatMap { pairs =>
+                     ZIO.attempt {
+                       val sorted = pairs.sortBy(_._2.asInstanceOf[Comparable[Any]])
+                       (if (ascending) sorted else sorted.reverse).map(_._1)
+                     }.mapError(t => DynaLensError(s"sort key must be Comparable: ${t.getMessage}"))
+                   }
+               }
+    } yield out
+}
+
+
+final case class DistinctFn(recv: Fn[Any], keyPath: Option[String]) extends Fn[Any] {
+  private def keyFn: Option[Fn[Any]] =
+    keyPath.map(p => GetFn(p, searchThis = true).asInstanceOf[Fn[Any]])
+
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    for {
+      raw <- recv.resolve(ctx)
+      seq <- ZIO.fromEither(asSeq(raw, "distinct"))
+      out <- keyFn match {
+               case None =>
+                 ZIO.succeed(seq.distinct) // uses equals/hashCode of elements
+               case Some(kf) =>
+                 ZIO.foreach(seq){ e =>
+                   kf.resolve(withElemCtx(e, ctx)).map(k => (k, e))
+                 }.map { pairs =>
+                   pairs
+                     .foldLeft((Set.empty[Any], Vector.empty[Any])) {
+                       case ((seen, acc), (k, e)) =>
+                         if (seen(k)) (seen, acc) else (seen + k, acc :+ e)
+                     }._2
+                 }
+             }
+    } yield out
+}
+
+final case class ReverseFn(recv: Fn[Any]) extends Fn[Any] {
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    for {
+      raw <- recv.resolve(ctx)
+      seq <- ZIO.fromEither(asSeq(raw, "reverse"))
+    } yield seq.reverse
+}
+
+    final case class CleanFn(recv: Fn[Any]) extends Fn[Any] {
+      def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+        for {
+          raw <- recv.resolve(ctx)
+          seq <- ZIO.fromEither(asSeq(raw, "clean"))
+        } yield seq.collect {
+          case s: String if s != null && s.nonEmpty => s
+          case x if x != null && !x.isInstanceOf[String] => x
+        }
+    }
+
+
+    //-----
+	2.	At runtime (value of this per iteration)
+On each iteration, you must also update the value of this in the runtime context (DynaContext) so GetFn("this") (or bare fields that rewrite to this.foo) can read the current element’s value.
+A tiny helper makes this clean:
+
+    // DynaLens.scala (inside your class)
+    private def withThis[A](
+      outerCtx: DynaContext,
+      value: Any,
+      elemLens: Option[DynaLens[_]]
+    )(run: DynaContext => ZIO[_BiMapRegistry, DynaLensError, A])
+    : ZIO[_BiMapRegistry, DynaLensError, A] =
+      // store exactly like the rest of your code expects: ("name" -> (value, maybeLens))
+      run(outerCtx.clone.addOne("this", (value, elemLens)))

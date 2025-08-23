@@ -70,17 +70,17 @@ private def pretty(sym: SymbolType): String =
     case SymbolType.None => "none"
   }
 
-case class ExprContext(
-                        typeInfo: Map[String, Any],
-                        sym: Map[String, SymbolType] = Map.empty,
-                        searchThis: Boolean = false,
-                        relativeFields: Map[String, Any] = Map.empty
-                      ):
-  def merge(that: ExprContext): ExprContext =
-    this.copy(
-      typeInfo = this.typeInfo ++ that.typeInfo,
-      sym = this.sym ++ that.sym
-    )
+//case class ExprContext(
+//                        typeInfo: Map[String, Any],
+//                        sym: Map[String, SymbolType] = Map.empty,
+//                        searchThis: Boolean = false,
+//                        relativeFields: Map[String, Any] = Map.empty
+//                      ):
+//  def merge(that: ExprContext): ExprContext =
+//    this.copy(
+//      typeInfo = this.typeInfo ++ that.typeInfo,
+//      sym = this.sym ++ that.sym
+//    )
 
 val M_STARTSWITH = "startsWith"
 val M_ENDSWITH = "endsWith"

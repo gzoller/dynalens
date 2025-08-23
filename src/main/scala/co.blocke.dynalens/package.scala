@@ -27,6 +27,35 @@ package co.blocke.dynalens
 // Map[ symbol, (value, lens?) ]
 type DynaContext = scala.collection.mutable.Map[String, (Any, Option[DynaLens[?]])]
 
+// somewhere shared (e.g., near DynaContext)
+def withElemCtx(elem: Any, ctx: DynaContext): DynaContext =
+  // store the element; no lens associated
+  ctx.updatedWith("this", (elem, None))
+
+import zio.*
+
+def withLoopSymbol[R](
+                               ctx: DynaContext,
+                               key: String,
+                               value: Any,
+                               lens: Option[DynaLens[?]]
+                             )(body: ZIO[_BiMapRegistry, DynaLensError, R]): ZIO[_BiMapRegistry, DynaLensError, R] =
+  ZIO.acquireReleaseWith(
+    ZIO.succeed {
+      val prev = ctx.get(key) // remember what was there (if anything)
+      ctx.update(key, (value, lens)) // shadow / insert
+      prev
+    }
+  )(prevOpt =>
+    ZIO.succeed {
+      prevOpt match {
+        case Some(prev) => ctx.update(key, prev) // restore prior binding
+        case None => ctx.remove(key) // remove if we introduced it
+      }
+      ()
+    }
+  )(_ => body)
+   
 object DynaContext:
   def apply(target: Any, lens: Option[DynaLens[?]]): DynaContext =
     scala.collection.mutable.Map("top" -> (target, lens))
@@ -53,3 +82,12 @@ enum SymbolType:
   case OptionalScalaWithDefault
   case OptionalList
   case OptionalMap
+
+
+def asSeq(v: Any, where: String): Either[DynaLensError, Seq[Any]] =
+  v match {
+    case null                  => Right(Seq.empty)               // be lenient
+    case s: Seq[_]             => Right(s.asInstanceOf[Seq[Any]])
+    case it: Iterable[_]       => Right(it.toSeq.asInstanceOf[Seq[Any]])
+    case other                 => Left(DynaLensError(s"$where expected a collection, got: ${other.getClass.getSimpleName}"))
+  }

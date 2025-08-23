@@ -32,17 +32,14 @@ object Grammar extends Level2 {
     given ExprContext = ctx
     statementSeq.map { stmtsE =>
       stmtsE.foldLeft[Either[DLCompileError, (ExprContext, List[Statement])]](Right(ctx -> Nil)) {
-        case (Left(err), _) =>
-          Left(err)
-        case (_, Left(err)) =>
-          Left(err)
-        case (Right((ctxAcc, stmts)), Right((newCtx, stmt))) =>
-          val mergedCtx = ctxAcc.merge(newCtx)
-          Right(mergedCtx -> (stmts :+ stmt))
+        case (Left(err), _)                  => Left(err)
+        case (_, Left(err))                  => Left(err)
+        case (Right((_, accStmts)), Right((newCtx, stmt))) =>
+          // Thread the latest context forward; no merge
+          Right(newCtx -> (accStmts :+ stmt))
       } match {
-        case Left(err)         => Left(err)
-        case Right((_, stmts)) =>
-          Right(BlockStmt(stmts))
+        case Left(err)            => Left(err)
+        case Right((_, stmts))    => Right(BlockStmt(stmts))
       }
     }
   }

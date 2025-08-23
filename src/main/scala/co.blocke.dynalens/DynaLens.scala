@@ -360,6 +360,7 @@ case class DynaLens[T](
       dynalens
         .map(lens =>
           paths match {
+            /*
             case pathParts :: Nil =>
               val partialPath = Path.partialPath(pathParts)
               for {
@@ -371,6 +372,49 @@ case class DynaLens[T](
                 _ = ctx.put("this", (in, maybeLens)) // assign loop param variable
                 enrichedCtx = outerCtx ++ ctx.toMap // <-- merge loop context with outer context
                 out <- fn.resolve(enrichedCtx)
+                updated <- lens.update(partialPath, out, refObj.asInstanceOf[lens.ThisT])
+              } yield updated
+             */
+            case pathParts :: Nil =>
+              // --- inside processPaths, base case: case pathParts :: Nil => ---
+              val partialPath = Path.partialPath(pathParts)
+              for {
+                in <- lens._getValue(pathParts, refObj.asInstanceOf[lens.ThisT])
+
+                maybeLeafLens =
+                  pathParts.last match {
+                    case IndexedField(p, _, _) => lens._registry.get(p).orElse(None)
+                    case Field(_, _)           => None
+                  }
+
+                _ = println(s"[map.base] path=$path  partial=$partialPath  leaf(in)=${Option(in).map(_.getClass.getSimpleName).getOrElse("null")}  value=$in")
+
+                // bind this = leaf value
+                leafCtx = ctx.updatedWith("this", (in, maybeLeafLens))
+
+                // show what we're actually putting into ctx
+                _ = {
+                  val hasThis = leafCtx.contains("this")
+                  val lensTag = maybeLeafLens.map(_.getClass.getSimpleName).getOrElse("None")
+                  val keys    = leafCtx.keys.mkString(",")
+                  println(s"[map.base] bind this => value=$in lens=$lensTag  ctxKeys=[$keys]  hasThis=$hasThis")
+                }
+
+                enrichedCtx = outerCtx ++ leafCtx.toMap
+
+                // show merged outer + leaf ctx
+                _ = {
+                  val keys = enrichedCtx.keys.mkString(",")
+                  println(s"[map.base] enrichedCtx keys=[$keys]  hasThis=${enrichedCtx.contains("this")}")
+                }
+
+                out <- {
+                  println(s"[map.base] resolving RHS fn=${fn.getClass.getSimpleName} with this=${in}")
+                  fn.resolve(enrichedCtx)
+                }
+
+                _ = println(s"[map.base] RHS result=$out (${Option(out).map(_.getClass.getSimpleName).getOrElse("null")})")
+
                 updated <- lens.update(partialPath, out, refObj.asInstanceOf[lens.ThisT])
               } yield updated
 

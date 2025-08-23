@@ -45,17 +45,7 @@ object Utility:
       if (isOpt) SymbolType.OptionalScalar else SymbolType.Scalar
     }
   }
-
-  /*
-  enum SymbolType:
-  case Scalar  // Fn[Any]
-  case Boolean  // BooleanFn
-  case Map
-  case List
-  case OptionalSimple
-  case OptionalList
-  case OptionalMap
-    */
+  
   def rhsType( fn: Fn[?] )(using ctx: ExprContext): Option[SymbolType] =
     val fnName = fn.getClass.getSimpleName
     fn match {
@@ -154,22 +144,9 @@ object Utility:
       case Some(s: String) => s
       case _ => "" // fallback: treat as scalar
 
+  // Utility.scala
   def addThisType(path: String, ctx: ExprContext): ExprContext =
-    if path != "this" && !ctx.relativeFields.contains("this") then
-      val targetSym: SymbolType = getPathType(path)
-      val endsAtElement = {
-        val last = path.split("\\.").lastOption.getOrElse("")
-        last.matches(""".*\[(\d+)?\]\??$""")
-      }
-      val thisFields: Map[String, Any] =
-        if (endsAtElement) elementSchemaFor(path, ctx.typeInfo) // element schema (minus __type)
-        else Map.empty // field value is scalar/leaf so no schema
-      ctx.copy(
-        relativeFields = ctx.relativeFields + ("this" -> thisFields),
-        // NOTE: do NOT set searchThis here
-        sym = ctx.sym + ("this" -> targetSym)
-      )
-    else ctx
+    if (path == "this") ctx else ctx.withReceiverFromPath(path)
 
   def areTypesCompatible(lhs: SymbolType, rhs: SymbolType): Boolean =
     (lhs, rhs) match {
@@ -183,3 +160,8 @@ object Utility:
       case (SymbolType.None, SymbolType.None) => true
       case _ => false
     }
+
+//  inline def resolveField(name: String)(using ctx: ExprContext): Option[Any] =
+//    ctx.resolveField(name)
+//  inline def resolveSymbol(name: String)(using ctx: ExprContext): Option[SymbolType] =
+//    ctx.resolveSymbol(name)

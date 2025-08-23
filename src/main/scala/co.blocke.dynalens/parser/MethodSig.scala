@@ -115,7 +115,7 @@ object MethodSig:
     def upon: Set[SymbolType] = Set(SymbolType.List, SymbolType.OptionalList)
     def out(r: SymbolType): SymbolType = r
 
-  private object FilterAscSig extends MethodSig:
+  private object FilterSig extends MethodSig:
     def upon: Set[SymbolType] = Set(SymbolType.List, SymbolType.OptionalList)
     def out(r: SymbolType): SymbolType = r
 
@@ -163,7 +163,7 @@ object MethodSig:
     // collection methods
     "sortAsc"          -> SortAscSig,
     "sortDesc"         -> SortDescSig,
-    "filter"           -> FilterAscSig,   // parser-side “filter(...)”
+    "filter"           -> FilterSig,   // parser-side “filter(...)”
     "distinct"         -> DistinctSig,
     "limit"            -> LimitSig,
     "reverse"          -> ReverseAscSig,
