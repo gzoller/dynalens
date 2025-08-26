@@ -27,6 +27,8 @@ import zio.test.*
 import DynaLens.*
 import parser.Script
 
+import CtxStrings.*
+
 object NegativeAndLimits extends ZIOSpecDefault:
 
   def spec = suite("Negative and Limits Tests")(
@@ -41,7 +43,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(flag,IfFn(GreaterThanFn(GetFn(qty,false),ConstantFn(5)),BlockFn(List(),ConstantFn(big)),BlockFn(List(),ConstantFn(small))))))"""
+        """BlockStmt(List(ValStmt(flag,IfFn(GreaterThanFn(GetFn(qty),ConstantFn(5)),BlockFn(List(),ConstantFn(big)),BlockFn(List(),ConstantFn(small))))))"""
 
       val inst = Item("abc", 6)
       val a = dynalens[Item]
@@ -108,7 +110,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Registry]
 
       val expected = Registry("r1", Nil, List("a", "b"))
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftDesc[],CleanFn())))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftDesc[],CleanFn(IdentityFn))))"""
       val expectedResult = "top -> Registry(r1,List(),List(a, b))\n"
 
       for {
@@ -127,7 +129,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Registry]
 
       val expected = Registry("r1", List(3, 4), Nil)
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums[],FilterFn(GreaterThanFn(GetFn(this,true),ConstantFn(2))))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums[],FilterFn(IdentityFn,GreaterThanFn(GetFn(this),ConstantFn(2))))))"""
       val expectedResult = "top -> Registry(r1,List(3, 4),List())\n"
 
       for {
@@ -165,7 +167,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Shipment]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, /* your instance */ ???))
       result match {
-        case Left(err) => assertTrue(err.msg.contains("Field 'bogus' does not exist in typeInfo"))
+        case Left(err) => assertTrue(err.msg.contains("Error: Field 'bogus' does not exist here"))
         case _         => assertTrue(false).label("Expected unknown field error")
       }
     },
@@ -213,7 +215,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Item]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 3)))
       result match {
-        case Left(err) => assertTrue(err.msg.contains("Field not found: this"))
+        case Left(err) => assertTrue(err.msg.contains("Use of 'this' with no receiver in scope"))
         case _         => assertTrue(false).label("Expected 'this' misuse error")
       }
     },
@@ -270,7 +272,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Shipment]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Shipment("aaa", List(Item("wow", 9, 5), Item("xyz", 1, 7), Item("abc", 19, 7)), 1)))
       result match {
-        case Left(err) => assertTrue(err.msg.contains("Method 'equalsIgnoreCase' cannot be applied to list"))
+        case Left(err) => assertTrue(err.msg.contains("equalsIgnoreCase receiver may only be applied to a single value, not an Iterable"))
         case _         => assertTrue(false).label("Expected string-only method type error")
       }
     },
@@ -290,7 +292,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       )
       ))
       result match {
-        case Left(err) => assertTrue(err.msg.contains("filter() may only be applied to Iterable types, got: Pack"))
+        case Left(err) => assertTrue(err.msg.contains("filter expected a collection, got: Pack"))
         case _         => assertTrue(false).label("Expected receiver kind error")
       }
     },

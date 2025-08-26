@@ -192,22 +192,6 @@ trait Level2 extends Level1 with ValueExprModule:
         }
     )
 
-//  def valueExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
-//    P(
-//      Index ~ (
-//        ifFn.map(r => ("ifFn", r))
-//          | blockFn.map(r => ("blockFn", r))
-//          | concatExpr.map(r => ("concatExpr", r))
-//          | booleanExpr.map {
-//          case Right(b) => ("booleanExpr", Right(b.asInstanceOf[Fn[Any]]))
-//          case Left(err) => ("booleanExpr", Left(err))
-//        }
-//        )
-//    ).map { case (i, (which, res)) =>
-//      println(s"[valueExpr]@${i}: chose $which -> ${res.fold(e => s"Left(${e.msg})", r => r.getClass.getSimpleName)}")
-//      res
-//      }
-
   def statementSeq[$: P](using ctx0: ExprContext): P[List[ParseStmtResult]] = {
     def loop(currentCtx: ExprContext): P[List[ParseStmtResult]] =
       P {
@@ -343,21 +327,22 @@ trait Level2 extends Level1 with ValueExprModule:
     P(Index ~ pathBase ~ WS0 ~ "=>" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
       CorrectPath.rewritePath(rawPath, pathOff) match {
         case Left(err) => P(Pass(Left(err)))
-        case Right(cleanPath) =>
-          // Set up receiver & scope so bare field names (`qty`) and `this` resolve relative to element
-          val ctxForRhs = Utility.addThisType(cleanPath, ctx)
 
-          given ExprContext = ctxForRhs
+        case Right(cleanPath) =>
+          // base ctx that sets receiver/this for the element
+          val ctxBase = Utility.addThisType(cleanPath, ctx)
+          // NEW: expose in-stream collections (e.g., shipments, items) to RHS
+          val loopScope = Utility.loopScopeFor(cleanPath, ctxBase.typeInfo)
+
+          given ExprContext = ctxBase.pushScope(loopScope)
 
           P(valueExpr ~ WS0).map {
             case Left(e) => Left(e)
             case Right(vfn) =>
               val lhsSym = Utility.getPathType(cleanPath)
-
-              // Decide whether the map body needs LoopFn (only when LHS is the terminal list itself)
               val needsLoop = lhsSym == SymbolType.List || lhsSym == SymbolType.OptionalList
-              val body = if (needsLoop) LoopFn(vfn) else vfn
-
+              val body = if needsLoop then LoopFn(vfn) else vfn
+              // return original outer ctx; the pushed scope is only for RHS parsing
               Right((ctx, MapStmt(cleanPath, body)))
           }
       }

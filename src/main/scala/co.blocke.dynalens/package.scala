@@ -21,6 +21,7 @@
 
 package co.blocke.dynalens
 
+/*
 //
 // DynaContext used during runtime execution of compiled scripts
 //
@@ -33,6 +34,29 @@ def withElemCtx(elem: Any, ctx: DynaContext): DynaContext =
   ctx.updatedWith("this", (elem, None))
 
 import zio.*
+
+def withCollectionSymbol[R](
+                                     ctx: DynaContext,
+                                     loopKey: String,
+                                     iterable: Iterable[?]
+                                   )(body: => ZIO[_BiMapRegistry, DynaLensError, R]): ZIO[_BiMapRegistry, DynaLensError, R] = {
+  val key = loopKey + "[]"
+  val prev: Option[(Any, Option[DynaLens[?]])] = ctx.get(key)
+
+  // set
+  ctx.update(key, (iterable, None))
+
+  // run body and restore/remove on exit
+  body.ensuring(
+    ZIO.succeed {
+      prev match {
+        case Some(old) => ctx.update(key, old)
+        case None => ctx.remove(key)
+      }
+      ()
+    }
+  )
+}
 
 def withLoopSymbol[R](
                                ctx: DynaContext,
@@ -55,7 +79,7 @@ def withLoopSymbol[R](
       ()
     }
   )(_ => body)
-   
+
 object DynaContext:
   def apply(target: Any, lens: Option[DynaLens[?]]): DynaContext =
     scala.collection.mutable.Map("top" -> (target, lens))
@@ -67,10 +91,9 @@ extension (ctx: DynaContext)
     val copy = ctx.clone().asInstanceOf[DynaContext]
     copy += (k -> v)
     copy
-
+*/
 
 final case class DynaLensError (msg: String) extends Exception(msg)
-//final case class CompileException (rendered: String) extends Exception (rendered)
 
 //
 // ExprContext used during compilation

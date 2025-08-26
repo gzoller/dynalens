@@ -38,11 +38,3 @@ case class Maybe(id: String, dunno: Option[String] = None, interest: Option[List
 case class MyLists(id: Int, l1: List[Int], l2: Option[List[Int]])
 case class ListOfOpt(id: Int, l1: List[Option[Int]])
 
-// Utility fn for testing
-def toStringCtx(ctx: DynaContext): String = {
-  val sb = new StringBuffer()
-  ctx.toList.sortBy(_._1).foreach { case (key, (value, _)) =>
-    sb.append(s"$key -> $value\n")
-  }
-  sb.toString
-}

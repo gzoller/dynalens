@@ -22,7 +22,7 @@
 package co.blocke.dynalens
 
 import zio.*
-import Path.*
+import java.util.Locale
 
 trait Fn[+R]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, R]
@@ -111,28 +111,49 @@ case class GetFn(path: String) extends Fn[Any] {
     }
   }
 
-  private def getFromTop(fullPath: String, ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
-    ctx.get("top") match {
-      case Some((obj, Some(dynalens))) =>
-        // Delegate full path to the top lens
-        dynalens.get(fullPath, obj.asInstanceOf[dynalens.ThisT])
-
-      case Some((obj, None)) =>
-        // No top lens: fall back to generic walking
-        ZIO.fromEither(
-          walk(obj, parsePath(fullPath))
-        )
+  private def getFromTop(fullPath: String, ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] = {
+    val parts = parsePath(fullPath)
+    parts match {
+      case Path.IndexedField(base, None, _) :: rest if ctx.contains(base) || ctx.contains(base + "[]") =>
+        if (rest.isEmpty) {
+          // prefer the collection binding if present
+          ctx.get(base + "[]") match {
+            case Some((coll, _)) => ZIO.succeed(coll)
+            case None =>
+              ctx.get(base) match {
+                case Some((v, _)) => ZIO.succeed(v)
+                case None         => ZIO.fail(DynaLensError(s"Symbol '$base' not found in context"))
+              }
+          }
+        } else {
+          // tail exists → resolve off the current element binding as you already do
+          ctx.get(base) match {
+            case Some((v, Some(bl))) => bl.get(Path.partialPath(rest), v.asInstanceOf[bl.ThisT])
+            case Some((v, None))     => ZIO.fromEither(walk(v, rest))
+            case None                => ZIO.fail(DynaLensError(s"Symbol '$base' not found in context"))
+          }
+        }
 
       case _ =>
-        ZIO.fail(DynaLensError(s"Missing 'top' in context for path '$fullPath'"))
+        // original top-lens / generic walk
+        ctx.get("top") match {
+          case Some((obj, Some(dynalens))) => dynalens.get(fullPath, obj.asInstanceOf[dynalens.ThisT])
+          case Some((obj, None))           => ZIO.fromEither(walk(obj, parts))
+          case _                           => ZIO.fail(DynaLensError(s"Missing 'top' in context for path '$fullPath'"))
+        }
     }
+  }
 
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] = {
-    val parts = parsePath(path)
+    if (!path.contains('.') && path.endsWith("[]")) {
+      val k = path // exactly "items[]", "orders[]", ...
+      if (ctx.contains(k)) {
+        val v = ctx(k)._1
+        return ZIO.succeed(v)
+      }
+    }
 
-    // ZZZ only for debugging
-    if (path == "this" || path.startsWith("this."))
-      println(s"[GetFn] path=$path  ctxKeys=${ctx.keys.mkString(",")}  hasThis=${ctx.contains("this")}")
+    val parts = parsePath(path)
 
     parts match {
       case Field("this", _) :: Nil =>
@@ -147,7 +168,6 @@ case class GetFn(path: String) extends Fn[Any] {
           case None => ZIO.fail(DynaLensError("Use of 'this' with no receiver in scope"))
         }
 
-      // >>> changed branch starts here
       case (first@IndexedField(name, _, _)) :: rest if ctx.contains(name) =>
         ctx.get(name) match {
           case Some((v, _)) =>
@@ -163,12 +183,27 @@ case class GetFn(path: String) extends Fn[Any] {
           case None =>
             getFromTop(path, ctx)
         }
-      // <<< changed branch ends here
 
+      case Path.IndexedField(name, None, _) :: rest if ctx.contains(name + "[]") =>
+        ctx.get(name + "[]") match {
+          case Some((coll: Iterable[?] @unchecked, _)) =>
+            if (rest.isEmpty) ZIO.succeed(coll) // "items[]" alone → whole list
+            else ZIO.fail(
+              DynaLensError(
+                s"Internal: wildcard index for '$name[]' with a remaining path ('${Path.partialPath(rest)}'); " +
+                  s"this should be resolved via an element context, not the top lens."
+              )
+            )
+          case Some((other, _)) =>
+            ZIO.fail(DynaLensError(s"Expected iterable bound at '$name[]', found: ${other.getClass.getSimpleName}"))
+          case None =>
+            ZIO.fail(DynaLensError(s"Missing collection binding for '$name[]'"))
+        }
+
+      // existing: first segment bound in ctx (vals/loop symbol), using first.name ("items")
       case first :: rest if ctx.contains(first.name) =>
         ctx.get(first.name) match {
           case Some((v, None)) if rest.isEmpty =>
-            // NOTE: this is safe for non-indexed first segment
             ZIO.succeed(v)
           case Some((v, None)) =>
             ZIO.fromEither(walk(v, rest))
@@ -295,7 +330,6 @@ case class LessThanFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn:
     for {
       l <- left.resolve(ctx)
       r <- right.resolve(ctx)
-      _ <- ZIO.succeed(println(s"[${getClass.getSimpleName}] ctxKeys=${ctx.keys.mkString(",")}"))
       result <- (l, r) match
         case (l: Int, r: Int)         => ZIO.succeed(l < r)
         case (l: Int, r: Long)        => ZIO.succeed(l.asInstanceOf[Long] < r.asInstanceOf[Long])
@@ -415,40 +449,76 @@ case class toBooleanFn(inner: Fn[Any]) extends BooleanFn {
 
 // ---- String Boolean Funcitons ----
 
-case class StartsWithFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
-    for {
-      l <- left.resolve(ctx)
-      r <- right.resolve(ctx)
-    } yield l.startsWith(r)
+// Helpers
+private def toStr(v: Any, op: String): Either[DynaLensError, String] = v match {
+  case null => Right("")
+  case None => Right("")
+  case s: String => Right(s)
+  case cs: CharSequence => Right(cs.toString)
+  case _: Iterable[?] => Left(DynaLensError(s"$op may only be applied to a single value, not an Iterable"))
+  case _: Array[?] => Left(DynaLensError(s"$op may only be applied to a single value, not an Array"))
+  case p: Product => Right(p.toString) // case classes/tuples become "a(b,c)"
+  case other => Right(other.toString) // numbers, booleans, etc.
+}
+private def toDbl(v: String, op: String): Either[DynaLensError, Double] =
+  try Right(v.toDouble)
+  catch {
+    case _: NumberFormatException =>
+      Left(DynaLensError(s"$op expected a numeric value for formatting, but got: '$v'"))
+  }
 
-case class EndsWithFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
+case class StartsWithFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
-      l <- left.resolve(ctx)
-      r <- right.resolve(ctx)
-    } yield l.endsWith(r)
+      aAny <- recv.resolve(ctx)
+      bAny <- other.resolve(ctx)
+      aStr <- ZIO.fromEither(toStr(aAny, "startsWith receiver"))
+      bStr <- ZIO.fromEither(toStr(bAny, "startsWith argument"))
+    } yield aStr.startsWith(bStr)
+}
 
-case class ContainsFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
+case class EndsWithFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
-      l <- left.resolve(ctx)
-      r <- right.resolve(ctx)
-    } yield l.contains(r)
+      aAny <- recv.resolve(ctx)
+      bAny <- other.resolve(ctx)
+      aStr <- ZIO.fromEither(toStr(aAny, "endsWith receiver"))
+      bStr <- ZIO.fromEither(toStr(bAny, "endsWith argument"))
+    } yield aStr.endsWith(bStr)
+}
 
-case class EqualsIgnoreCaseFn(left: Fn[String], right: Fn[String]) extends BooleanFn:
+case class ContainsFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
-      l <- left.resolve(ctx)
-      r <- right.resolve(ctx)
-    } yield l.equalsIgnoreCase(r)
+      aAny <- recv.resolve(ctx)
+      bAny <- other.resolve(ctx)
+      aStr <- ZIO.fromEither(toStr(aAny, "contains receiver"))
+      bStr <- ZIO.fromEither(toStr(bAny, "contains argument"))
+    } yield aStr.contains(bStr)
+}
 
-case class MatchesRegexFn(left: Fn[String], regex: Fn[String]) extends BooleanFn:
+case class EqualsIgnoreCaseFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
-      l <- left.resolve(ctx)
-      r <- regex.resolve(ctx)
-    } yield l.matches(r)
+      aAny <- recv.resolve(ctx)
+      bAny <- other.resolve(ctx)
+      aStr <- ZIO.fromEither(toStr(aAny, "equalsIgnoreCase receiver"))
+      bStr <- ZIO.fromEither(toStr(bAny, "equalsIgnoreCase argument"))
+    } yield aStr.equalsIgnoreCase(bStr)
+}
+
+case class MatchesRegexFn(recv: Fn[Any], pattern: Fn[Any]) extends BooleanFn {
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+    for {
+      aAny <- recv.resolve(ctx)
+      pAny <- pattern.resolve(ctx)
+      aStr <- ZIO.fromEither(toStr(aAny, "matchesRegex receiver"))
+      pStr <- ZIO.fromEither(toStr(pAny, "matchesRegex pattern"))
+      // compile once; fail cleanly on bad regexes
+      pat  <- ZIO.attempt(java.util.regex.Pattern.compile(pStr))
+        .mapError(e => DynaLensError(s"Invalid regex: ${e.getMessage}"))
+    } yield pat.matcher(aStr).matches()
+}
 
 // --- Arithmetic  Functions ----
 
@@ -628,26 +698,26 @@ case class DivideFn(
 
 // --- String Builder Functions ----
 
-case class TrimFn(in: Fn[Any]) extends Fn[String]:
+case class TrimFn(in: Fn[Any]) extends Fn[String] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
-    in.resolve(ctx).map {
-      case null => ""
-      case s    => s.toString.trim
+    in.resolve(ctx).flatMap { v =>
+      ZIO.fromEither(toStr(v, "trim()")).map(_.trim)
     }
+}
 
-case class ToLowerFn(in: Fn[Any]) extends Fn[String]:
+case class ToLowerFn(in: Fn[Any]) extends Fn[String] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
-    in.resolve(ctx).map {
-      case null => ""
-      case s    => s.toString.toLowerCase
+    in.resolve(ctx).flatMap { v =>
+      ZIO.fromEither(toStr(v, "toLowerCase()")).map(_.toLowerCase)
     }
+}
 
-case class ToUpperFn(in: Fn[Any]) extends Fn[String]:
+case class ToUpperFn(in: Fn[Any]) extends Fn[String] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
-    in.resolve(ctx).map {
-      case null => ""
-      case s    => s.toString.toUpperCase
+    in.resolve(ctx).flatMap { v =>
+      ZIO.fromEither(toStr(v, "toUpperCase()")).map(_.toUpperCase)
     }
+}
 
 case class ConcatFn(parts: List[Fn[Any]]) extends Fn[String]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
@@ -658,65 +728,68 @@ case class ConcatFn(parts: List[Fn[Any]]) extends Fn[String]:
         case s    => s.toString
       }.mkString)
 
-case class InterpolateFn(template: Fn[Any], variables: Map[String, Fn[Any]]) extends Fn[String]:
-
+case class InterpolateFn(template: Fn[Any], variables: Map[String, Fn[Any]]) extends Fn[String] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     for {
-      templStr <- template.resolve(ctx).map {
-        case null => ""
-        case s    => s.toString
+      templStr <- template.resolve(ctx).flatMap { v =>
+        ZIO.fromEither(toStr(v, "interpolate(template)"))
       }
 
-      // If we don’t already have variables mapped, extract them from the template
       varsToUse =
-        if variables.isEmpty then TemplateUtils.extractVariables(templStr).map(v => v -> GetFn(v)).toMap
+        if (variables.isEmpty)
+          TemplateUtils.extractVariables(templStr).map(v => v -> GetFn(v)).toMap
         else variables
 
       resolvedVars <- ZIO.foreach(varsToUse.toList) { case (k, fn) =>
-        fn.resolve(ctx).map(v => k -> Option(v).map(_.toString).getOrElse(""))
+        fn.resolve(ctx).flatMap { v =>
+          ZIO.fromEither(toStr(v, s"interpolate($k)")).map(str => k -> str)
+        }
       }
 
-      result = {
-        val varMap = resolvedVars.toMap
+      result <- ZIO
+        .attempt {
+          val varMap = resolvedVars.toMap
 
-        // This regex captures:
-        // 1. variable name with dot/bracket support
-        // 2. optional format string
-        // 3. optional default value
-        val pattern =
-          """\{([a-zA-Z_][a-zA-Z0-9_]*(?:\[[0-9]+\]|\.[a-zA-Z_][a-zA-Z0-9_]*(?:\[[0-9]+\])?)*)(?:%([^}:]+))?(?::([^}]+))?\}""".r
+          val pattern =
+            """\{([a-zA-Z_][a-zA-Z0-9_]*(?:\[[0-9]+\]|\.[a-zA-Z_][a-zA-Z0-9_]*(?:\[[0-9]+\])?)*)(?:%([^}:]+))?(?::([^}]+))?\}""".r
 
-        pattern.replaceAllIn(
-          templStr,
-          m => {
-            val varName = m.group(1)
-            val formatOpt = Option(m.group(2)) // e.g., 0.2f
-            val defaultOpt = Option(m.group(3)) // fallback string
-            val rawValueOpt = varMap.get(varName).filter(_.nonEmpty)
+          pattern.replaceAllIn(
+            templStr,
+            m => {
+              val varName = m.group(1)
+              val fmtOpt = Option(m.group(2)) // e.g. "0.2f"
+              val dfltOpt = Option(m.group(3)) // fallback string
+              val valueOpt = varMap.get(varName).filter(_.nonEmpty)
 
-            (rawValueOpt, formatOpt) match {
-              case (Some(value), Some(fmt)) =>
-                try String.format(s"%$fmt", value.toDouble)
-                catch case _: Throwable => value
+              (valueOpt, fmtOpt) match {
+                case (Some(value), Some(fmt)) =>
+                  toDbl(value, s"interpolate($varName)").fold(
+                    _ => value,
+                    d => String.format(Locale.US, s"%$fmt", Double.box(d))
+                  )
 
-              case (Some(value), None) =>
-                value
+                case (Some(value), None) =>
+                  value
 
-              case (None, Some(fmt)) =>
-                defaultOpt match {
-                  case Some(dflt) =>
-                    try String.format(s"%$fmt", dflt.toDouble)
-                    catch case _: Throwable => dflt
-                  case None => ""
-                }
+                case (None, Some(fmt)) =>
+                  dfltOpt match {
+                    case Some(dflt) =>
+                      toDbl(dflt, s"interpolate(default for $varName)").fold(
+                        _ => dflt,
+                        d => String.format(Locale.US, s"%$fmt", Double.box(d))
+                      )
+                    case None => ""
+                  }
 
-              case (None, None) =>
-                defaultOpt.getOrElse("")
+                case (None, None) =>
+                  dfltOpt.getOrElse("")
+              }
             }
-          }
-        )
-      }
+          )
+        }
+        .mapError(th => DynaLensError(s"interpolate() failed: ${th.getMessage}"))
     } yield result
+}
 
 // Extract vars for interpolation
 object TemplateUtils {
@@ -861,27 +934,36 @@ case class SortFn(recv: Fn[Any], keyPath: Option[String], asc: Boolean = true) e
 case class DistinctFn(recv: Fn[Any], fieldPath: Option[String]) extends Fn[Any] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      raw <- recv.resolve(ctx)
-      seq <- ZIO.fromEither(asSeq(raw, "distinct"))
-      out <- fieldPath match {
-        case Some(p) =>
-          val keyFn = GetFn(p) // p is a corrected path; likely "this.foo" for fields
-          for {
-            pairs <- ZIO.foreach(seq) { e =>
-              keyFn.resolve(withElemCtx(e, ctx)).map(k => (k, e))
-            }
-            deduped = pairs
-              .groupBy(_._1)          // group by key
-              .values
-              .map(_.head._2)         // keep first element per key
-              .toList
-          } yield deduped
+      raw   <- recv.resolve(ctx)
+      items <- ZIO.fromEither(asSeq(raw, "distinct")) // or asIterable; returns Seq[Any]
 
+      pairs <- fieldPath match {
         case None =>
-          // distinct on whole elements (uses equals/hashCode)
-          ZIO.succeed(seq.distinct.toList)
+          // distinct by whole element (preserve first occurrence)
+          ZIO.succeed(items.map(x => (x, x)))
+
+        case Some(rawKey) =>
+          // accept both "number" and "this.number"
+          val keyPath =
+            if (rawKey.startsWith("this.")) rawKey
+            else s"this.$rawKey"
+
+          ZIO.foreach(items) { item =>
+            val itemCtx = withElemCtx(item, ctx) // bind this=item
+            GetFn(keyPath).resolve(itemCtx).map(k => (k, item))
+          }
       }
-    } yield out
+
+      // preserve first occurrence of each key (stable)
+      deduped = {
+        val seen = scala.collection.mutable.HashSet[Any]()
+        val buf  = scala.collection.mutable.ArrayBuffer[Any]()
+        pairs.foreach { case (k, v) =>
+          if (!seen.contains(k)) { seen += k; buf += v }
+        }
+        buf.toList
+      }
+    } yield deduped
 }
 
 case class LimitFn(recv: Fn[Any], count: Int) extends Fn[Any] {

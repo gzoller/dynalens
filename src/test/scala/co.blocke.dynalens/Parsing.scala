@@ -27,10 +27,11 @@ import zio.test.*
 import DynaLens.*
 import parser.Script
 
+import CtxStrings.*
+
 object Parsing extends ZIOSpecDefault:
 
   def spec = suite("Parsing Tests")(
-    /*
     test("Simple val assignment script test") {
       val script =
         """
@@ -196,7 +197,6 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 4, 5), Item("xyz", 2, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
-    */
     test("If fn with blockFn") {
       val script =
         """
@@ -207,19 +207,16 @@ object Parsing extends ZIOSpecDefault:
           |  }
           |""".stripMargin
       val expectedCompiled =
-//           BlockStmt(List(MapStmt(items[].qty,IfFn(LessThanFn(GetFn(this),ConstantFn(2)),ConstantFn(0),BlockFn(List(ValStmt(y,GetFn(items[].num))),MultiplyFn(GetFn(y),ConstantFn(2)))))))
-        """BlockStmt(List(MapStmt(items[].qty,IfFn(LessThanFn(GetFn(items[].qty),ConstantFn(2)),ConstantFn(0),BlockFn(List(ValStmt(y,GetFn(items[].num))),MultiplyFn(GetFn(y),ConstantFn(2)))))))"""
+        """BlockStmt(List(MapStmt(items[].qty,IfFn(LessThanFn(GetFn(this),ConstantFn(2)),ConstantFn(0),BlockFn(List(ValStmt(y,GetFn(items[].num))),MultiplyFn(GetFn(y),ConstantFn(2)))))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,10,5), Item(xyz,0,7)),1)""" + "\n"
       val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7)), 1)
       val a = dynalens[Shipment]
       for {
         compiledScript <- Script.compile(script, a)
-        _ <- ZIO.succeed(println("&&& " + compiledScript))
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Shipment("aaa", List(Item("abc", 10, 5), Item("xyz", 0, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
-    /*
     test("And, or, and Not") {
       val script =
         """
@@ -576,7 +573,7 @@ object Parsing extends ZIOSpecDefault:
     test("corner case 1 must work") {
       val script =
         """
-          |  items[].qty => items[].len() * 2
+          |  items[].qty => items.len() * 2
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(items[].qty,MultiplyFn(LengthFn(GetFn(items[])),ConstantFn(2)))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,10,5), Item(abc,10,44), Item(xyz,10,7), Item(foo,10,7), Item(bar,10,7)),1)""".stripMargin + "\n"
@@ -602,8 +599,79 @@ object Parsing extends ZIOSpecDefault:
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Registry("abc", List(0, 0, 0, 0, 0), Nil) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
+    test("Deep nesting with individual element") {
+      val script =
+        """
+          |  pack.shipments[1].items.qty => 1
+          |""".stripMargin
+      val expectedCompiled = """BlockStmt(List(MapStmt(pack.shipments[1].items[].qty,ConstantFn(1))))"""
+      val expectedResult = """top -> Order(ord1,Pack(palletA,4,List(Shipment(ship1,List(Item(a,5,7), Item(b,2,7), Item(c,100,7)),2), Shipment(ship2,List(Item(x,1,7), Item(y,1,7), Item(z,1,7)),2))))""".stripMargin + "\n"
+      val inst =
+        Order(
+          "ord1",
+          Pack(
+            "palletA",
+            4,
+            List(
+              Shipment("ship1", List(Item("a", 5), Item("b", 2), Item("c", 100))),
+              Shipment("ship2", List(Item("x", 12), Item("y", 99), Item("z", 54)))
+            )
+          )
+        )
+      val a = dynalens[Order]
+      for {
+        compiledScript <- Script.compile(script, a)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x ==         Order(
+        "ord1",
+        Pack(
+          "palletA",
+          4,
+          List(
+            Shipment("ship1", List(Item("a", 5), Item("b", 2), Item("c", 100))),
+            Shipment("ship2", List(Item("x", 1), Item("y", 1), Item("z", 1)))
+          )
+        )
+      ) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
+    test("Deep nesting with mutliple elements") {
+      val script =
+        """
+          |  pack.shipments.items.number => this :: "." :: shipments.id
+          |""".stripMargin
+      val expectedCompiled = """BlockStmt(List(MapStmt(pack.shipments[].items[].number,ConcatFn(List(GetFn(this), ConstantFn(.), GetFn(shipments[].id))))))"""
+      val expectedResult = """top -> Order(ord1,Pack(palletA,4,List(Shipment(ship1,List(Item(a.ship1,5,7), Item(b.ship1,2,7), Item(c.ship1,100,7)),2), Shipment(ship2,List(Item(x.ship2,12,7), Item(y.ship2,99,7), Item(z.ship2,54,7)),2))))""".stripMargin + "\n"
+      val inst =
+        Order(
+          "ord1",
+          Pack(
+            "palletA",
+            4,
+            List(
+              Shipment("ship1", List(Item("a", 5), Item("b", 2), Item("c", 100))),
+              Shipment("ship2", List(Item("x", 12), Item("y", 99), Item("z", 54)))
+            )
+          )
+        )
+      val a = dynalens[Order]
+      for {
+        compiledScript <- Script.compile(script, a)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x == Order(
+        "ord1",
+        Pack(
+          "palletA",
+          4,
+          List(
+            Shipment("ship1", List(Item("a.ship1", 5), Item("b.ship1", 2), Item("c.ship1", 100))),
+            Shipment("ship2", List(Item("x.ship2", 12), Item("y.ship2", 99), Item("z.ship2", 54)))
+          )
+        )
+      ) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     }
-     */
   )
 
 //        _ <- ZIO.succeed(println("&&& " + compiledScript))

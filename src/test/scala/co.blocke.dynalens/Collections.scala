@@ -27,6 +27,8 @@ import zio.test.*
 import DynaLens.*
 import parser.Script
 
+import CtxStrings.*
+
 object Collections extends ZIOSpecDefault:
 
   def spec = suite("Collections Parsing Tests")(

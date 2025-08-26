@@ -27,6 +27,8 @@ import zio.test.*
 import DynaLens.*
 import parser.Script
 
+import CtxStrings.*
+
 object Options extends ZIOSpecDefault:
 
   def spec = suite("Options Tests")(
@@ -54,11 +56,11 @@ object Options extends ZIOSpecDefault:
         """
           |  val x = "yay"
           |  val y = None
-          |  dunno? = x
-          |  interest[]? = y
+          |  dunno = x
+          |  interest = y
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,ConstantFn(yay)), ValStmt(y,NoneFn()), UpdateStmt(dunno?,GetFn(x,false)), UpdateStmt(interest[]?,GetFn(y,false))))"""
+        """BlockStmt(List(ValStmt(x,ConstantFn(yay)), ValStmt(y,NoneFn()), UpdateStmt(dunno?,GetFn(x)), UpdateStmt(interest[]?,GetFn(y))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(yay),None)
           |x -> yay
@@ -82,12 +84,12 @@ object Options extends ZIOSpecDefault:
           |  val s = None.isDefined()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,ElseFn(GetFn(dunno?,false),ConstantFn(unknown))), ValStmt(y,ConcatFn(List(ToUpperFn(GetFn(x,false)), ConstantFn( ok)))), ValStmt(q,IsDefinedFn(GetFn(dunno?,false))), ValStmt(r,IsDefinedFn(GetFn(interest[]?,false))), ValStmt(s,IsDefinedFn(NoneFn()))))"""
+        """BlockStmt(List(ValStmt(x,ElseFn(GetFn(dunno?),ConstantFn(unknown))), ValStmt(y,ConcatFn(List(ToUpperFn(GetFn(x)), ConstantFn( ok)))), ValStmt(q,IsDefinedFn(GetFn(dunno?))), ValStmt(r,IsDefinedFn(GetFn(interest[]?))), ValStmt(s,IsDefinedFn(NoneFn()))))"""
       val expectedResult =
-        """q -> true
+        """top -> Maybe(abc,Some(wow),None)
+          |q -> true
           |r -> false
           |s -> false
-          |top -> Maybe(abc,Some(wow),None)
           |x -> wow
           |y -> WOW ok
           |""".stripMargin
@@ -106,7 +108,7 @@ object Options extends ZIOSpecDefault:
           |  val y = interest[]?.len()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,IsDefinedFn(GetFn(interest[]?,false))), ValStmt(y,LengthFn(GetFn(interest[]?,false)))))"""
+        """BlockStmt(List(ValStmt(x,IsDefinedFn(GetFn(interest[]?))), ValStmt(y,LengthFn(GetFn(interest[]?)))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),Some(List(Item(abc,2,5))))
           |x -> true
@@ -124,11 +126,11 @@ object Options extends ZIOSpecDefault:
       val script =
         """
           |  val x = interest.len()
-          |  interest.qty = x * 5
+          |  interest.qty => x * 5
           |  interest.sortDesc(number)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,LengthFn(GetFn(interest[]?,false))), MapStmt(interest[]?.qty,MultiplyFn(GetFn(x,false),ConstantFn(5))), MapStmt(interest[]?,SortFn(Some(number),false))))"""
+        """BlockStmt(List(ValStmt(x,LengthFn(GetFn(interest[]?))), MapStmt(interest[]?.qty,MultiplyFn(GetFn(x),ConstantFn(5))), MapStmt(interest[]?,SortFn(IdentityFn,Some(this.number),false))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),Some(List(Item(xyz,10,7), Item(abc,10,5))))
           |x -> 2
@@ -147,7 +149,7 @@ object Options extends ZIOSpecDefault:
           |  l2 = l1
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(l2[]?,GetFn(l1[],false))))"""
+        """BlockStmt(List(UpdateStmt(l2[]?,GetFn(l1[]))))"""
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),Some(List(1, 2, 3)))
           |""".stripMargin
@@ -168,7 +170,7 @@ object Options extends ZIOSpecDefault:
           |  val z = y.isDefined()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,GetFn(l2[]?,false)), UpdateStmt(l2[]?,NoneFn()), ValStmt(y,GetFn(l2[]?,false)), ValStmt(z,IsDefinedFn(GetFn(y,false)))))"""
+        """BlockStmt(List(ValStmt(x,GetFn(l2[]?)), UpdateStmt(l2[]?,NoneFn()), ValStmt(y,GetFn(l2[]?)), ValStmt(z,IsDefinedFn(GetFn(y)))))"""
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),None)
           |x -> List(1, 2, 3)
@@ -190,7 +192,7 @@ object Options extends ZIOSpecDefault:
           |  l2 = x
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,GetFn(l2[]?,false)), UpdateStmt(l2[]?,GetFn(x,false))))"""
+        """BlockStmt(List(ValStmt(x,GetFn(l2[]?)), UpdateStmt(l2[]?,GetFn(x))))"""
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),None)
           |x -> List()
@@ -228,7 +230,7 @@ object Options extends ZIOSpecDefault:
           |  l1[1] = 15
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(l1[],CleanFn()), UpdateStmt(l1[1],ConstantFn(15))))"""
+        """BlockStmt(List(MapStmt(l1[],CleanFn(IdentityFn)), UpdateStmt(l1[1],ConstantFn(15))))"""
       val expectedResult =
         """top -> ListOfOpt(1,List(Some(1), Some(15)))
           |""".stripMargin
@@ -261,10 +263,10 @@ object Options extends ZIOSpecDefault:
     test("Map vs Update (map)") {
       val script =
         """
-          |  l2 = this + 9
+          |  l2 => this + 9
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(l2[]?,LoopFn(AddFn(GetFn(this,false),ConstantFn(9))))))"""
+        """BlockStmt(List(MapStmt(l2[]?,LoopFn(AddFn(GetFn(this),ConstantFn(9))))))"""
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),Some(List(13, 14, 15)))
           |""".stripMargin
@@ -279,7 +281,7 @@ object Options extends ZIOSpecDefault:
     test("Map against None") {
       val script =
         """
-          |  interest.number = "blah"
+          |  interest.number => "blah"
           |""".stripMargin
       val expectedCompiled =
         """BlockStmt(List(MapStmt(interest[]?.number,ConstantFn(blah))))"""

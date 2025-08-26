@@ -22,6 +22,10 @@
 package co.blocke.dynalens
 package parser
 
+import Path.*
+
+import scala.annotation.tailrec
+
 object Utility:
 
   // We can't tell Boolean from path alone
@@ -45,8 +49,9 @@ object Utility:
       if (isOpt) SymbolType.OptionalScalar else SymbolType.Scalar
     }
   }
-  
-  def rhsType( fn: Fn[?] )(using ctx: ExprContext): Option[SymbolType] =
+
+  @tailrec
+  def rhsType(fn: Fn[?] )(using ctx: ExprContext): Option[SymbolType] =
     val fnName = fn.getClass.getSimpleName
     fn match {
       case f: GetFn =>
@@ -144,9 +149,43 @@ object Utility:
       case Some(s: String) => s
       case _ => "" // fallback: treat as scalar
 
-  // Utility.scala
-  def addThisType(path: String, ctx: ExprContext): ExprContext =
-    if (path == "this") ctx else ctx.withReceiverFromPath(path)
+  def addThisType(cleanPath: String, ctx: ExprContext): ExprContext = {
+
+    // Parse the LHS and collect every collection segment's name in order
+    val parts = Path.parsePath(cleanPath)
+
+    // Build a list of (name, absolutePathString) for each collection segment
+    // e.g. for "pack.shipments[1].items[].number":
+    //   loops = List(("pack.shipments", "shipments"), ("pack.shipments.items", "items"))
+    val loops: List[(String, String)] = {
+      val b = scala.collection.mutable.ListBuffer.empty[(String, String)]
+      val segs = new StringBuilder
+      parts.foreach {
+        case Path.Field(n, _) =>
+          if (segs.nonEmpty) segs.append('.'); segs.append(n)
+        case Path.IndexedField(n, _, _) =>
+          if (segs.nonEmpty) segs.append('.');
+          segs.append(n)
+          // absolute path up to this collection
+          b += ((segs.result(), n))
+      }
+      b.toList
+    }
+
+    // Build a scope map: "shipments" -> <schema of Shipment element>, "items" -> <schema of Item element>
+    val loopScope: Map[String, Any] =
+      loops.flatMap { case (absPath, symName) =>
+        val elemSchema = Utility.elementSchemaFor(absPath, ctx.typeInfo)
+        if (elemSchema.nonEmpty) Some(symName -> elemSchema) else None
+      }.toMap
+
+    // Install the receiver (`this`) and push the loop-scope map to the *top* of scopes
+    val withRecv = ctx.withReceiverFromPath(cleanPath)
+    if (loopScope.nonEmpty)
+      withRecv.copy(scopes = loopScope :: withRecv.scopes)
+    else
+      withRecv
+  }
 
   def areTypesCompatible(lhs: SymbolType, rhs: SymbolType): Boolean =
     (lhs, rhs) match {
@@ -161,7 +200,14 @@ object Utility:
       case _ => false
     }
 
-//  inline def resolveField(name: String)(using ctx: ExprContext): Option[Any] =
-//    ctx.resolveField(name)
-//  inline def resolveSymbol(name: String)(using ctx: ExprContext): Option[SymbolType] =
-//    ctx.resolveSymbol(name)
+  // Return a Map("shipments" -> <elem schema>, "items" -> <elem schema>, ...)
+  def loopScopeFor(cleanPath: String, typeInfo: Map[String, Any]): Map[String, Any] = {
+    val parts = parsePath(cleanPath)
+    val indexedNames = parts.collect { case IndexedField(name, _, _) => name }
+    indexedNames.foldLeft(Map.empty[String, Any]) { (acc, collName) =>
+      // use your existing helper — it expects a *basePath* to the element node
+      // For a field 'items', element path is typically "<field>.__type"
+      val elemSchema = elementSchemaFor(collName, typeInfo)
+      if (elemSchema.nonEmpty) acc + (collName -> elemSchema) else acc
+    }
+  }

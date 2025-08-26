@@ -136,20 +136,32 @@ case class DynaLens[T](
                 }
 
                 listZio.flatMap { list =>
-                  if i.isEmpty && rest == Nil then
-                    ZIO.succeed(list) // full list return
-                  else
-                    list.lift(i.get) match {
-                      case Some(elem) =>
-                        currentLens._registry.get(f) match {
-                          case Some(elemLens) => step(elem, elemLens, rest)
-                          case None =>
-                            if rest.isEmpty then ZIO.succeed(elem)
-                            else ZIO.fail(DynaLensError(s"No registry for '$f' to recurse into index"))
-                        }
-                      case None =>
-                        ZIO.fail(DynaLensError(s"Index ${i.get} out of bounds for field '$f'"))
-                    }
+                  (i, rest) match {
+                    case (None, Nil) =>
+                      // full list return
+                      ZIO.succeed(list)
+
+                    case (None, _ :: _) =>
+                      // Wildcard with a remaining path segment should never reach this low-level getter;
+                      // callers must either (a) map over elements, or (b) resolve via a bound element lens.
+                      ZIO.fail(DynaLensError(
+                        s"Internal: wildcard index for '$f[]' with a remaining path ('${Path.partialPath(rest)}'); " +
+                          s"this should be resolved via an element context, not the top lens."
+                      ))
+
+                    case (Some(idx), _) =>
+                      list.lift(idx) match {
+                        case Some(elem) =>
+                          currentLens._registry.get(f) match {
+                            case Some(elemLens) => step(elem, elemLens, rest)
+                            case None =>
+                              if (rest.isEmpty) ZIO.succeed(elem)
+                              else ZIO.fail(DynaLensError(s"No registry for '$f' to recurse into index"))
+                          }
+                        case None =>
+                          ZIO.fail(DynaLensError(s"Index $idx out of bounds for field '$f'"))
+                      }
+                  }
                 }
             }
       }
@@ -344,118 +356,99 @@ case class DynaLens[T](
     (levels :+ current).filter(_.nonEmpty)
   }
 
+  // Walk registry lenses along a path prefix to reach the parent lens
+  private def lensForPathPrefix(root: DynaLens[?], parts: List[Path.PathElement]): Option[DynaLens[?]] =
+    parts.foldLeft(Option(root)) {
+      case (None, _) => None
+      case (Some(cur), Path.Field(name, _)) => cur._registry.get(name)
+      case (Some(cur), Path.IndexedField(name, _, _)) => cur._registry.get(name) // element lens of the collection
+    }
+
   def map[R](
-      path: String,
-      fn: Fn[R],
-      obj: T,
-      outerCtx: DynaContext = DynaContext.empty // <-- added outer context
-  ): ZIO[_BiMapRegistry, DynaLensError, T] =
+              path: String,
+              fn: Fn[R],
+              obj: T,
+              outerCtx: DynaContext = DynaContext.empty
+            ): ZIO[_BiMapRegistry, DynaLensError, T] = {
 
     def processPaths(
-        paths: List[List[PathElement]],
-        refObj: Any,
-        dynalens: Option[DynaLens[?]],
-        ctx: DynaContext
-    ): ZIO[_BiMapRegistry, DynaLensError, Any] =
-      dynalens
-        .map(lens =>
-          paths match {
-            /*
-            case pathParts :: Nil =>
-              val partialPath = Path.partialPath(pathParts)
-              for {
-                in <- lens._getValue(pathParts, refObj.asInstanceOf[lens.ThisT])
-                maybeLens = pathParts.last match {
-                  case IndexedField(p, _, _) => lens._registry.get(p).orElse(None)
-                  case Field(p, _)           => None
-                }
-                _ = ctx.put("this", (in, maybeLens)) // assign loop param variable
-                enrichedCtx = outerCtx ++ ctx.toMap // <-- merge loop context with outer context
-                out <- fn.resolve(enrichedCtx)
-                updated <- lens.update(partialPath, out, refObj.asInstanceOf[lens.ThisT])
-              } yield updated
-             */
-            case pathParts :: Nil =>
-              // --- inside processPaths, base case: case pathParts :: Nil => ---
-              val partialPath = Path.partialPath(pathParts)
-              for {
-                in <- lens._getValue(pathParts, refObj.asInstanceOf[lens.ThisT])
+                      paths: List[List[Path.PathElement]],
+                      refObj: Any,
+                      dynalensOpt: Option[DynaLens[?]],
+                      ctx: DynaContext,
+                      outer: DynaContext,
+                      bodyFn: Fn[Any]
+                    ): ZIO[_BiMapRegistry, DynaLensError, Any] =
+      dynalensOpt match {
+        case None =>
+          ZIO.fail(DynaLensError("Internal: missing lens for map()"))
 
-                maybeLeafLens =
-                  pathParts.last match {
-                    case IndexedField(p, _, _) => lens._registry.get(p).orElse(None)
-                    case Field(_, _)           => None
+        case Some(lens) =>
+          for {
+            res <- paths match {
+              // ----- LEAF -----
+              case pathParts :: Nil =>
+                val partial = Path.partialPath(pathParts)
+                for {
+                  in <- lens._getValue(pathParts, refObj.asInstanceOf[lens.ThisT])
+                  maybeLens = pathParts.last match {
+                    case Path.IndexedField(fieldName, _, _) => lens._registry.get(fieldName)
+                    case _                                   => None
+                  }
+                  _ = ctx.update("this", (in, maybeLens))
+                  enriched = outer ++ ctx.toMap
+                  out <- bodyFn.resolve(enriched)
+                  updated <- lens.update(partial, out, refObj.asInstanceOf[lens.ThisT])
+                } yield updated
+
+              // ----- DESCENT -----
+              case pathParts :: rest =>
+                val partial  = Path.partialPath(pathParts)
+                val loopKey  = pathParts.last.name
+
+                for {
+                  listVal <- lens._getValue(pathParts, refObj.asInstanceOf[lens.ThisT])
+
+                  iterable <- ZIO.fromEither(listVal match {
+                    case i: Iterable[?]       => Right(i.asInstanceOf[Iterable[Any]])
+                    case Some(i: Iterable[?]) => Right(i.asInstanceOf[Iterable[Any]])
+                    case None                 => Right(Nil)
+                    case other => Left(DynaLensError(s"Expected iterable at path '$partial', but got: ${other.getClass.getName}"))
+                  })
+
+                  // NEW: find the lens at the parent of the collection, then get the element lens for `loopKey`
+                  parentLens  = lensForPathPrefix(lens, pathParts.dropRight(1))
+                  elemLens    = parentLens.flatMap(_._registry.get(loopKey))
+
+                  _ <- if (rest.nonEmpty && elemLens.isEmpty)
+                    ZIO.fail(DynaLensError(s"No lens registered for elements of '$loopKey' (needed to map nested path '$partial')"))
+                  else ZIO.unit
+
+                  updatedIterable <- withCollectionSymbol(ctx, loopKey, iterable) {
+                    ZIO.foreach(iterable) { item =>
+                      withLoopSymbol(ctx, loopKey, item, elemLens) {
+                        processPaths(rest, item, elemLens, ctx, outer, bodyFn)
+                      }
+                    }
                   }
 
-                _ = println(s"[map.base] path=$path  partial=$partialPath  leaf(in)=${Option(in).map(_.getClass.getSimpleName).getOrElse("null")}  value=$in")
+                  updatedRef <- lens._updateValue(pathParts, updatedIterable, refObj.asInstanceOf[lens.ThisT])
+                } yield updatedRef
 
-                // bind this = leaf value
-                leafCtx = ctx.updatedWith("this", (in, maybeLeafLens))
+              case Nil =>
+                ZIO.fail(DynaLensError("Should Never Happen(tm)"))
+            }
+          } yield res
+      }
 
-                // show what we're actually putting into ctx
-                _ = {
-                  val hasThis = leafCtx.contains("this")
-                  val lensTag = maybeLeafLens.map(_.getClass.getSimpleName).getOrElse("None")
-                  val keys    = leafCtx.keys.mkString(",")
-                  println(s"[map.base] bind this => value=$in lens=$lensTag  ctxKeys=[$keys]  hasThis=$hasThis")
-                }
-
-                enrichedCtx = outerCtx ++ leafCtx.toMap
-
-                // show merged outer + leaf ctx
-                _ = {
-                  val keys = enrichedCtx.keys.mkString(",")
-                  println(s"[map.base] enrichedCtx keys=[$keys]  hasThis=${enrichedCtx.contains("this")}")
-                }
-
-                out <- {
-                  println(s"[map.base] resolving RHS fn=${fn.getClass.getSimpleName} with this=${in}")
-                  fn.resolve(enrichedCtx)
-                }
-
-                _ = println(s"[map.base] RHS result=$out (${Option(out).map(_.getClass.getSimpleName).getOrElse("null")})")
-
-                updated <- lens.update(partialPath, out, refObj.asInstanceOf[lens.ThisT])
-              } yield updated
-
-            case pathParts :: rest =>
-              val partialPath = Path.partialPath(pathParts)
-              val loopKey = pathParts.last.name
-              for {
-                listVal <- lens._getValue(pathParts, refObj.asInstanceOf[lens.ThisT])
-                iterable <- ZIO.fromEither(listVal match {
-                  case i: Iterable[?]       => Right(i)
-                  case Some(i: Iterable[?]) => Right(i)
-                  case None                 => Right(Nil)
-                  case other =>
-                    Left(DynaLensError(s"Expected iterable at path '$partialPath', but found: ${other.getClass.getName}"))
-                })
-
-                maybeLensForList <- ctx.get(loopKey) match {
-                  case Some((_, existingLens)) => ZIO.succeed(existingLens)
-                  case None if iterable.nonEmpty =>
-                    ZIO.fail(DynaLensError(s"No existing lens found in ctx for key: $loopKey"))
-                  case None => ZIO.succeed(None)
-                }
-                updatedIterable <- ZIO.foreach(iterable) { item =>
-                  ctx.update(loopKey, (item, maybeLensForList)) // update ctx with current item
-                  processPaths(rest, item, maybeLensForList, ctx) // recurse
-                }
-                updatedRefObj <- lens._updateValue(pathParts, updatedIterable, refObj.asInstanceOf[lens.ThisT])
-              } yield updatedRefObj
-
-            case Nil =>
-              ZIO.fail(DynaLensError("Should Never Happen(tm)"))
-          }
-        )
-        .orNull
-
-    val parsed = parsePath(path)
+    val parsed = Path.parsePath(path)
     for {
+      // establish a loop frame/bindings for the full path (top, etc.)
       ctx <- walkPath(parsed, obj, this)
       splitPaths = splitIntoLevels(parsed)
-      updated <- processPaths(splitPaths, obj, Some(this), ctx)
+      updated <- processPaths(splitPaths, obj, Some(this), ctx, outerCtx, fn.asInstanceOf[Fn[Any]])
     } yield updated.asInstanceOf[T]
+  }
 
 
 object DynaLens:

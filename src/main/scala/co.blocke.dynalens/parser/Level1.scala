@@ -53,14 +53,6 @@ trait Level1 extends Level0 {
   //   foo[].bar
   //   foo[3].bar
 
-  // --- debug helpers ---
-  private def logFnRes[$: P](label: String, p: => P[ParseFnResult]): P[ParseFnResult] =
-    P(Index ~ p).map { case (i, r) =>
-      val rendered = r.fold(e => s"Left(${e.msg})", ok => ok.getClass.getSimpleName)
-      println(s"[$label]@$i -> $rendered")
-      r
-    }
-
   private def identS[$: P]: P[String] =
     P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep).!
 
@@ -108,12 +100,6 @@ trait Level1 extends Level0 {
     pathEither.map {
       case Left(err) => Left(err) // bubble semantic error
       case Right(path) => Right(GetFn(path))
-    }
-
-  // A guarded method-name: consume ".name" only if a '(' follows
-  private def guardedMethodName[$: P]: P[String] =
-    P(WS0 ~ "." ~ identifier.!).flatMap { name =>
-      P(&("(")).map(_ => name) // lookahead: require '(' next, but don't consume it
     }
 
   // Parses: "." ident "(" args ")"
@@ -206,27 +192,27 @@ trait Level1 extends Level0 {
     M_STARTSWITH -> { (recv, args, off) =>
       for {
         _ <- checkArgs(M_STARTSWITH, args, 1, off)
-      } yield StartsWithFn(recv.as[String], args.head.as[String])
+      } yield StartsWithFn(recv, args.head)
     },
     M_ENDSWITH -> { (recv, args, off) =>
       for {
         _ <- checkArgs(M_ENDSWITH, args, 1, off)
-      } yield EndsWithFn(recv.as[String], args.head.as[String])
+      } yield EndsWithFn(recv, args.head)
     },
     M_CONTAINS -> { (recv, args, off) =>
       for {
         _ <- checkArgs(M_CONTAINS, args, 1, off)
-      } yield ContainsFn(recv.as[String], args.head.as[String])
+      } yield ContainsFn(recv, args.head)
     },
     M_EQUALSIGNORECASE -> { (recv, args, off) =>
       for {
         _ <- checkArgs(M_EQUALSIGNORECASE, args, 1, off)
-      } yield EqualsIgnoreCaseFn(recv.as[String], args.head.as[String])
+      } yield EqualsIgnoreCaseFn(recv, args.head)
     },
     M_MATCHESREGEX -> { (recv, args, off) =>
       for {
         _ <- checkArgs(M_MATCHESREGEX, args, 1, off)
-      } yield MatchesRegexFn(recv.as[String], args.head.as[String])
+      } yield MatchesRegexFn(recv, args.head)
     },
     M_ELSE -> { (recv, args, off) =>
       for {
@@ -354,6 +340,13 @@ trait Level1 extends Level0 {
     def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult]
   }
 
+  private def promoteToCollection(recv: Fn[Any])(using ctx: ExprContext): Fn[Any] = recv match
+    case g@GetFn(name) =>
+      // If the bare name is in loop scope, prefer its collection binding `name[]`
+      val inLoop = ctx.scopes.headOption.exists(_.contains(name))
+      if inLoop then GetFn(s"$name[]") else g
+    case other => other
+
   def collectionStmt[$: P](booleanExpr: ExprContext ?=> P[ParseBoolResult])
                           (using ctx: ExprContext): P[ParseStmtResult] = {
 
@@ -406,13 +399,16 @@ trait Level1 extends Level0 {
       val name: String = M_DISTINCT
 
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
+        // optional field path
         P(Index ~ pathBase.?).map {
           case (_, None) =>
+            // distinct() with no field ⇒ distinct by whole element
             Right(DistinctFn(inner, None))
 
-          case (offset, Some(rawKey)) =>
-            CorrectPath.rewritePath(rawKey, offset) match {
-              case Left(err) => Left(err) // bubble DLCompileError
+          case (off, Some(rawKey)) =>
+            // distinct(field) ⇒ rewrite/validate the (possibly relative) key
+            CorrectPath.rewritePath(rawKey, off) match {
+              case Left(err) => Left(err)
               case Right(cleanKey) => Right(DistinctFn(inner, Some(cleanKey)))
             }
         }
@@ -421,10 +417,10 @@ trait Level1 extends Level0 {
     case object LimitMethod extends CollectionMethodParser {
       val name: String = M_LIMIT
 
-      def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
-        P(Index ~ number).map {
-          case (_, n) if n >= 0 => Right(LimitFn(inner, n))
-          case (offset, n) => Left(DLCompileError(offset, s"limit(...) requires a non-negative integer, found $n"))
+      def parseFn[$: P](inner: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] =
+        P(Index ~ number).map { case (off, n) =>
+          if (n >= 0) Right(LimitFn(inner, n))
+          else Left(DLCompileError(off, s"limit(...) requires a non-negative integer, found $n"))
         }
 
       private def number[$: P]: P[Int] =
@@ -432,20 +428,22 @@ trait Level1 extends Level0 {
     }
 
     case object ReverseMethod extends CollectionMethodParser {
-      val name: String = M_REVERSE
+      val name = M_REVERSE
 
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
         P(Index ~ (("(" ~ WS0 ~ ")").?)).map { _ =>
-          Right(ReverseFn(inner))
+          val recv = promoteToCollection(inner)
+          Right(ReverseFn(recv))
         }
     }
 
     case object CleanMethod extends CollectionMethodParser {
-      val name: String = M_CLEAN
+      val name = M_CLEAN
 
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
         P(Index ~ (("(" ~ WS0 ~ ")").?)).map { _ =>
-          Right(CleanFn(inner))
+          val recv = promoteToCollection(inner)
+          Right(CleanFn(recv))
         }
     }
 
