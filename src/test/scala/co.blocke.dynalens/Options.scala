@@ -260,7 +260,25 @@ object Options extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == MyLists(1, List(1,2,3), None) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
-    test("Map vs Update (map)") {
+    test("Map vs Update (map) - 1") {
+      val script =
+        """
+          |  dunno => "blah" :: this
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(MapStmt(dunno?,ConcatFn(List(ConstantFn(blah), GetFn(this))))))"""
+      val expectedResult =
+        """top -> Maybe(abc,Some(blahfoo),None)
+          |""".stripMargin
+      val inst = Maybe("abc", Some("foo"), None)
+      val a = dynalens[Maybe]
+      for {
+        compiledScript <- Script.compile(script, a)
+        (x, newCtx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(x == Maybe("abc",Some("blahfoo"),None) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    },
+    test("Map vs Update (map) - 2") {
       val script =
         """
           |  l2 => this + 9

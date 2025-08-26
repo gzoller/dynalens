@@ -211,3 +211,107 @@ object Utility:
       if (elemSchema.nonEmpty) acc + (collName -> elemSchema) else acc
     }
   }
+
+  enum Shape {
+    case ScalarLike, ListLike, MapLike
+  }
+
+  private def isOptional(t: SymbolType): Boolean = t match
+    case SymbolType.OptionalScalar | SymbolType.OptionalList | SymbolType.OptionalMap => true
+    case _ => false
+
+  private def lhsInnerShape(t: SymbolType): Option[Shape] = t match
+    case SymbolType.OptionalScalar => Some(Shape.ScalarLike)
+    case SymbolType.OptionalList => Some(Shape.ListLike)
+    case SymbolType.OptionalMap => Some(Shape.MapLike)
+    case _ => None
+
+  private def rhsShape(t: SymbolType): Shape = t match
+    case SymbolType.Scalar | SymbolType.Boolean | SymbolType.OptionalScalar => Shape.ScalarLike
+    case SymbolType.List | SymbolType.OptionalList => Shape.ListLike
+    case SymbolType.Map | SymbolType.OptionalMap => Shape.MapLike
+  // SymbolType.None is a special “Option.None” marker; we won’t turn it into a shape here.
+
+  /** Enforce that option-map (LHS is Optional*) doesn’t change container “kind”.
+   * Allowed RHS for each LHS:
+   *   - OptionalScalar: Scalar | Boolean | OptionalScalar | None
+   *   - OptionalList  : List   | OptionalList            | None
+   *   - OptionalMap   : Map    | OptionalMap             | None
+   *
+   * If rhsType is unknown (None), we don’t block the compile.
+   */
+  // Utility.scala
+  def checkRhsShapeForOptionMap(lhsSym: SymbolType, rhs: Fn[Any], off: Int)
+                               (using ctx: ExprContext): Either[DLCompileError, Unit] =
+    lhsSym match {
+      // For OptionalScalar, RHS must be element-like (Scalar) or None
+      case SymbolType.OptionalScalar =>
+        Utility.rhsType(rhs) match {
+          case None =>
+            Left(DLCompileError(off, s"Unable to infer type of RHS for option map"))
+          case Some(SymbolType.Scalar | SymbolType.None) =>
+            Right(())
+          case Some(other) =>
+            Left(DLCompileError(off, s"Option map shape mismatch: LHS expects ScalarLike but RHS is $other"))
+        }
+
+      // For OptionalList we’re doing element mapping, so don’t force RHS to be List.
+      case SymbolType.OptionalList =>
+        Right(())
+
+      // If you want to special-case OptionalMap, decide your rule here. For now, allow.
+      case SymbolType.OptionalMap =>
+        Right(())
+
+      // Non-option LHS or anything else: no special check.
+      case _ =>
+        Right(())
+    }
+/*
+  def checkRhsShapeForOptionMap(
+                                 lhs: SymbolType,
+                                 rhs: Fn[?],
+                                 off: Int
+                               )(using ctx: ExprContext): Either[DLCompileError, Unit] = {
+
+    if !isOptional(lhs) then
+      Right(()) // only enforced for Optional* LHS
+    else
+      rhsType(rhs) match {
+        case None =>
+          // Unknown compile-time RHS type; allow it (runtime will enforce)
+          Right(())
+
+        case Some(SymbolType.None) =>
+          // Explicitly producing None is always okay for Option map
+          Right(())
+
+        case Some(rsym) =>
+          (lhsInnerShape(lhs), rsym) match {
+            // OptionalScalar accepts Scalar-like (Scalar or Boolean) and OptionalScalar
+            case (Some(Shape.ScalarLike), SymbolType.Scalar)         => Right(())
+            case (Some(Shape.ScalarLike), SymbolType.Boolean)        => Right(())
+            case (Some(Shape.ScalarLike), SymbolType.OptionalScalar) => Right(())
+
+            // OptionalList accepts List and OptionalList
+            case (Some(Shape.ListLike),   SymbolType.List)           => Right(())
+            case (Some(Shape.ListLike),   SymbolType.OptionalList)   => Right(())
+
+            // OptionalMap accepts Map and OptionalMap
+            case (Some(Shape.MapLike),    SymbolType.Map)            => Right(())
+            case (Some(Shape.MapLike),    SymbolType.OptionalMap)    => Right(())
+
+            // Anything else → mismatch
+            case (Some(shape), otherSym) =>
+              Left(DLCompileError(
+                off,
+                s"Option map shape mismatch: LHS expects $shape but RHS is $otherSym"
+              ))
+
+            // Shouldn’t happen (lhs is optional), but be permissive
+            case (None, _) =>
+              Right(())
+          }
+      }
+  }
+  */

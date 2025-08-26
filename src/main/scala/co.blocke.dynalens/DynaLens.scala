@@ -391,14 +391,36 @@ case class DynaLens[T](
                 val partial = Path.partialPath(pathParts)
                 for {
                   in <- lens._getValue(pathParts, refObj.asInstanceOf[lens.ThisT])
+
+                  // if last segment was an indexed field, you already compute maybeLens
                   maybeLens = pathParts.last match {
                     case Path.IndexedField(fieldName, _, _) => lens._registry.get(fieldName)
-                    case _                                   => None
+                    case _                                  => None
                   }
-                  _ = ctx.update("this", (in, maybeLens))
-                  enriched = outer ++ ctx.toMap
-                  out <- bodyFn.resolve(enriched)
-                  updated <- lens.update(partial, out, refObj.asInstanceOf[lens.ThisT])
+
+                  outAny <- in match {
+                    // OPTION-MAP (Some): bind `this` to the unwrapped value, eval RHS, re-wrap
+                    case Some(v) =>
+                      val enriched = outerCtx ++ ctx.set("this", (v, maybeLens)).toMap
+                      fn.resolve(enriched).map(o => Some(o))
+
+                    // OPTION-MAP (None): stays None
+                    case None =>
+                      ZIO.succeed(None)
+
+                    // LIST-MAP or SCALAR (no option): your existing path
+                    case nonOpt =>
+                      val enriched = outerCtx ++ ctx.set("this", (nonOpt, maybeLens)).toMap
+                      fn.resolve(enriched)
+                  }
+
+                  updated <- outAny match {
+                    case _: Some[?] | None => // Option case
+                      lens.update(partial, outAny, refObj.asInstanceOf[lens.ThisT])
+
+                    case plain =>              // Non-option case
+                      lens.update(partial, plain, refObj.asInstanceOf[lens.ThisT])
+                  }
                 } yield updated
 
               // ----- DESCENT -----

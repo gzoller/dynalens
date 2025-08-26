@@ -322,6 +322,12 @@ trait Level2 extends Level1 with ValueExprModule:
       }
     }
 
+  // somewhere near mapStmt or in a small PathUtils
+  private def addWildcardToListLike(path: String): String =
+    if (path.endsWith("[]") || path.endsWith("[]?")) path
+    else if (path.endsWith("?")) path.dropRight(1) + "[]?"
+    else path + "[]"
+
   // '=>': always map
   private def mapStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(Index ~ pathBase ~ WS0 ~ "=>" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
@@ -329,24 +335,75 @@ trait Level2 extends Level1 with ValueExprModule:
         case Left(err) => P(Pass(Left(err)))
 
         case Right(cleanPath) =>
-          // base ctx that sets receiver/this for the element
-          val ctxBase = Utility.addThisType(cleanPath, ctx)
-          // NEW: expose in-stream collections (e.g., shipments, items) to RHS
-          val loopScope = Utility.loopScopeFor(cleanPath, ctxBase.typeInfo)
+          // Set receiver/scope so bare names & `this` resolve relative to element
+          val ctxForRhs = Utility.addThisType(cleanPath, ctx)
 
-          given ExprContext = ctxBase.pushScope(loopScope)
+          given ExprContext = ctxForRhs
 
           P(valueExpr ~ WS0).map {
             case Left(e) => Left(e)
+
             case Right(vfn) =>
               val lhsSym = Utility.getPathType(cleanPath)
-              val needsLoop = lhsSym == SymbolType.List || lhsSym == SymbolType.OptionalList
-              val body = if needsLoop then LoopFn(vfn) else vfn
-              // return original outer ctx; the pushed scope is only for RHS parsing
-              Right((ctx, MapStmt(cleanPath, body)))
+              val isListLike = lhsSym == SymbolType.List || lhsSym == SymbolType.OptionalList
+
+              // Normalize LHS: ensure [] for list-like targets so the mapper sees a collection boundary
+              val normalizedLhs =
+                if (isListLike) addWildcardToListLike(cleanPath) else cleanPath
+
+              // Only enforce option-scalar shape; list-like option maps are element-wise (RHS scalar OK)
+              Utility.checkRhsShapeForOptionMap(lhsSym, vfn, rhsOff) match
+                case Left(err) => Left(err)
+                case Right(_) =>
+                  val body = if (isListLike) LoopFn(vfn) else vfn
+                  Right((ctx, MapStmt(normalizedLhs, body)))
           }
       }
     }
+    /*
+  private def mapStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
+    P(Index ~ pathBase ~ WS0 ~ "=>" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
+      CorrectPath.rewritePath(rawPath, pathOff) match {
+        case Left(err) => P(Pass(Left(err)))
+        case Right(cleanPath) =>
+          // Make bare field names and `this` resolve relative to the mapped element
+          val ctxForRhs = Utility.addThisType(cleanPath, ctx)
+          given ExprContext = ctxForRhs
+
+          P(valueExpr ~ WS0).map {
+            case Left(e) => Left(e)
+
+            case Right(vfn) =>
+              val lhsSym = Utility.getPathType(cleanPath)
+
+              // list-ish (includes OptionalList so we still wrap with LoopFn)
+              val isListLike =
+                lhsSym == SymbolType.List || lhsSym == SymbolType.OptionalList
+
+              // any Option variant (Scalar/List/Map)
+              val isOptionLike =
+                lhsSym == SymbolType.OptionalScalar ||
+                  lhsSym == SymbolType.OptionalList   ||
+                  lhsSym == SymbolType.OptionalMap
+
+              // For Option LHS, ensure RHS “shape” matches (scalar/list/map/None)
+              val shapeCheck =
+                if isOptionLike then Utility.checkRhsShapeForOptionMap(lhsSym, vfn, rhsOff)
+                else Right(())
+
+              shapeCheck match
+                case Left(err) => Left(err)
+                case Right(_) =>
+                  val body =
+                    if isListLike then LoopFn(vfn) // list-map drives per-element
+                    else vfn                       // option-map: no implicit loop
+
+                  // No separate OptionMapStmt needed; runtime map() handles Option
+                  Right((ctx, MapStmt(cleanPath, body)))
+          }
+      }
+    }
+    */
 
   private def ifStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(
