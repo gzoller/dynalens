@@ -101,6 +101,9 @@ object Utility:
     "ReverseFn" -> SymbolType.List,
     "CleanFn" -> SymbolType.List,
     "NoneFn" -> SymbolType.None,
+    "KeysFn" -> SymbolType.Boolean,
+    "ValuesFn" -> SymbolType.Boolean,
+    "MapGetFn" -> SymbolType.Scalar, // <-- this may be a lie, eg Map[String,List[Int]] should be List not Scalar
 //    "PolyFn" -> SymbolType.Scalar, <-- Only used as an expression
     "LengthFn" -> SymbolType.Scalar,
 //    "MapFwdFn" -> SymbolType.???,  <-- Only used as an expression
@@ -240,7 +243,6 @@ object Utility:
    *
    * If rhsType is unknown (None), we don’t block the compile.
    */
-  // Utility.scala
   def checkRhsShapeForOptionMap(lhsSym: SymbolType, rhs: Fn[Any], off: Int)
                                (using ctx: ExprContext): Either[DLCompileError, Unit] =
     lhsSym match {
@@ -267,51 +269,3 @@ object Utility:
       case _ =>
         Right(())
     }
-/*
-  def checkRhsShapeForOptionMap(
-                                 lhs: SymbolType,
-                                 rhs: Fn[?],
-                                 off: Int
-                               )(using ctx: ExprContext): Either[DLCompileError, Unit] = {
-
-    if !isOptional(lhs) then
-      Right(()) // only enforced for Optional* LHS
-    else
-      rhsType(rhs) match {
-        case None =>
-          // Unknown compile-time RHS type; allow it (runtime will enforce)
-          Right(())
-
-        case Some(SymbolType.None) =>
-          // Explicitly producing None is always okay for Option map
-          Right(())
-
-        case Some(rsym) =>
-          (lhsInnerShape(lhs), rsym) match {
-            // OptionalScalar accepts Scalar-like (Scalar or Boolean) and OptionalScalar
-            case (Some(Shape.ScalarLike), SymbolType.Scalar)         => Right(())
-            case (Some(Shape.ScalarLike), SymbolType.Boolean)        => Right(())
-            case (Some(Shape.ScalarLike), SymbolType.OptionalScalar) => Right(())
-
-            // OptionalList accepts List and OptionalList
-            case (Some(Shape.ListLike),   SymbolType.List)           => Right(())
-            case (Some(Shape.ListLike),   SymbolType.OptionalList)   => Right(())
-
-            // OptionalMap accepts Map and OptionalMap
-            case (Some(Shape.MapLike),    SymbolType.Map)            => Right(())
-            case (Some(Shape.MapLike),    SymbolType.OptionalMap)    => Right(())
-
-            // Anything else → mismatch
-            case (Some(shape), otherSym) =>
-              Left(DLCompileError(
-                off,
-                s"Option map shape mismatch: LHS expects $shape but RHS is $otherSym"
-              ))
-
-            // Shouldn’t happen (lhs is optional), but be permissive
-            case (None, _) =>
-              Right(())
-          }
-      }
-  }
-  */

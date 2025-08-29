@@ -652,6 +652,7 @@ object DynaLens:
     ).asExprOf[(String, Any, T) => ZIO[Any, DynaLensError, T]]
 
 
+  /*
   private def buildPathTree(r: RTypeRef[?]): Map[String, Any] = r match {
     case c: ScalaClassRef[?] =>
       c.fields.map { f =>
@@ -692,6 +693,106 @@ object DynaLens:
     case _ =>
       Map.empty
   }
+    */
+
+  // Encodes the *value* shape that appears under a Map’s "__valType"
+  private def buildMapValueSchema(r: RTypeRef[?]): Any = r match {
+    case c: ScalaClassRef[?] =>
+      // Case class: expand fields (no __type tag for classes)
+      buildPathTree(c)
+
+    case s: SeqRef[?] =>
+      // List/Seq value
+      s.elementRef match {
+        case c2: ScalaClassRef[?] =>
+          buildPathTree(c2) + ("__type" -> "[]")
+        case _ =>
+          "[]"
+      }
+
+    case m: MapRef[?] =>
+      // Map value: record {} and recurse again for its value type
+      Map(
+        "__type" -> "{}",
+        "__valType" -> buildMapValueSchema(m.elementRef2)
+      )
+
+    case o: OptionRef[?] =>
+      // Optional value – encode with the right suffix
+      o.optionParamType match {
+        case c: ScalaClassRef[?] =>
+          buildPathTree(c) + ("__type" -> "{}?") // optional *object-like* payload
+        case s: SeqRef[?] =>
+          buildPathTree(s.elementRef) + ("__type" -> "[]?")
+        case m: MapRef[?] =>
+          Map(
+            "__type" -> "{}?",
+            "__valType" -> buildMapValueSchema(m.elementRef2)
+          )
+        case _ =>
+          "?" // optional scalar
+      }
+
+    case _ =>
+      "" // plain scalar
+  }
+
+  /** Build the schema tree used for path rewriting/type checks. */
+  private def buildPathTree(r: RTypeRef[?]): Map[String, Any] = r match {
+    case c: ScalaClassRef[?] =>
+      // Expand case-class fields
+      c.fields.map { f =>
+        val key = f.name
+        val tRef = f.fieldRef
+
+        key -> (tRef match {
+
+          // Option[...] field
+          case o: OptionRef[?] =>
+            o.optionParamType match {
+              case c0: ScalaClassRef[?] =>
+                buildPathTree(c0) + ("__type" -> "{}?")
+              case s0: SeqRef[?] =>
+                buildPathTree(s0.elementRef) + ("__type" -> "[]?")
+              case m0: MapRef[?] =>
+                Map(
+                  "__type" -> "{}?",
+                  "__valType" -> buildMapValueSchema(m0.elementRef2)
+                )
+              case _ =>
+                "?" // optional scalar
+            }
+
+          // Seq/List field
+          case s: SeqRef[?] =>
+            s.elementRef match {
+              case c1: ScalaClassRef[?] =>
+                buildPathTree(c1) + ("__type" -> "[]")
+              case _ =>
+                "[]"
+            }
+
+          // Map[K,V] field
+          case m: MapRef[?] =>
+            Map(
+              "__type" -> "{}", // concrete map
+              "__valType" -> buildMapValueSchema(m.elementRef2) // value shape
+            )
+
+          // Nested case class field
+          case c2: ScalaClassRef[?] =>
+            buildPathTree(c2) // no __type tag for classes
+
+          // Primitive / scalar
+          case _ =>
+            "" // scalar
+        })
+      }.toMap
+
+    // Non case-class at root — return empty
+    case _ =>
+      Map.empty
+  }
 
   private def liftTypeInfo(map: Map[String, Any])(using Quotes): Expr[Map[String, Any]] = {
     val liftedPairs: List[Expr[(String, Any)]] = map.toList.map {
@@ -708,7 +809,7 @@ object DynaLens:
     '{ Map[String, Any]().++($liftedListExpr) }
   }
 
-  def liftMapBoolean(map: Map[String, Boolean])(using Quotes): Expr[Map[String, Boolean]] = {
+  private def liftMapBoolean(map: Map[String, Boolean])(using Quotes): Expr[Map[String, Boolean]] = {
     val pairs: List[Expr[(String, Boolean)]] =
       map.toList.map { case (k, v) => '{ (${ Expr(k) }, ${ Expr(v) }) } }
     '{ Map[String, Boolean](${ Varargs(pairs) } *) }

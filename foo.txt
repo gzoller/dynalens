@@ -10,164 +10,211 @@
 
 TODO:
 
-* Make sure working code in Grammar is also propagated into BlockFn and BlockStmt -- test both
+
+Map functions:
+
+* filter on keys
+* filter on values
+* keys()
+* values()
+* map over keys
+* map over values
+* get(key, orElseValue)
+* contains()
 
 
-    Possible additions:
+---------
 
-    * Options and Collections as first-class values
-    * Simple map -> for Option
-    * Tracking course types: simple, Option, Collection, Map:
-        maybe use foo, foo[], foo{}, foo? foo[]?, foo{}? to denote the type
-    * Support Map mutation
-    * More detailed error messages w/line,pos
+	•	Iterate values: m.values[]
+	•	Iterate keys: m.keys[]
+	•	Iterate entries: m{}  (receiver exposes key and value)
+	•	Re-key entries: return an entry (pair) from the RHS: entry(newKey, newValue)
+	•	Option[Map]: m?{}, m?.values[], m?.keys[] (map only when Some)
+	•	Get by key (data access): m.get("k") → Option[V] (safer than m["k"])
+	•	Map vs Update: still => to map (rebuild) the map, = to update a field/path
+
+	# increment each value
+    qtyBySku.values[] => this + 1
+
+    # uppercase keys
+    qtyBySku.keys[] => this.toUpper()
+
+    # re-key entries
+    qtyBySku{} => entry(key.toUpper(), value)
+
+    # filter entries by value, keep as Map
+    val big = qtyBySku{}.filter(value >= 100)
+
+    # Option[Map]: if present, halve values; None stays None
+    discounts? .values[] => this / 2
+
+Semantics (how it plugs into your current model)
+
+1) New path shapes
+
+You already support [] and []?. Add map-flavored wildcards:
+	•	m.values[] → iterate values
+	•	this = the value
+	•	loop symbol: values not added; we keep m as the map symbol; expose the current key via a function key() if needed (see below)
+	•	m.keys[] → iterate keys
+	•	this = the key
+	•	m{} → iterate entries (pairs)
+	•	this = the entry receiver exposing two pseudo-fields: key, value
+	•	Option forms: m?{}, m?.values[], m?.keys[]
+Your suffix order stays consistent: any [] comes before ?.
+So:
+	•	m?{}  (optional entries)
+	•	m.values[]? (optional values) — but I’d recommend the clearer m?.values[]
+
+Parser tweak (minimal): extend your parseSeg to recognize {} as the entries wildcard suffix (like you do with []).
+Rewrite/validation (CorrectPath.rewritePath) mirrors what you already do:
+	•	on a bare m in loop scope: if the user uses m in a value context (no wildcard), keep as-is; in a map LHS choose the flavor they wrote (values[], keys[], or {}). No implicit conversion to {} — be explicit.
+
+2) Receiver & scope inside loops
+	•	m.values[]:
+	•	this = value
+	•	Add helper key() (a zero-arg method) to retrieve the current key from the loop frame when you’re iterating values.
+	•	Keep m bound (like your items loop symbol); also expose m[] (the whole value collection) analogously to lists.
+	•	m.keys[]:
+	•	this = key
+	•	m{}:
+	•	this.key, this.value as pseudo-fields (like a tiny receiver with two fields)
+	•	You may also bind loop symbol m{} in ctx (mirroring your items[] exposure) to allow RHS to reference the whole entry stream if needed.
+
+3) RHS contract for => (map)
+	•	m.values[] => expr: expr returns a new value; keys preserved.
+	•	m.keys[] => expr: expr returns a new key; value preserved; you must check for duplicate keys and either:
+	•	fail with a clear DynaLensError("duplicate key after rekey: ..."), or
+	•	keep first/last (define policy; I recommend fail to be safe).
+	•	m{} => expr:
+	•	If expr returns entry(k, v), rekey to k and set value to v.
+	•	If expr returns a non-entry scalar, treat it as a new value (key unchanged).
+	•	If expr returns None, drop the entry (like filtering).
+	•	If expr returns Some(...), unwrap and apply the same rules (lets you conditionally rekey/value-change with Option).
+
+This keeps the mental model identical to lists: the LHS determines iterator and what this is; the RHS decides what you yield.
+
+4) Collection methods on maps
+
+You’ve reworked methods to run when this is a collection. Map collections get analogous methods:
+	•	On m.values[] and m.keys[]: all the list methods you already have (e.g., limit, reverse, clean, distinct, sortAsc(field) — where field refers to receiver of value if it’s a case class, otherwise natural order)
+	•	On m{} (entries): methods operate on the entry stream.
+	•	filter(...) uses key, value in predicate
+	•	distinct(...) by key or value (explicit)
+	•	sortAsc(key) or sortAsc(value.<field>) etc.
+	•	These map-flavored methods should return a Map (not a list), since the input is a map iterator. (Your runtime can realize this by knowing it’s in the {} mode and folding entries back into a LinkedHashMap to preserve order if needed.)
+
+5) Data-access helpers
+	•	m.get(k) → Option[V] (cleaner than introducing string subscripts in your path grammar)
+	•	m.containsKey(k) → Boolean
+	•	m.containsValue(v) → Boolean
+
+6) Type / shape checking (compile-time side)
+
+Extend your SymbolType inference:
+	•	Map, OptionalMap already exist in your enum
+	•	m.values[] is List-like with element-shape of the value type
+	•	m.keys[] is List-like with element-shape of the key type
+	•	m{} behaves like List-like of Entry (receiver with fields key, value)
+	•	For the purposes of shape checking, the RHS of m{}:
+	•	may return a scalar (value rewrite),
+	•	or an Entry (k,v),
+	•	or Option[…] of either (to support drop/keep via None)
+	•	Option-map checks: m?{} / m?.values[] / m?.keys[] should use your existing checkRhsShapeForOptionMap with the inner shape (entry/value/key respectively).
 
 
-    I think that’s a good default for a lens‑focused language:
+Minimal parser & runtime notes
 
-    Within collection predicates (and other per‑item transforms), if the projected field is Option[T], treat None as “absent” and simply skip it.
-    i.e., work over items.flatMap(_.blah) rather than items.map(_.blah).
+Parser (Level1/Level2 + CorrectPath)
+	•	Recognize {} suffix in a path segment. You can implement it like you did []:
+	•	extend parseSeg to parse name{} and carry a flag isMapEntries.
+	•	CorrectPath.rewritePath:
+	•	accept {} anywhere a collection wildcard is valid,
+	•	keep suffix order invariant with ? ({} then ? → name{}?).
+	•	Utility.getPathType:
+	•	name.values[] → List
+	•	name.keys[] → List
+	•	name{} → List (“entries list”)
+	•	Optional versions map to OptionalList (outer option) with the same element semantics
 
-    Why this makes sense here
-    	•	Lens semantics > GP language: You’re shaping data, not proving total functions. Skipping missing leaves is usually what users intend.
-    	•	Predictable filtering: filter(_.blah?) should keep elements where blah is present and satisfies the predicate; elements with blah = None are naturally dropped from consideration for that predicate.
-    	•	Reduces boilerplate: Avoids forcing x.isDefined checks or .else(...) inside every predicate.
-
-    Where to apply the rule
-    	•	In collection predicates and mappers that iterate items (e.g., filter, map, distinct, sortAsc(field)):
-    	•	When dereferencing a path ending in ? (optional) within the item scope, ignore None:
-    	•	filter(this.blah? > 10) → keep items with blah = Some(v) and v > 10; items with None neither pass nor fail (they’re dropped).
-    	•	map(this.blah?) → produce only the Some values (effectively flatMap).
-    	•	In scalar contexts (outside an iterable), keep current behavior:
-    	•	val x = foo.blah? → Option[...] value, not silently dropped.
-    	•	You still need .else(...) when you want a default.
-
-    Edge cases & clarity
-    	•	Sorting with optional keys: Two good defaults:
-    	1.	Stable skip: exclude items where the sort key is None.
-    	2.	Group last: treat None as larger than all Some for total ordering.
-    Pick one and document it (I’d choose group last for stability and to avoid surprising count drops).
-    	•	Distinct on optional field: Define on the present values only; decide whether items with None collapse to a single bucket or are excluded. I’d exclude them to avoid ambiguous grouping.
-    	•	Length / stats after skipping: Be explicit: methods like .len() on a mapped optional field inside a collection operate on the post‑skip stream. Document: “None values are not counted.”
-
-    Give users an explicit escape hatch
-
-    Even if skip is the default, offer knobs so advanced users can control it:
-    	•	.present (predicate): keep only items where the optional field is defined.
-    items[].filter(this.blah?.present) → explicit, self‑documenting.
-    	•	.flattenOption() (function on collections): turns List[Option[T]] into List[T].
-    This might happen implicitly in map; exposing it allows standalone use.
-    	•	.keepNone() (flag/variant) on ops like sort/distinct: include None with defined ordering/bucket.
-    	•	e.g., items[].sortAsc(this.blah?).keepNoneFirst() / .keepNoneLast().
-    	•	.default(v) (alias of .else(v) in per‑item scope) when you don’t want skipping:
-    	•	items[].map(this.blah?.default(0)) → totalize before mapping.
-
-    Implementation sketch
-    	•	In per‑item evaluation (the iterator lens):
-    	•	When you see a terminal path with ?, have the accessor return Iterator.empty for None and Iterator(v) for Some(v).
-    That makes the surrounding op naturally flatMap over options.
-    	•	For boolean predicates:
-    	•	Evaluate to tri‑state: True, False, Absent. Treat Absent as not matching (i.e., drop item).
-    	•	For sort/distinct:
-    	•	Accept a KeyResult = Present(T) | Absent. Use chosen policy for Absent.
-
-    Documentation snippet (to set expectations)
-
-    Option‑aware collection ops. Inside collection transforms (e.g., items[]), optional fields (?) are treated as absent values: None is skipped by default. Predicates only consider present values; mappers flatten out None. Use .default(...) to supply a value instead of skipping, or .present to filter to only present entries. For sorting/distinct, absent keys are grouped last (default).
-
-    This keeps the language ergonomic for its core purpose, while still giving control when users need stricter behavior.
+Runtime (DynaLens.map) — you already have the pattern
+	•	Add a branch to process the {} flavor:
+	•	Resolve Map[K,V] to iterable of entries (e.g., map.iterator)
+	•	Bind loop symbol (e.g., withLoopSymbol(ctx, "m", entry, None)) and set receiver so this.key/this.value work:
+	•	simplest: expose a small internal case class Entry(key: Any, value: Any) and set this to that
+	•	Evaluate RHS:
+	•	if Entry(k,v) → rekey
+	•	if scalar → new value (use same key)
+	•	if None → drop
+	•	if Some(x) → unwrap and apply rules
+	•	Rebuild a LinkedHashMap (to preserve iteration order after transformations that depend on order)
+	•	For m.values[] and m.keys[]:
+	•	treat like list iteration but add key() helper for values (optional; you can instead expose loop symbol binding with the current key under e.g. key, but the function approach avoids name collisions).
 
 
-final case class SortFn(recv: Fn[Any], keyPath: Option[String], ascending: Boolean)
-  extends Fn[Any] {
+	# 1) Raise all prices by 10%
+    prices.values[] => (this * 110) / 100
 
-  private def keyFn: Option[Fn[Any]] =
-    keyPath.map(p => GetFn(p, searchThis = true).asInstanceOf[Fn[Any]])
+    # 2) Rename SKUs
+    prices.keys[] => this.trim().toUpper()
 
+    # 3) Rename SKUs and compress cents
+    prices{} => entry(key.toUpper(), (value / 100) * 100)
+
+    # 4) Keep only SKUs starting with "A", sorted by value desc
+    val aOnly = prices{}
+      .filter(key.startsWith("A"))
+      .sortDesc(value)
+
+    # discounts: Option[Map[String, Int]]
+    discounts? .values[] => this / 2
+
+
+// get(key, default) — default is an *expression*, evaluated only when needed
+case class GetFn2(recv: Fn[Any], key: Fn[Any], default: Fn[Any]) extends Fn[Any] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      raw   <- recv.resolve(ctx)
-      seq   <- ZIO.fromEither(asSeq(raw, "sort"))
-      out   <- keyFn match {
-                 case None =>
-                   // natural ordering of the elements themselves
-                   ZIO.attempt {
-                     val withAny = seq.asInstanceOf[Seq[Any]]
-                     val sorted = withAny.sortBy(_.asInstanceOf[Comparable[Any]]) // will throw if not comparable
-                     if (ascending) sorted else sorted.reverse
-                   }.mapError(t => DynaLensError(s"sort requires Comparable elements: ${t.getMessage}"))
+      base <- recv.resolve(ctx)
+      k    <- key.resolve(ctx)
+      out  <- base match {
+        case None =>
+          // Option[Map] empty → fallback
+          default.resolve(ctx)
 
-                 case Some(kf) =>
-                   // key-based ordering
-                   ZIO.foreach(seq){ e =>
-                     kf.resolve(withElemCtx(e, ctx)).map(k => (e, k))
-                   }.flatMap { pairs =>
-                     ZIO.attempt {
-                       val sorted = pairs.sortBy(_._2.asInstanceOf[Comparable[Any]])
-                       (if (ascending) sorted else sorted.reverse).map(_._1)
-                     }.mapError(t => DynaLensError(s"sort key must be Comparable: ${t.getMessage}"))
-                   }
-               }
+        case Some(m: Map[?, ?]) =>
+          val mm = m.asInstanceOf[Map[Any, Any]]
+          mm.get(k) match {
+            case Some(v) => ZIO.succeed(v)
+            case None    => default.resolve(ctx) // lazy: only now
+          }
+
+        case m: Map[?, ?] =>
+          val mm = m.asInstanceOf[Map[Any, Any]]
+          mm.get(k) match {
+            case Some(v) => ZIO.succeed(v)
+            case None    => default.resolve(ctx) // lazy: only now
+          }
+
+        case other =>
+          ZIO.fail(DynaLensError(s"get() requires Map or Option[Map], found ${other.getClass.getSimpleName}"))
+      }
     } yield out
 }
 
+M_GET -> { (recv, args, off) =>
+  for {
+    _ <- checkArgs(M_GET, args, 2, off)                 // (key, default)
+  } yield GetFn2(recv, args(0), args(1))
+},
 
-final case class DistinctFn(recv: Fn[Any], keyPath: Option[String]) extends Fn[Any] {
-  private def keyFn: Option[Fn[Any]] =
-    keyPath.map(p => GetFn(p, searchThis = true).asInstanceOf[Fn[Any]])
-
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
-    for {
-      raw <- recv.resolve(ctx)
-      seq <- ZIO.fromEither(asSeq(raw, "distinct"))
-      out <- keyFn match {
-               case None =>
-                 ZIO.succeed(seq.distinct) // uses equals/hashCode of elements
-               case Some(kf) =>
-                 ZIO.foreach(seq){ e =>
-                   kf.resolve(withElemCtx(e, ctx)).map(k => (k, e))
-                 }.map { pairs =>
-                   pairs
-                     .foldLeft((Set.empty[Any], Vector.empty[Any])) {
-                       case ((seen, acc), (k, e)) =>
-                         if (seen(k)) (seen, acc) else (seen + k, acc :+ e)
-                     }._2
-                 }
-             }
-    } yield out
-}
-
-final case class ReverseFn(recv: Fn[Any]) extends Fn[Any] {
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
-    for {
-      raw <- recv.resolve(ctx)
-      seq <- ZIO.fromEither(asSeq(raw, "reverse"))
-    } yield seq.reverse
-}
-
-    final case class CleanFn(recv: Fn[Any]) extends Fn[Any] {
-      def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
-        for {
-          raw <- recv.resolve(ctx)
-          seq <- ZIO.fromEither(asSeq(raw, "clean"))
-        } yield seq.collect {
-          case s: String if s != null && s.nonEmpty => s
-          case x if x != null && !x.isInstanceOf[String] => x
-        }
+case object GetMethod extends CollectionMethodParser {
+  val name = M_GET
+  def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
+    P(Index ~ "(" ~/ WS0 ~ valueExpr ~ WS0 ~ "," ~ WS0 ~ valueExpr ~ WS0 ~ ")").map {
+      case (_, Left(e), _)         => Left(e)
+      case (_, _, Left(e))         => Left(e)
+      case (_, Right(k), Right(d)) => Right(GetFn2(inner, k, d))
     }
+}
 
 
-    //-----
-	2.	At runtime (value of this per iteration)
-On each iteration, you must also update the value of this in the runtime context (DynaContext) so GetFn("this") (or bare fields that rewrite to this.foo) can read the current element’s value.
-A tiny helper makes this clean:
-
-    // DynaLens.scala (inside your class)
-    private def withThis[A](
-      outerCtx: DynaContext,
-      value: Any,
-      elemLens: Option[DynaLens[_]]
-    )(run: DynaContext => ZIO[_BiMapRegistry, DynaLensError, A])
-    : ZIO[_BiMapRegistry, DynaLensError, A] =
-      // store exactly like the rest of your code expects: ("name" -> (value, maybeLens))
-      run(outerCtx.clone.addOne("this", (value, elemLens)))

@@ -360,50 +360,6 @@ trait Level2 extends Level1 with ValueExprModule:
           }
       }
     }
-    /*
-  private def mapStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
-    P(Index ~ pathBase ~ WS0 ~ "=>" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
-      CorrectPath.rewritePath(rawPath, pathOff) match {
-        case Left(err) => P(Pass(Left(err)))
-        case Right(cleanPath) =>
-          // Make bare field names and `this` resolve relative to the mapped element
-          val ctxForRhs = Utility.addThisType(cleanPath, ctx)
-          given ExprContext = ctxForRhs
-
-          P(valueExpr ~ WS0).map {
-            case Left(e) => Left(e)
-
-            case Right(vfn) =>
-              val lhsSym = Utility.getPathType(cleanPath)
-
-              // list-ish (includes OptionalList so we still wrap with LoopFn)
-              val isListLike =
-                lhsSym == SymbolType.List || lhsSym == SymbolType.OptionalList
-
-              // any Option variant (Scalar/List/Map)
-              val isOptionLike =
-                lhsSym == SymbolType.OptionalScalar ||
-                  lhsSym == SymbolType.OptionalList   ||
-                  lhsSym == SymbolType.OptionalMap
-
-              // For Option LHS, ensure RHS “shape” matches (scalar/list/map/None)
-              val shapeCheck =
-                if isOptionLike then Utility.checkRhsShapeForOptionMap(lhsSym, vfn, rhsOff)
-                else Right(())
-
-              shapeCheck match
-                case Left(err) => Left(err)
-                case Right(_) =>
-                  val body =
-                    if isListLike then LoopFn(vfn) // list-map drives per-element
-                    else vfn                       // option-map: no implicit loop
-
-                  // No separate OptionMapStmt needed; runtime map() handles Option
-                  Right((ctx, MapStmt(cleanPath, body)))
-          }
-      }
-    }
-    */
 
   private def ifStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(

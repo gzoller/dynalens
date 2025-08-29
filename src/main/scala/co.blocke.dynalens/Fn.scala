@@ -487,14 +487,78 @@ case class EndsWithFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
     } yield aStr.endsWith(bStr)
 }
 
-case class ContainsFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
+//case class ContainsFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
+//  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+//    for {
+//      aAny <- recv.resolve(ctx)
+//      bAny <- other.resolve(ctx)
+//      aStr <- ZIO.fromEither(toStr(aAny, "contains receiver"))
+//      bStr <- ZIO.fromEither(toStr(bAny, "contains argument"))
+//    } yield aStr.contains(bStr)
+//}
+
+case class ContainsFn(recv: Fn[Any], needle: Fn[Any]) extends BooleanFn {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
-      aAny <- recv.resolve(ctx)
-      bAny <- other.resolve(ctx)
-      aStr <- ZIO.fromEither(toStr(aAny, "contains receiver"))
-      bStr <- ZIO.fromEither(toStr(bAny, "contains argument"))
-    } yield aStr.contains(bStr)
+      hay <- recv.resolve(ctx)
+      res <- ContainsFn.containsDynamic(hay, needle, ctx)
+    } yield res
+}
+
+object ContainsFn {
+
+  private def containsDynamic(hay: Any, needle: Fn[Any], ctx: DynaContext)
+  : ZIO[_BiMapRegistry, DynaLensError, Boolean] = hay match {
+
+    // ---- Option unwraps ----
+    case null => ZIO.succeed(false)
+    case None => ZIO.succeed(false)
+    case Some(inner) => containsDynamic(inner, needle, ctx)
+
+    // ---- String: substring ----
+    case cs: CharSequence =>
+      for {
+        ndlAny <- needle.resolve(ctx)
+      } yield cs.toString.contains(Option(ndlAny).fold("null")(_.toString))
+
+    // ---- Map: key presence (needle evaluated once) ----
+    case m: Map[?, ?] =>
+      for {
+        ndlVal <- needle.resolve(ctx)
+      } yield m.asInstanceOf[Map[Any, Any]].contains(ndlVal)
+
+    // ---- Iterable: supports predicate OR value check ----
+    case it: Iterable[?] =>
+      needle match {
+        // Predicate case: evaluate per element with `this` bound
+        case pred: BooleanFn =>
+          ZIO
+            .foreach(it.asInstanceOf[Iterable[Any]]) { elem =>
+              withThisScoped(ctx, elem) {
+                pred.resolve(ctx)
+              }.either
+            }
+            .map(_.exists {
+              case Right(true) => true
+              case _ => false
+            })
+
+        // Value case: compute the target value once, then == compare
+        case _ =>
+          for {
+            ndlVal <- needle.resolve(ctx)
+          } yield it.asInstanceOf[Iterable[Any]].exists(_ == ndlVal)
+      }
+
+    // ---- Unsupported receiver types ----
+    case other =>
+      ZIO.fail(
+        DynaLensError(
+          s"contains() on ${other.getClass.getSimpleName} is not supported; " +
+            s"expected String, Iterable, Map, or Option thereof"
+        )
+      )
+  }
 }
 
 case class EqualsIgnoreCaseFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
@@ -844,6 +908,36 @@ case class ElseFn(primary: Fn[Any], fallback: Fn[Any]) extends Fn[Any] {
         ZIO.succeed(v)                             // non-Option: pass-through
     }
 }
+
+// --- Map Functions --- (except ContainsFn, which is multipurpose... given in another section)
+
+case class KeysFn(recv: Fn[Any]) extends Fn[List[Any]]:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, List[Any]] =
+    for {
+      mAny <- recv.resolve(ctx)
+      result <- mAny match {
+        case null => ZIO.succeed(Nil) // safe: no keys
+        case m: Map[?, ?] => ZIO.succeed(m.keys.toList)
+        case Some(m: Map[?, ?]) => ZIO.succeed(m.keys.toList) // option-wrapped
+        case None => ZIO.succeed(Nil)
+        case other =>
+          ZIO.fail(DynaLensError(s"keys() can only be used on Map or Option[Map], but found ${other.getClass.getName}"))
+      }
+    } yield result
+
+case class ValuesFn(recv: Fn[Any]) extends Fn[List[Any]]:
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, List[Any]] =
+    for {
+      mAny <- recv.resolve(ctx)
+      result <- mAny match {
+        case null => ZIO.succeed(Nil)
+        case m: Map[?, ?] => ZIO.succeed(m.values.toList)
+        case Some(m: Map[?, ?]) => ZIO.succeed(m.values.toList)
+        case None => ZIO.succeed(Nil)
+        case other =>
+          ZIO.fail(DynaLensError(s"values() can only be used on Map or Option[Map], but found ${other.getClass.getName}"))
+      }
+    } yield result
 
 // --- Collection (Iterable) Functions ----
 

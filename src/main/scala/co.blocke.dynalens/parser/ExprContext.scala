@@ -14,6 +14,8 @@ case class ExprContext(
                         scopes: List[Map[String, Any]] = Nil,           // lexical/local frames (top is head)
                         receiver: Option[Receiver] = None               // current “this”
                       ) {
+  println(">>> Type Info: "+typeInfo)
+  
   // Shadowing: scopes > receiver.fields > typeInfo
   def resolveField(name: String): Option[Any] =
     scopes.collectFirst { case m if m.contains(name) => m(name) }

@@ -204,6 +204,21 @@ trait Level1 extends Level0 {
         _ <- checkArgs(M_CONTAINS, args, 1, off)
       } yield ContainsFn(recv, args.head)
     },
+    M_KEYS -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_CONTAINS, args, 0, off)
+      } yield KeysFn(recv)
+    },
+    M_VALUES -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_CONTAINS, args, 0, off)
+      } yield ValuesFn(recv)
+    },
+//    M_GET -> { (recv, args, off) =>
+//      for {
+//        _ <- checkArgs(M_CONTAINS, args, 2, off)
+//      } yield MapGetFn(recv, args.head, args(1))
+//    },
     M_EQUALSIGNORECASE -> { (recv, args, off) =>
       for {
         _ <- checkArgs(M_EQUALSIGNORECASE, args, 1, off)

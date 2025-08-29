@@ -34,6 +34,9 @@ object MethodSig:
   /** (Optional) validate args against receiver kind; return message when invalid. */
   //    def validateArgs(receiver: SymbolType, args: List[Fn[?]]): Option[String] = None
 
+//  private object GetSig extends MethodSig:
+//    def upon: Set[SymbolType] = Set(SymbolType.Map)
+//    def out(r: SymbolType): SymbolType = SymbolType.Map
 
   private object StartsWithSig extends MethodSig:
     def upon: Set[SymbolType] = Set(SymbolType.Scalar)
@@ -44,7 +47,7 @@ object MethodSig:
     def out(r: SymbolType): SymbolType = SymbolType.Boolean
 
   private object ContainsSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
+    def upon: Set[SymbolType] = Set(SymbolType.Scalar, SymbolType.List, SymbolType.OptionalList, SymbolType.None, SymbolType.Map, SymbolType.OptionalMap)
     def out(r: SymbolType): SymbolType = SymbolType.Boolean
 
   private object EqualsIgnoreCaseSig extends MethodSig:
@@ -135,40 +138,50 @@ object MethodSig:
     def upon: Set[SymbolType] = Set(SymbolType.List, SymbolType.OptionalList)
     def out(r: SymbolType): SymbolType = r
 
+  private object KeysSig extends MethodSig:
+    def upon: Set[SymbolType] = Set(SymbolType.Map, SymbolType.OptionalMap)
+    def out(r: SymbolType): SymbolType = SymbolType.List
+
+  private object ValuesSig extends MethodSig:
+    def upon: Set[SymbolType] = Set(SymbolType.Map, SymbolType.OptionalMap)
+    def out(r: SymbolType): SymbolType = SymbolType.List
+
   val methodSigs: Map[String, MethodSig] = Map(
     // scalar/string ops
-    "startsWith"       -> StartsWithSig,
-    "endsWith"         -> EndsWithSig,
-    "contains"         -> ContainsSig,
-    "equalsIgnoreCase" -> EqualsIgnoreCaseSig,
-    "matchesRegex"     -> MatchesRegexSig,
-    "toUpperCase"      -> ToUpperCaseSig,
-    "toLowerCase"      -> ToLowerCaseSig,
-    "trim"             -> TrimSig,
-    "template"         -> TemplateSig,
-    "substr"           -> SubstrSig,
-    "replace"          -> ReplaceSig,
-    "dateFmt"          -> DateFmtSig,
-    "toDate"           -> ToDateSig,
-    "now"              -> NowSig,
-    "uuid"             -> UuidSig,
+    M_STARTSWITH -> StartsWithSig,
+    M_ENDSWITH -> EndsWithSig,
+    M_CONTAINS -> ContainsSig,
+    M_EQUALSIGNORECASE -> EqualsIgnoreCaseSig,
+    M_MATCHESREGEX -> MatchesRegexSig,
+    M_TOUPPERCASE -> ToUpperCaseSig,
+    M_TOLOWERCASE -> ToLowerCaseSig,
+    M_TRIM -> TrimSig,
+    M_TEMPLATE -> TemplateSig,
+    M_SUBSTR -> SubstrSig,
+    M_REPLACE -> ReplaceSig,
+    M_DATEFMT -> DateFmtSig,
+    M_TODATE -> ToDateSig,
+    "now" -> NowSig, // no M_NOW provided
+    "uuid" -> UuidSig, // no M_UUID provided
 
     // option/none helpers
-    "else"             -> ElseSig,
-    "isDefined"        -> IsDefinedSig,
+    M_ELSE -> ElseSig,
+    M_ISDEFINED -> IsDefinedSig,
 
-    // generic length (per your Sig)
-    "len"              -> LenSig,
+    // generic length
+    M_LEN -> LenSig,
 
-    // collection methods
-    "sortAsc"          -> SortAscSig,
-    "sortDesc"         -> SortDescSig,
-    "filter"           -> FilterSig,   // parser-side “filter(...)”
-    "distinct"         -> DistinctSig,
-    "limit"            -> LimitSig,
-    "reverse"          -> ReverseAscSig,
-    "clean"            -> CleanSig
+    // map methods
+    // M_GET -> GetSig, // (commented out in your original)
+    M_KEYS -> KeysSig,
+    M_VALUES -> ValuesSig,
+
+    // collection (Seq) methods
+    M_SORTASC -> SortAscSig,
+    M_SORTDESC -> SortDescSig,
+    M_FILTER -> FilterSig, // parser-side “filter(...)”
+    M_DISTINCT -> DistinctSig,
+    M_LIMIT -> LimitSig,
+    M_REVERSE -> ReverseAscSig,
+    M_CLEAN -> CleanSig
   )
-
-
-// TODO: Test argument type checking: foo.filter( items ) -- where items is a List or other non-boolean
