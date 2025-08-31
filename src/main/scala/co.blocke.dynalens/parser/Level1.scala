@@ -103,40 +103,60 @@ trait Level1 extends Level0 {
     }
 
   // Parses: "." ident "(" args ")"
-  private def methodCall[$: P](using ctx: ExprContext): P[Either[DLCompileError, (String, List[Fn[Any]])]] =
+  private def methodCall[$: P](using ctx: ExprContext)
+  : P[Either[DLCompileError, (String, List[Fn[Any]], Int)]] =
     P(
-      WS0 ~ "." ~ identifier.! ~ // do not cut yet
-        "(" ~/ WS0 ~ // only cut after we have consumed '('
+      Index ~ // capture offset *before* the dot
+        WS0 ~ "." ~ identifier.! ~
+        "(" ~/ WS0 ~
         valueExpr.rep(sep = "," ~/ WS0) ~
-        WS0 ~ ")" // close paren
-    ).map { case (name, argsRaw) =>
+        WS0 ~ ")"
+    ).map { case (off, name, argsRaw) =>
       val (errs, oks) = argsRaw.partitionMap(identity)
-      if (errs.nonEmpty) Left(errs.head) else Right((name, oks.toList))
+      if (errs.nonEmpty) Left(errs.head)
+      else Right((name, oks.toList, off))
     }
 
+  // parse optional fixed index and wrap.
+  private def maybeIndex[$: P](fn: Fn[Any]): P[Fn[Any]] =
+    P("[" ~ CharsWhileIn("0-9").! ~ "]").?.map {
+      case Some(iStr) => IndexFn(fn, iStr.toInt)
+      case None => fn
+    }
+
+  // If helpful, define the builder type somewhere central:
+  // type MethodBuilder = (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]
+
   def methodChain[$: P](base: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] = {
-    val argsCtx =
+    val argsCtx: ExprContext =
       base match {
         case GetFn(p) =>
           val elem = Utility.elementSchemaFor(p, ctx.typeInfo)
-          val c0   = ctx.withReceiverFromPath(p)
+          val c0 = ctx.withReceiverFromPath(p)
           if (elem.nonEmpty) c0.pushScope(elem) else c0
         case _ => ctx
       }
 
-    // Re-provide argsCtx so everything under here (including valueExpr inside methodArgs)
-    // sees the correct context.
     given ExprContext = argsCtx
 
-    P(WS0 ~ Index ~ methodCall.rep).map { case (_, calls) =>
-      val (errs, oks) = calls.partitionMap(identity)
-      if (errs.nonEmpty) Left(errs.head)
-      else oks.foldLeft[ParseFnResult](Right(base)) {
-        case (Right(inner), (fnName, args)) =>
-          methodFunctions.get(fnName)
-            .map(_(inner, args, 0)) // use your captured offset
-            .getOrElse(Left(DLCompileError(0, s"Unknown method: $fnName")))
-        case (l@Left(_), _) => l
+    P(methodCall.rep).flatMap { calls =>
+      // calls: Seq[Either[DLCompileError, (String, List[Fn[Any]], Int)]]
+      val built: Either[DLCompileError, Fn[Any]] =
+        calls.foldLeft[Either[DLCompileError, Fn[Any]]](Right(base)) {
+          case (Left(e), _) => Left(e)
+          case (Right(_), Left(err)) => Left(err)
+          case (Right(cur), Right((name, args, off))) =>
+            methodFunctions.get(name) match {
+              case Some(build3 /* (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]] */) =>
+                build3(cur, args, off) // <-- return Either directly (no Right(...))
+              case None =>
+                Left(DLCompileError(off, s"Unknown method: $name"))
+            }
+        }
+
+      built match {
+        case Left(err) => P(Pass(Left(err)))
+        case Right(fn) => maybeIndex(fn).map(f => Right(f)) // allow trailing [n] after the whole chain
       }
     }
   }
@@ -189,6 +209,12 @@ trait Level1 extends Level0 {
 
   private val methodFunctions
   : Map[String, (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]] = Map(
+    M_MIN     -> { (recv, _, _) => Right(MinFn(recv)) },
+    M_MAX     -> { (recv, _, _) => Right(MaxFn(recv)) },
+    M_SUM     -> { (recv, _, _) => Right(SumFn(recv)) },
+    M_AVG     -> { (recv, _, _) => Right(AvgFn(recv)) },
+    M_MEDIAN  -> { (recv, _, _) => Right(MedianFn(recv)) },
+    M_ABS     -> { (recv, _, _) => Right(AbsFn(recv)) },
     M_STARTSWITH -> { (recv, args, off) =>
       for {
         _ <- checkArgs(M_STARTSWITH, args, 1, off)

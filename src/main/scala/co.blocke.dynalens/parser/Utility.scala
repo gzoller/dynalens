@@ -74,7 +74,6 @@ object Utility:
     }
   }
 
-  @tailrec
   def rhsType(fn: Fn[?] )(using ctx: ExprContext): Option[SymbolType] =
     val fnName = fn.getClass.getSimpleName
     fn match {
@@ -84,6 +83,16 @@ object Utility:
       case f: ElseFn => rhsType(f.fallback)
       case f: IfFn[?] => rhsType(f.thenFn)
       case f: BlockFn[?] => rhsType(f.finalFn)
+      case IndexFn(inner, _) =>
+        // Prefer precise inference via typeInfo when possible
+        Utility.indexResultType(inner) orElse {
+          // Fall back to old behavior only if you must, or better: return None
+          rhsType(inner).flatMap {
+            case SymbolType.List         => Some(SymbolType.Scalar)
+            case SymbolType.OptionalList => Some(SymbolType.OptionalScalar)
+            case _                       => None // don't guess
+          }
+        }
       case _ => fnReturnTypes.get(fnName)
     }
   private val fnReturnTypes = Map(
@@ -137,8 +146,13 @@ object Utility:
     "ParseDateFn" -> SymbolType.Scalar,
     "NowFn" -> SymbolType.Scalar,
     "UUIDFn" -> SymbolType.Scalar,
+    "AbsFn" -> SymbolType.Scalar,
+    "MinFn" -> SymbolType.Scalar,
+    "MaxFn" -> SymbolType.Scalar,
+    "SumFn" -> SymbolType.Scalar,
+    "AvgFn" -> SymbolType.Scalar,
+    "MedianFn" -> SymbolType.Scalar,
   )
-
 
   private def normalize(seg: String): String =
     seg.replaceAll("""\[\d*\]""", "").stripSuffix("?")
@@ -203,12 +217,6 @@ object Utility:
       case Some(_: String) => Map.empty
       case _ => Map.empty
   }
-
-  /** Leaf marker for a field target: "", "?" (optional), etc. */
-//  private def leafMarkerFor(path: String, ti: Map[String, Any]): String =
-//    targetNodeFor(path, ti) match
-//      case Some(s: String) => s
-//      case _ => "" // fallback: treat as scalar
 
   def addThisType(cleanPath: String, ctx: ExprContext): ExprContext = {
 
@@ -337,3 +345,106 @@ object Utility:
   def effectiveLhsForAssignment(lhs: SymbolType, path: String): SymbolType =
     if (hasExplicitIndex(path) && lhs == SymbolType.OptionalList) SymbolType.List
     else lhs
+
+  // Map your typeInfo subtree to a SymbolType
+  private def symbolTypeOfNode(node: Any): Option[SymbolType] = node match {
+    case m: Map[?, ?] @unchecked =>
+      val mm = m.asInstanceOf[Map[String, Any]]
+      mm.get("__type") match {
+        case Some("[]") => Some(SymbolType.List)
+        case Some("[]?") => Some(SymbolType.OptionalList)
+        case Some("{}") => Some(SymbolType.Map)
+        case Some("{}?") => Some(SymbolType.OptionalMap)
+        case _ => Some(SymbolType.Scalar) // class/leaf treated as scalar at this level
+      }
+    case s: String =>
+      s match {
+        case "[]" => Some(SymbolType.List)
+        case "[]?" => Some(SymbolType.OptionalList)
+        case "{}" => Some(SymbolType.Map)
+        case "{}?" => Some(SymbolType.OptionalMap)
+        case "?" => Some(SymbolType.OptionalScalar)
+        case "" => Some(SymbolType.Scalar)
+        case _ => None
+      }
+    case _ => None
+  }
+
+  // Navigate ctx.typeInfo by path and return the node for that path
+  private def nodeAtPath(path: String, ti: Map[String, Any]): Option[Any] = {
+    import scala.annotation.tailrec
+
+    // parse "seg", capturing optional [i] or []? suffixes; reuse your parseSeg if you want.
+    val segRx = """^([A-Za-z0-9_]+)(?:\[(\d*)\])?(\?)?$""".r
+
+    def baseOf(seg: String) = seg match {
+      case segRx(base, _, _) => base
+      case _ => seg
+    }
+
+    @tailrec
+    def go(cur: Any, parts: List[String]): Option[Any] = (cur, parts) match {
+      case (node, Nil) => Some(node)
+
+      case (m: Map[?, ?] @unchecked, seg :: tail) =>
+        val mm = m.asInstanceOf[Map[String, Any]]
+        val base = baseOf(seg)
+
+        mm.get(base) match {
+          case None => None
+          case Some(next) =>
+            // descend if the current node implies a nested schema
+            // lists: go via __elemType
+            // maps:  go via __valType
+            // classes: descend into the map itself
+            val down: Any = next match {
+              case sub: Map[?, ?] @unchecked =>
+                val s = sub.asInstanceOf[Map[String, Any]]
+                s.get("__type") match {
+                  case Some("[]") | Some("[]?") => s.getOrElse("__elemType", Map.empty[String, Any])
+                  case Some("{}") | Some("{}?") => s.getOrElse("__valType", Map.empty[String, Any])
+                  case _ => s // class fields live in the map itself
+                }
+              case leaf => leaf
+            }
+            go(down, tail)
+        }
+
+      case _ => None
+    }
+
+    go(ti, path.split("\\.").toList)
+  }
+
+  // For an IndexFn(inner,_), infer the *element* SymbolType if possible.
+  def indexResultType(inner: Fn[Any])(using ctx: ExprContext): Option[SymbolType] = inner match {
+    case GetFn(p) =>
+      nodeAtPath(p, ctx.typeInfo) match {
+        case Some(m: Map[?, ?]) =>
+          val mm = m.asInstanceOf[Map[String, Any]]
+          mm.get("__type") match {
+            case Some("[]") =>
+              // element could be a class schema (mm("__elemType")) or a scalar
+              mm.get("__elemType") match {
+                case Some(em: Map[?, ?]) => Some(SymbolType.Map) // class-valued element → treat as Map (object)
+                case _ => Some(SymbolType.Scalar) // scalar element
+              }
+            case Some("[]?") =>
+              mm.get("__elemType") match {
+                case Some(em: Map[?, ?]) => Some(SymbolType.OptionalMap)
+                case _ => Some(SymbolType.OptionalScalar)
+              }
+            case other =>
+              // Not a list – indexing doesn’t make sense; be conservative:
+              None
+          }
+        case Some(s: String) =>
+          // leaf encodings (unlikely to be list), be conservative
+          None
+        case _ =>
+          None
+      }
+
+    // If inner is a method chain without declared type metadata, don’t guess
+    case _ => None
+  }

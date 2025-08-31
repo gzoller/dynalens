@@ -774,7 +774,6 @@ object Parsing extends ZIOSpecDefault:
           |""".stripMargin
       val inst = Mapped(5, Map("foo"->1,"bar"->2), Some(Map("hey"->4,"you"->5)), Map("wow"->List(Person("Frank",35)),"blah"->List(Person("Sarah",43),Person("Betty",25))))
       val a = dynalens[Mapped]
-      // TODO: values() returns a list. How can I understand if it knows a "list of what type"?
       for {
         compiledScript <- Script.compile(script, a)
         (x, newCtx)    <- a.run(compiledScript, inst)
@@ -800,6 +799,29 @@ object Parsing extends ZIOSpecDefault:
           |""".stripMargin
       val inst = ComplexLists(1, Nil, List(List(1,2,3),List(5,8,3),List(1,2,3),List(0,99,-2)))
       val a = dynalens[ComplexLists]
+      for {
+        compiledScript <- Script.compile(script, a)
+        (x, newCtx)    <- a.run(compiledScript, inst)
+        resultStr       = toStringCtx(newCtx)
+      } yield assertTrue(
+        x == inst,
+        resultStr == expectedResult,
+        compiledScript.toString == expectedCompiled
+      )
+    },
+    test("Select indexed value of list method") {
+      val script =
+        """
+          |  val x = m.values()[1] + 2
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(ValStmt(x,AddFn(IndexFn(ValuesFn(GetFn(m)),1),ConstantFn(2)))))"""
+      val expectedResult =
+        """top -> Mapped(1,Map(a -> 1, b -> 2),None,Map())
+          |x -> 4
+          |""".stripMargin
+      val inst = Mapped(1, Map("a"->1,"b"->2), None, Map.empty)
+      val a = dynalens[Mapped]
       for {
         compiledScript <- Script.compile(script, a)
         (x, newCtx)    <- a.run(compiledScript, inst)

@@ -22,7 +22,10 @@
 package co.blocke.dynalens
 
 import zio.*
+
 import java.util.Locale
+import scala.annotation.tailrec
+import NumPromote.*
 
 trait Fn[+R]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, R]
@@ -154,7 +157,6 @@ case class GetFn(path: String) extends Fn[Any] {
     }
 
     val parts = parsePath(path)
-    if path.startsWith("x") then println("Parts: "+parts)
 
     parts match {
       case Field("this", _) :: Nil =>
@@ -170,7 +172,6 @@ case class GetFn(path: String) extends Fn[Any] {
         }
 
       case (first @ IndexedField(name, idxOpt, _)) :: rest if ctx.contains(name) =>
-        println(s"[GetFn] IndexedField from ctx: name=$name idx=$idxOpt rest=${rest.mkString("/")}")
         ctx.get(name) match {
           case Some((v, _)) =>
             v match {
@@ -179,7 +180,6 @@ case class GetFn(path: String) extends Fn[Any] {
                 val s = seq.asInstanceOf[Seq[Any]]
                 idxOpt match {
                   case Some(i) =>
-                    println(s"[GetFn] indexing ctx[$name] at $i (len=${s.length})")
                     if (i >= 0 && i < s.length) {
                       val elem = s(i)
                       if (rest.isEmpty) ZIO.succeed(elem)
@@ -196,7 +196,6 @@ case class GetFn(path: String) extends Fn[Any] {
                 val s = it.asInstanceOf[Iterable[Any]].toList
                 idxOpt match {
                   case Some(i) =>
-                    println(s"[GetFn] indexing ctx[$name] at $i (iterable→list len=${s.length})")
                     if (i >= 0 && i < s.length) {
                       val elem = s(i)
                       if (rest.isEmpty) ZIO.succeed(elem)
@@ -215,7 +214,6 @@ case class GetFn(path: String) extends Fn[Any] {
                   case None =>
                     // You used a wildcard on a scalar; previous behavior tried from top.
                     // Keep that fallback if you truly want "respect the declared path even if ctx binding is scalar".
-                    println(s"[GetFn] ctx[$name] is non-iterable (${other.getClass.getSimpleName}); delegating to top for '$name[]'")
                     getFromTop(path, ctx)
                 }
             }
@@ -553,16 +551,6 @@ case class EndsWithFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
     } yield aStr.endsWith(bStr)
 }
 
-//case class ContainsFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
-//  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
-//    for {
-//      aAny <- recv.resolve(ctx)
-//      bAny <- other.resolve(ctx)
-//      aStr <- ZIO.fromEither(toStr(aAny, "contains receiver"))
-//      bStr <- ZIO.fromEither(toStr(bAny, "contains argument"))
-//    } yield aStr.contains(bStr)
-//}
-
 case class ContainsFn(recv: Fn[Any], needle: Fn[Any]) extends BooleanFn {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
@@ -651,6 +639,127 @@ case class MatchesRegexFn(recv: Fn[Any], pattern: Fn[Any]) extends BooleanFn {
 }
 
 // --- Arithmetic  Functions ----
+
+import java.math.MathContext
+
+case class AbsFn(recv: Fn[Any]) extends Fn[Any] {
+  def resolve(ctx: DynaContext) =
+    for {
+      raw <- recv.resolve(ctx)
+      out <- raw match {
+        case null                => ZIO.fail(DynaLensError("abs() found null"))
+        case x: java.lang.Byte   => ZIO.succeed((if x < 0 then (-x).toByte else x): Byte)
+        case x: java.lang.Short  => ZIO.succeed(Math.abs(x.toInt).toShort)
+        case x: java.lang.Integer=> ZIO.succeed(Math.abs(x))
+        case x: java.lang.Long   => ZIO.succeed(Math.abs(x))
+        case x: java.lang.Float  => ZIO.succeed(Math.abs(x))
+        case x: java.lang.Double => ZIO.succeed(Math.abs(x))
+        case other               => ZIO.fail(DynaLensError(s"abs() expects numeric, got ${other.getClass.getSimpleName}"))
+      }
+    } yield out
+}
+
+case class MinFn(recv: Fn[Any]) extends Fn[Any] {
+  def resolve(ctx: DynaContext) =
+    for {
+      raw <- recv.resolve(ctx)
+      box <- ZIO.fromEither(collect(raw, "min"))
+    } yield {
+      val v = toPromotedVector(box)
+      if (v.isEmpty) box.kind match {
+        case KDouble => 0.0
+        case KLong => 0L
+        case KInt => 0
+      } else box.kind match {
+        case KDouble => v.asInstanceOf[Vector[Double]].min
+        case KLong => v.asInstanceOf[Vector[Long]].min
+        case KInt => v.asInstanceOf[Vector[Int]].min
+      }
+    }
+}
+
+case class MaxFn(recv: Fn[Any]) extends Fn[Any] {
+  def resolve(ctx: DynaContext) =
+    for {
+      raw <- recv.resolve(ctx)
+      box <- ZIO.fromEither(collect(raw, "max"))
+    } yield {
+      val v = toPromotedVector(box)
+      if (v.isEmpty) box.kind match {
+        case KDouble => 0.0
+        case KLong => 0L
+        case KInt => 0
+      } else box.kind match {
+        case KDouble => v.asInstanceOf[Vector[Double]].max
+        case KLong => v.asInstanceOf[Vector[Long]].max
+        case KInt => v.asInstanceOf[Vector[Int]].max
+      }
+    }
+}
+
+case class SumFn(recv: Fn[Any]) extends Fn[Any] {
+  def resolve(ctx: DynaContext) =
+    for {
+      raw <- recv.resolve(ctx)
+      box <- ZIO.fromEither(collect(raw, "sum"))
+    } yield {
+      val v = toPromotedVector(box)
+      box.kind match {
+        case KDouble => v.asInstanceOf[Vector[Double]].foldLeft(0.0)(_ + _)
+        case KLong => v.asInstanceOf[Vector[Long]].foldLeft(0L)(_ + _)
+        case KInt => v.asInstanceOf[Vector[Int]].foldLeft(0)(_ + _)
+      }
+    }
+}
+
+case class AvgFn(recv: Fn[Any]) extends Fn[Any] {
+  def resolve(ctx: DynaContext) =
+    for {
+      raw <- recv.resolve(ctx)
+      box <- ZIO.fromEither(collect(raw, "avg"))
+    } yield {
+      val v = toPromotedVector(box)
+      if v.isEmpty then 0.0
+      else box.kind match {
+        // average is fractional → Double
+        case KDouble => v.asInstanceOf[Vector[Double]].sum / v.size.toDouble
+        case KLong =>
+          val vs = v.asInstanceOf[Vector[Long]]
+          vs.foldLeft(0.0)((a, b) => a + b) / vs.size.toDouble
+        case KInt =>
+          val vs = v.asInstanceOf[Vector[Int]]
+          vs.foldLeft(0.0)((a, b) => a + b) / vs.size.toDouble
+      }
+    }
+}
+
+case class MedianFn(recv: Fn[Any]) extends Fn[Any] {
+  def resolve(ctx: DynaContext) =
+    for {
+      raw <- recv.resolve(ctx)
+      box <- ZIO.fromEither(collect(raw, "median"))
+    } yield {
+      val v = toPromotedVector(box)
+      if v.isEmpty then 0.0
+      else box.kind match {
+        case KDouble =>
+          val s = v.asInstanceOf[Vector[Double]].sorted
+          val n = s.length
+          if ((n & 1) == 1) s(n / 2)
+          else (s(n / 2 - 1) + s(n / 2)) / 2.0
+        case KLong =>
+          val s = v.asInstanceOf[Vector[Long]].sorted
+          val n = s.length
+          if ((n & 1) == 1) s(n / 2).toDouble
+          else (s(n / 2 - 1) + s(n / 2)).toDouble / 2.0
+        case KInt =>
+          val s = v.asInstanceOf[Vector[Int]].sorted
+          val n = s.length
+          if ((n & 1) == 1) s(n / 2).toDouble
+          else (s(n / 2 - 1) + s(n / 2)).toDouble / 2.0
+      }
+    }
+}
 
 case class NegateFn(
     target: Fn[Any]
@@ -1006,6 +1115,29 @@ case class ValuesFn(recv: Fn[Any]) extends Fn[List[Any]]:
     } yield result
 
 // --- Collection (Iterable) Functions ----
+
+// Wrap any Fn that produces a collection; pick element at fixed index
+case class IndexFn(recv: Fn[Any], index: Int) extends Fn[Any] {
+  private def toList(v: Any): Either[DynaLensError, List[Any]] = v match {
+    case null => Left(DynaLensError(s"Cannot index into null"))
+    case None => Left(DynaLensError(s"Cannot index into None"))
+    case Some(s: Seq[?]) => Right(s.asInstanceOf[Seq[Any]].toList)
+    case Some(it: Iterable[?]) => Right(it.asInstanceOf[Iterable[Any]].toList)
+    case s: Seq[?] => Right(s.asInstanceOf[Seq[Any]].toList)
+    case it: Iterable[?] => Right(it.asInstanceOf[Iterable[Any]].toList)
+    case other => Left(DynaLensError(s"Indexing requires a collection, got: ${other.getClass.getSimpleName}"))
+  }
+
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    for {
+      raw <- recv.resolve(ctx)
+      list <- ZIO.fromEither(toList(raw))
+      elem <- list.lift(index) match {
+        case Some(e) => ZIO.succeed(e)
+        case None => ZIO.fail(DynaLensError(s"Index $index out of bounds"))
+      }
+    } yield elem
+}
 
 case class LoopFn(predicate: Fn[Any]) extends Fn[Any] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =

@@ -60,5 +60,4 @@ case class ExprContext(
        |  receiver  = $recvStr
        |)\n----------------------""".stripMargin
   }
-//  def clearReceiver: ExprContext = copy(receiver = None, sym = sym - "this")
 }

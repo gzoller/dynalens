@@ -77,43 +77,6 @@ object CorrectPath:
             mm
       case _ =>
         Map.empty
-  /*
-  // What type suffix should we enforce on THIS segment?
-  // - If node has __type → that's authoritative ([], []?, {}, {}?)
-  // - If node has no __type → it’s a class schema map (fields), so not a list/map itself.
-  //   Return "" so we don't add [] or ? here; we can still descend into its fields next step.
-  private inline def expectedOf(node: Any): String =
-    node match
-      case m: Map[?, ?] @unchecked =>
-        m.asInstanceOf[Map[String, Any]].get("__type") match
-          case Some(t: String) => t // "[]", "[]?", "{}", "{}?"
-          case _ => "" // class schema (no indexing on this segment)
-      case s: String => s // leaf encodings: "", "?", etc.
-      case _ => "" // fallback: treat as non-indexable
-
-  // Where do we descend for the NEXT segment?
-  // - Lists     → into __elemType if it’s a class schema map
-  // - Maps      → into __valType  if it’s a class schema map
-  // - Class map → the map itself (its fields)
-  private inline def nextNode(node: Any): Map[String, Any] =
-    node match
-      case m: Map[?, ?] @unchecked =>
-        val mm = m.asInstanceOf[Map[String, Any]]
-        mm.get("__type") match
-          case Some(t: String) if t == "[]" || t == "[]?" =>
-            mm.get("__elemType") match
-              case Some(em: Map[?, ?] @unchecked) => em.asInstanceOf[Map[String, Any]] // class-valued element
-              case _ => Map.empty // scalar element → no deeper fields
-          case Some(t: String) if t == "{}" || t == "{}?" =>
-            mm.get("__valType") match
-              case Some(vm: Map[?, ?] @unchecked) => vm.asInstanceOf[Map[String, Any]] // class-valued value
-              case _ => Map.empty // scalar value → no deeper fields
-          case _ =>
-            // No __type → this is a class schema map (its fields live here)
-            mm
-      case _ =>
-        Map.empty
-        */
 
   /** Rewrite/validate a path under current ctx.
    * - First tries absolute lookup in ctx.typeInfo.

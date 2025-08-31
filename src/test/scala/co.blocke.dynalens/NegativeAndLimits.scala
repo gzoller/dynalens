@@ -319,4 +319,17 @@ object NegativeAndLimits extends ZIOSpecDefault:
         case _         => assertTrue(false).label("Expected relative path field error")
       }
     },
+    test("indexed list methods type mismatch must fail") {
+      val script =
+        """
+          |  val x = cplx.values()[0] + 2
+          |""".stripMargin
+      val inst = Mapped(1, Map.empty, None, Map("a"->List(Person("Sam",45))))
+      val a = dynalens[Mapped]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("AddFn does not support operands of types: class scala.collection.immutable.$colon$colon, class java.lang.Integer"))
+        case _         => assertTrue(false).label("Expected relative path field error")
+      }
+    },
   )

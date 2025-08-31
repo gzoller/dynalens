@@ -211,7 +211,7 @@ object Options extends ZIOSpecDefault:
           |  l2[1] = 15
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(l2[1]?,ConstantFn(15))))"""
+        """BlockStmt(List(UpdateStmt(l2[1],ConstantFn(15))))"""
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),Some(List(5, 15, 7)))
           |""".stripMargin
@@ -320,7 +320,7 @@ object Options extends ZIOSpecDefault:
           |  l2[2] = 99
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(l2[2]?,ConstantFn(99))))"""
+        """BlockStmt(List(UpdateStmt(l2[2],ConstantFn(99))))"""
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),Some(List(4, 5, 99)))
           |""".stripMargin
