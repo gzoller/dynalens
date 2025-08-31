@@ -679,6 +679,91 @@ object Collections extends ZIOSpecDefault:
         compiledScript.toString == expectedCompiled
       )
     },
+    test("map get (simple) succeeds on m") {
+      val script =
+        """
+          |  val x = m.get("a")
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(ValStmt(x,MapGetFn(GetFn(m),ConstantFn(a)))))"""
+      val expectedResult =
+        """top -> Mapped(1,Map(a -> 10, b -> 20),Some(Map(a -> 5)),Map(a -> List(Person(p,1))))
+          |x -> 10""".stripMargin + "\n"
+      val inst = Mapped(
+        id = 1,
+        m = Map("a" -> 10, "b" -> 20),
+        om = Some(Map("a" -> 5)),
+        cplx = Map("a" -> List(Person("p", 1)))
+      )
+      val lens = dynalens[Mapped]
+      for {
+        compiled <- Script.compile(script, lens)
+        (updated, ctx) <- lens.run(compiled, inst)
+        resultStr = toStringCtx(ctx)
+      } yield assertTrue(
+        updated == inst,                            // no mutation
+        compiled.toString == expectedCompiled,
+        resultStr == expectedResult
+      )
+    },
+    test("map get (optional map) succeeds on om") {
+      val script =
+        """
+          |  val x = om.get("a")
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(ValStmt(x,MapGetFn(GetFn(om?),ConstantFn(a)))))"""
+      val expectedResult =
+        """top -> Mapped(1,Map(a -> 10, b -> 20),Some(Map(a -> 5)),Map(a -> List(Person(p,1))))
+          |x -> 5""".stripMargin + "\n"
+      val inst = Mapped(
+        id = 1,
+        m = Map("a" -> 10, "b" -> 20),
+        om = Some(Map("a" -> 5)),
+        cplx = Map("a" -> List(Person("p", 1)))
+      )
+      val lens = dynalens[Mapped]
+      for {
+        compiled <- Script.compile(script, lens)
+        (updated, ctx) <- lens.run(compiled, inst)
+        resultStr = toStringCtx(ctx)
+      } yield assertTrue(
+        updated == inst,
+        compiled.toString == expectedCompiled,
+        resultStr == expectedResult
+      )
+    },
+    test("map get (complex value) + chain len() on cplx") {
+      val script =
+        """
+          |  val x = cplx.get("a").len()
+          |""".stripMargin
+
+      val expectedCompiled =
+        """BlockStmt(List(ValStmt(x,LengthFn(MapGetFn(GetFn(cplx),ConstantFn(a))))))"""
+
+      val expectedResult =
+        """top -> Mapped(1,Map(a -> 10, b -> 20),Some(Map(a -> 5)),Map(a -> List(Person(p,1))))
+          |x -> 1""".stripMargin + "\n"
+
+      val inst = Mapped(
+        id = 1,
+        m = Map("a" -> 10, "b" -> 20),
+        om = Some(Map("a" -> 5)),
+        cplx = Map("a" -> List(Person("p", 1)))
+      )
+      val lens = dynalens[Mapped]
+
+      for {
+        compiled <- Script.compile(script, lens)
+        (updated, ctx) <- lens.run(compiled, inst)
+        resultStr = toStringCtx(ctx)
+      } yield assertTrue(
+        updated == inst,
+        compiled.toString == expectedCompiled,
+        resultStr == expectedResult
+      )
+    }
   )
 
 //  _ <- ZIO.succeed(println("&&& " + compiledScript))

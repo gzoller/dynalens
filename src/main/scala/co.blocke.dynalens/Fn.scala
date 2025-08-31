@@ -1114,6 +1114,26 @@ case class ValuesFn(recv: Fn[Any]) extends Fn[List[Any]]:
       }
     } yield result
 
+case class MapGetFn(recv: Fn[Any], key: Fn[Any]) extends Fn[Any] {
+  def resolve(ctx: DynaContext) =
+    for {
+      m  <- recv.resolve(ctx)
+      k  <- key.resolve(ctx)
+      v  <- m match {
+        case mm: Map[?, ?] @unchecked =>
+          mm.asInstanceOf[Map[Any, Any]].get(k) match
+            case Some(v) => ZIO.succeed(v)
+            case None    => ZIO.fail(DynaLensError(s"get(): key '$k' not found"))
+        case Some(mm: Map[?, ?] @unchecked) =>
+          mm.asInstanceOf[Map[Any, Any]].get(k) match
+            case Some(v) => ZIO.succeed(v)
+            case None    => ZIO.fail(DynaLensError(s"get(): key '$k' not found"))
+        case other =>
+          ZIO.fail(DynaLensError(s"get(): receiver is not a Map (got ${other.getClass.getSimpleName})"))
+      }
+    } yield v
+}
+
 // --- Collection (Iterable) Functions ----
 
 // Wrap any Fn that produces a collection; pick element at fixed index

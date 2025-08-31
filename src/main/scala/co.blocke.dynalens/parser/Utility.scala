@@ -83,6 +83,11 @@ object Utility:
       case f: ElseFn => rhsType(f.fallback)
       case f: IfFn[?] => rhsType(f.thenFn)
       case f: BlockFn[?] => rhsType(f.finalFn)
+      case MapGetFn(recv, _) =>
+        recv match {
+          case GetFn(p) => Utility.mapGetValueType(p)   // non-optional now
+          case _        => None                         // don’t guess
+        }
       case IndexFn(inner, _) =>
         // Prefer precise inference via typeInfo when possible
         Utility.indexResultType(inner) orElse {
@@ -417,7 +422,7 @@ object Utility:
   }
 
   // For an IndexFn(inner,_), infer the *element* SymbolType if possible.
-  def indexResultType(inner: Fn[Any])(using ctx: ExprContext): Option[SymbolType] = inner match {
+  private def indexResultType(inner: Fn[Any])(using ctx: ExprContext): Option[SymbolType] = inner match {
     case GetFn(p) =>
       nodeAtPath(p, ctx.typeInfo) match {
         case Some(m: Map[?, ?]) =>
@@ -448,3 +453,32 @@ object Utility:
     // If inner is a method chain without declared type metadata, don’t guess
     case _ => None
   }
+
+  private def mapValueSym(node: Any): Option[SymbolType] = node match {
+      case mm: Map[?, ?] @unchecked =>
+        val m = mm.asInstanceOf[Map[String, Any]]
+        m.get("__type") match {
+          case Some("{}") | Some("{}?") =>
+            m.get("__valType") match {
+              case Some(s: String) => symbolTypeOfNode(s).orElse(Some(SymbolType.Scalar))
+              case Some(_: Map[?, ?]) => Some(SymbolType.Scalar) // class-valued → Scalar in our coarse system
+              case None => Some(SymbolType.Scalar)
+              //case Some(_) => ??? // default to scalar
+            }
+          case _ => None
+        }
+      case _ => None
+    }
+
+  /** Non-optional value SymbolType returned by map.get() for a map at recvPath. */
+  def mapGetValueType(recvPath: String)(using ctx: ExprContext): Option[SymbolType] =
+    nodeAtPath(recvPath, ctx.typeInfo).flatMap {
+      case mm: Map[?, ?] @unchecked =>
+        // nodeAtPath returned the map node itself (older behavior)
+        mapValueSym(mm)
+      case s: String =>
+        // nodeAtPath has already drilled into __valType and gave us the leaf token like "" / "[]"
+        symbolTypeOfNode(s)
+      case _ =>
+        None
+    }

@@ -332,4 +332,40 @@ object NegativeAndLimits extends ZIOSpecDefault:
         case _         => assertTrue(false).label("Expected relative path field error")
       }
     },
+    test("map get (simple) fails on bad key for m") {
+      val script =
+        """
+          |  val x = m.get("zzz")
+          |""".stripMargin
+      val inst = Mapped(
+        id = 1,
+        m = Map("a" -> 10, "b" -> 20),
+        om = Some(Map("a" -> 5)),
+        cplx = Map("a" -> List(Person("p", 1)))
+      )
+      val a = dynalens[Mapped]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("get(): key 'zzz' not found"))
+        case _         => assertTrue(false).label("Expected relative path field error")
+      }
+    },
+    test("map get (optional map) fails on bad key for om") {
+      val script =
+        """
+          |  val x = om.get("zzz")
+          |""".stripMargin
+      val inst = Mapped(
+        id = 1,
+        m = Map("a" -> 10, "b" -> 20),
+        om = Some(Map("a" -> 5)),
+        cplx = Map("a" -> List(Person("p", 1)))
+      )
+      val a = dynalens[Mapped]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("get(): key 'zzz' not found"))
+        case _         => assertTrue(false).label("Expected relative path field error")
+      }
+    }
   )
