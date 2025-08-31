@@ -29,34 +29,91 @@ object CorrectPath:
       case "[]" =>
         seg.idx match
           case Some(Fixed(i)) => Right(render(seg.base, Some(Fixed(i)), opt = false))
-          case _              => Right(render(seg.base, Some(Wildcard), opt = false))
+          case _ => Right(render(seg.base, Some(Wildcard), opt = false))
+
+      // Optional list: keep '?' only for wildcard (container) access.
+      // For element access '[n]', do NOT suffix '?' — you're addressing the element, not the optional container.
       case "[]?" =>
         seg.idx match
-          case Some(Fixed(i)) => Right(render(seg.base, Some(Fixed(i)), opt = true))
-          case _              => Right(render(seg.base, Some(Wildcard), opt = true))
+          case Some(Fixed(i)) => Right(render(seg.base, Some(Fixed(i)), opt = false))
+          case _ => Right(render(seg.base, Some(Wildcard), opt = true)) // container-level
+
       case "{}" | "{}?" | "?" | "" =>
-        // Non-list types may not be indexed
         seg.idx match
           case Some(_) => Left(s"Cannot index into non-list field '${seg.base}'")
           case None =>
             val opt = expectedType.endsWith("?") || expectedType == "?"
             Right(render(seg.base, None, opt))
+
       case _ =>
         Right(render(seg.base, seg.idx, seg.opt)) // fallback
 
+  // What type suffix should we enforce on THIS segment?
+  private inline def expectedOf(node: Any): String =
+    node match
+      case m: Map[?, ?] @unchecked =>
+        m.asInstanceOf[Map[String, Any]].get("__type").collect { case s: String => s }.getOrElse("")
+      case s: String => s
+      case _ => ""
+
+  // Where do we descend for the NEXT segment?
+  // Prefer explicit __elemType / __valType if present; otherwise fall back to the map itself,
+  // because your current typeInfo inlines child fields in the same map.
+  private inline def nextNode(node: Any): Map[String, Any] =
+    node match
+      case m: Map[?, ?] @unchecked =>
+        val mm = m.asInstanceOf[Map[String, Any]]
+        mm.get("__type") match
+          case Some(t: String) if t == "[]" || t == "[]?" =>
+            mm.get("__elemType") match
+              case Some(em: Map[?, ?] @unchecked) => em.asInstanceOf[Map[String, Any]]
+              case _ => mm // <-- fallback to inlined fields
+          case Some(t: String) if t == "{}" || t == "{}?" =>
+            mm.get("__valType") match
+              case Some(vm: Map[?, ?] @unchecked) => vm.asInstanceOf[Map[String, Any]]
+              case _ => mm // <-- fallback to inlined fields
+          case _ =>
+            // No __type → class schema map; fields live here
+            mm
+      case _ =>
+        Map.empty
+  /*
+  // What type suffix should we enforce on THIS segment?
+  // - If node has __type → that's authoritative ([], []?, {}, {}?)
+  // - If node has no __type → it’s a class schema map (fields), so not a list/map itself.
+  //   Return "" so we don't add [] or ? here; we can still descend into its fields next step.
   private inline def expectedOf(node: Any): String =
     node match
       case m: Map[?, ?] @unchecked =>
         m.asInstanceOf[Map[String, Any]].get("__type") match
-          case Some(s: String) => s
-          case _               => "{}"
-      case s: String => s
-      case _         => ""
+          case Some(t: String) => t // "[]", "[]?", "{}", "{}?"
+          case _ => "" // class schema (no indexing on this segment)
+      case s: String => s // leaf encodings: "", "?", etc.
+      case _ => "" // fallback: treat as non-indexable
 
+  // Where do we descend for the NEXT segment?
+  // - Lists     → into __elemType if it’s a class schema map
+  // - Maps      → into __valType  if it’s a class schema map
+  // - Class map → the map itself (its fields)
   private inline def nextNode(node: Any): Map[String, Any] =
     node match
-      case m: Map[?, ?] @unchecked => m.asInstanceOf[Map[String, Any]]
-      case _                       => Map.empty[String, Any]
+      case m: Map[?, ?] @unchecked =>
+        val mm = m.asInstanceOf[Map[String, Any]]
+        mm.get("__type") match
+          case Some(t: String) if t == "[]" || t == "[]?" =>
+            mm.get("__elemType") match
+              case Some(em: Map[?, ?] @unchecked) => em.asInstanceOf[Map[String, Any]] // class-valued element
+              case _ => Map.empty // scalar element → no deeper fields
+          case Some(t: String) if t == "{}" || t == "{}?" =>
+            mm.get("__valType") match
+              case Some(vm: Map[?, ?] @unchecked) => vm.asInstanceOf[Map[String, Any]] // class-valued value
+              case _ => Map.empty // scalar value → no deeper fields
+          case _ =>
+            // No __type → this is a class schema map (its fields live here)
+            mm
+      case _ =>
+        Map.empty
+        */
 
   /** Rewrite/validate a path under current ctx.
    * - First tries absolute lookup in ctx.typeInfo.

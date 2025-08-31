@@ -14,13 +14,6 @@ case class ExprContext(
                         scopes: List[Map[String, Any]] = Nil,           // lexical/local frames (top is head)
                         receiver: Option[Receiver] = None               // current “this”
                       ) {
-  println(">>> Type Info: "+typeInfo)
-  
-  // Shadowing: scopes > receiver.fields > typeInfo
-  def resolveField(name: String): Option[Any] =
-    scopes.collectFirst { case m if m.contains(name) => m(name) }
-      .orElse(receiver.flatMap(r => r.fields.get(name)))
-      .orElse(typeInfo.get(name))
 
   def resolveSymbol(name: String): Option[SymbolType] =
     sym.get(name)
@@ -33,7 +26,7 @@ case class ExprContext(
     copy(scopes = m :: scopes)
 
   def withReceiverFromPath(path: String): ExprContext = {
-    val targetSym   = Utility.getPathType(path)
+    val targetSym   = Utility.getPathType(path)(using this)
     val elemSchema  = Utility.elementSchemaFor(path, typeInfo) // minus __type if element, else Map.empty
     val recv        = Receiver(fields = elemSchema, sym = targetSym)
     copy(receiver = Some(recv), sym = sym + ("this" -> targetSym))

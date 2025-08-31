@@ -142,12 +142,11 @@ object NegativeAndLimits extends ZIOSpecDefault:
         ctxStr == expectedResult
       )
     },
-    test("Assignment top optional list (empty)") {
+    test("Assignment to optional list (empty)") {
       val script =
         """
           |  l2[2] = 99
           |""".stripMargin
-
       val inst = MyLists(1, List(1,2,3), None)
       val a    = dynalens[MyLists]
       val effect =
@@ -303,6 +302,20 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
       result match {
         case Left(err) => assertTrue(err.msg.contains("Field 'qty' does not exist"))
+        case _         => assertTrue(false).label("Expected relative path field error")
+      }
+    },
+    test("invalid list method chains should fail") {
+      val script =
+        """
+          |  val x = l1.distinct()
+          |  val y = x[2].sortAsc()
+          |""".stripMargin
+      val inst = ComplexLists(1, List(1,5,8,1,0,99,-2), Nil)
+      val a = dynalens[ComplexLists]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("sortAsc() may only be applied to Iterable types, but got: Integer"))
         case _         => assertTrue(false).label("Expected relative path field error")
       }
     },

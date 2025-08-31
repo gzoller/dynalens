@@ -296,6 +296,7 @@ trait Level2 extends Level1 with ValueExprModule:
         Left(err)
     }
 
+  /*
   // '=': always assignment
   private def updateStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(Index ~ pathBase ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
@@ -314,6 +315,34 @@ trait Level2 extends Level1 with ValueExprModule:
                 case None => Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${vfn.getClass.getSimpleName}"))
                 case Some(rhsSym) =>
                   if (Utility.areTypesCompatible(lhsSym, rhsSym))
+                    Right((ctx, UpdateStmt(cleanPath, vfn)))
+                  else
+                    Left(DLCompileError(rhsOff, s"Type mismatch: cannot assign $rhsSym to $lhsSym at $cleanPath"))
+              }
+          }
+      }
+    }
+    */
+  // '=': always assignment
+  private def updateStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
+    P(Index ~ pathBase ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
+      CorrectPath.rewritePath(rawPath, pathOff) match {
+        case Left(err) => P(Pass(Left(err)))
+        case Right(cleanPath) =>
+          val ctxForRhs = Utility.addThisType(cleanPath, ctx)
+
+          given ExprContext = ctxForRhs
+
+          P(valueExpr ~ WS0).map {
+            case Left(e) => Left(e)
+            case Right(vfn) =>
+              val lhsSym = Utility.getPathType(cleanPath)
+              val effLhs = Utility.effectiveLhsForAssignment(lhsSym, cleanPath) // <-- relax here
+              Utility.rhsType(vfn) match {
+                case None =>
+                  Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${vfn.getClass.getSimpleName}"))
+                case Some(rhsSym) =>
+                  if (Utility.areTypesCompatible(effLhs, rhsSym))
                     Right((ctx, UpdateStmt(cleanPath, vfn)))
                   else
                     Left(DLCompileError(rhsOff, s"Type mismatch: cannot assign $rhsSym to $lhsSym at $cleanPath"))

@@ -37,6 +37,7 @@ case class Registry(id: String, giftNums: List[Int], giftDesc: List[String])
 case class Maybe(id: String, dunno: Option[String] = None, interest: Option[List[Item]] = None)
 case class MyLists(id: Int, l1: List[Int], l2: Option[List[Int]])
 case class ListOfOpt(id: Int, l1: List[Option[Int]])
+case class ComplexLists(id: Int, l1: List[Int], l2: List[List[Int]])
 
 case class Mapped(id: Int, m: Map[String,Int], om: Option[Map[String,Int]], cplx: Map[String, List[Person]])
 

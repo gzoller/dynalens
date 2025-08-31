@@ -154,6 +154,7 @@ case class GetFn(path: String) extends Fn[Any] {
     }
 
     val parts = parsePath(path)
+    if path.startsWith("x") then println("Parts: "+parts)
 
     parts match {
       case Field("this", _) :: Nil =>
@@ -168,19 +169,59 @@ case class GetFn(path: String) extends Fn[Any] {
           case None => ZIO.fail(DynaLensError("Use of 'this' with no receiver in scope"))
         }
 
-      case (first@IndexedField(name, _, _)) :: rest if ctx.contains(name) =>
+      case (first @ IndexedField(name, idxOpt, _)) :: rest if ctx.contains(name) =>
+        println(s"[GetFn] IndexedField from ctx: name=$name idx=$idxOpt rest=${rest.mkString("/")}")
         ctx.get(name) match {
           case Some((v, _)) =>
             v match {
-              case _: Iterable[?] =>
-                // bound value *is* a collection; respect it
-                if (rest.isEmpty) ZIO.succeed(v) else ZIO.fromEither(walk(v, rest))
-              case _ =>
-                // bound value is a *scalar/element*, but the path requests a collection ("name[]")
-                // -> resolve from TOP so we see the actual list
-                getFromTop(path, ctx)
+              // --- value is a Seq: honor index if provided ---
+              case seq: Seq[?] =>
+                val s = seq.asInstanceOf[Seq[Any]]
+                idxOpt match {
+                  case Some(i) =>
+                    println(s"[GetFn] indexing ctx[$name] at $i (len=${s.length})")
+                    if (i >= 0 && i < s.length) {
+                      val elem = s(i)
+                      if (rest.isEmpty) ZIO.succeed(elem)
+                      else ZIO.fromEither(walk(elem, rest))
+                    } else ZIO.fail(DynaLensError(s"Index $i out of bounds for '$name'"))
+                  case None =>
+                    // wildcard: return the whole seq (or walk further if needed)
+                    if (rest.isEmpty) ZIO.succeed(s)
+                    else ZIO.fromEither(walk(s, rest))
+                }
+
+              // --- value is some Iterable (but not Seq): convert and do same logic ---
+              case it: Iterable[?] =>
+                val s = it.asInstanceOf[Iterable[Any]].toList
+                idxOpt match {
+                  case Some(i) =>
+                    println(s"[GetFn] indexing ctx[$name] at $i (iterable→list len=${s.length})")
+                    if (i >= 0 && i < s.length) {
+                      val elem = s(i)
+                      if (rest.isEmpty) ZIO.succeed(elem)
+                      else ZIO.fromEither(walk(elem, rest))
+                    } else ZIO.fail(DynaLensError(s"Index $i out of bounds for '$name'"))
+                  case None =>
+                    if (rest.isEmpty) ZIO.succeed(s)
+                    else ZIO.fromEither(walk(s, rest))
+                }
+
+              // --- value is NOT indexable ---
+              case other =>
+                idxOpt match {
+                  case Some(i) =>
+                    ZIO.fail(DynaLensError(s"Value bound to '$name' is not indexable (${other.getClass.getSimpleName}); cannot use [$i]"))
+                  case None =>
+                    // You used a wildcard on a scalar; previous behavior tried from top.
+                    // Keep that fallback if you truly want "respect the declared path even if ctx binding is scalar".
+                    println(s"[GetFn] ctx[$name] is non-iterable (${other.getClass.getSimpleName}); delegating to top for '$name[]'")
+                    getFromTop(path, ctx)
+                }
             }
+
           case None =>
+            // Not in ctx after all (unlikely since contains(name) was true), but keep the prior fallback:
             getFromTop(path, ctx)
         }
 
@@ -203,13 +244,38 @@ case class GetFn(path: String) extends Fn[Any] {
       // existing: first segment bound in ctx (vals/loop symbol), using first.name ("items")
       case first :: rest if ctx.contains(first.name) =>
         ctx.get(first.name) match {
-          case Some((v, None)) if rest.isEmpty =>
-            ZIO.succeed(v)
+          // --- val/symbol binding (no lens) ---
           case Some((v, None)) =>
-            ZIO.fromEither(walk(v, rest))
+            first match {
+              // x[2] ...
+              case IndexedField(_, Some(i), _) =>
+                v match {
+                  case seq: Seq[?] =>
+                    val s = seq.asInstanceOf[Seq[Any]]
+                    if (i >= 0 && i < s.length) {
+                      val elem = s(i)
+                      if (rest.isEmpty) ZIO.succeed(elem)
+                      else ZIO.fromEither(walk(elem, rest))  // allow x[2].field, etc.
+                    } else ZIO.fail(DynaLensError(s"Index $i out of bounds for '${first.name}'"))
+                  case other =>
+                    ZIO.fail(DynaLensError(s"Value bound to '${first.name}' is not indexable (${other.getClass.getSimpleName})"))
+                }
+
+              // wildcard `x[]` doesn’t make sense on a scalar get from ctx
+              case IndexedField(_, None, _) =>
+                ZIO.fail(DynaLensError(s"Wildcard index not allowed for '${first.name}[]' in value context"))
+
+              // plain `x` or `x.something`
+              case Field(_, _) =>
+                if (rest.isEmpty) ZIO.succeed(v)
+                else ZIO.fromEither(walk(v, rest))
+            }
+
+          // --- lens-bound roots (unchanged) ---
           case Some((v, Some(boundLens))) =>
             if (rest.isEmpty) ZIO.succeed(v)
             else boundLens.get(partialPath(rest), v.asInstanceOf[boundLens.ThisT])
+
           case None =>
             ZIO.fail(DynaLensError(s"Field ${first.name} not found in context"))
         }

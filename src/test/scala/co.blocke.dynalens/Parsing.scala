@@ -32,7 +32,6 @@ import CtxStrings.*
 object Parsing extends ZIOSpecDefault:
 
   def spec = suite("Parsing Tests")(
-    /*
     test("Simple val assignment script test") {
       val script =
         """
@@ -348,7 +347,6 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && normalize(resultStr) == normalize(expectedResult) && compiledScript.toString == expectedCompiled)
     },
-    */
     test("Path expressions in string interpolation works") {
       val script =
         """
@@ -365,7 +363,6 @@ object Parsing extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == inst && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
-    /*
     test("Length function work") {
       val script =
         """
@@ -723,11 +720,11 @@ object Parsing extends ZIOSpecDefault:
           |  val z = om.contains("bar")
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(ValStmt(x,ContainsFn(GetFn(m),ConstantFn(foo))), ValStmt(y,ContainsFn(GetFn(m),ConstantFn(bogus))), ValStmt(z,ContainsFn(GetFn(om?),ConstantFn(bar)))))"""
-      val expectedResult = """top -> Mapped(5,Map(foo -> 1, bar -> 2),Some(Map(foo -> 1, bar -> 2)))
+      val expectedResult = """top -> Mapped(5,Map(foo -> 1, bar -> 2),Some(Map(foo -> 1, bar -> 2)),Map(wow -> List(Person(Frank,35)), blah -> List(Person(Sarah,43), Person(Betty,25))))
                              |x -> true
                              |y -> false
                              |z -> true""".stripMargin + "\n"
-      val inst = Mapped(5, Map("foo"->1,"bar"->2), Some(Map("foo"->1,"bar"->2)))
+      val inst = Mapped(5, Map("foo"->1,"bar"->2), Some(Map("foo"->1,"bar"->2)), Map("wow"->List(Person("Frank",35)),"blah"->List(Person("Sarah",43),Person("Betty",25))))
       val a = dynalens[Mapped]
       for {
         compiledScript <- Script.compile(script, a)
@@ -744,11 +741,11 @@ object Parsing extends ZIOSpecDefault:
       val expectedCompiled =
         """BlockStmt(List(ValStmt(x,KeysFn(GetFn(m))), ValStmt(y,KeysFn(GetFn(om?)))))"""
       val expectedResult =
-        """top -> Mapped(5,Map(foo -> 1, bar -> 2),Some(Map(hey -> 4, you -> 5)))
+        """top -> Mapped(5,Map(foo -> 1, bar -> 2),Some(Map(hey -> 4, you -> 5)),Map(wow -> List(Person(Frank,35)), blah -> List(Person(Sarah,43), Person(Betty,25))))
           |x -> List(foo, bar)
           |y -> List(hey, you)
           |""".stripMargin
-      val inst = Mapped(5, Map("foo"->1,"bar"->2), Some(Map("hey"->4,"you"->5)))
+      val inst = Mapped(5, Map("foo"->1,"bar"->2), Some(Map("hey"->4,"you"->5)), Map("wow"->List(Person("Frank",35)),"blah"->List(Person("Sarah",43),Person("Betty",25))))
       val a = dynalens[Mapped]
       for {
         compiledScript <- Script.compile(script, a)
@@ -760,23 +757,49 @@ object Parsing extends ZIOSpecDefault:
         compiledScript.toString == expectedCompiled
       )
     },
-    */
-
     test("Values (map)") {
       val script =
         """
           |  val x = m.values()
           |  val y = om.values()
+          |  val z = cplx.values()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,ValuesFn(GetFn(m))), ValStmt(y,ValuesFn(GetFn(om?)))))"""
+        """BlockStmt(List(ValStmt(x,ValuesFn(GetFn(m))), ValStmt(y,ValuesFn(GetFn(om?))), ValStmt(z,ValuesFn(GetFn(cplx)))))"""
       val expectedResult =
-        """top -> Mapped(5,Map(foo -> 1, bar -> 2),Some(Map(hey -> 4, you -> 5)))
+        """top -> Mapped(5,Map(foo -> 1, bar -> 2),Some(Map(hey -> 4, you -> 5)),Map(wow -> List(Person(Frank,35)), blah -> List(Person(Sarah,43), Person(Betty,25))))
           |x -> List(1, 2)
           |y -> List(4, 5)
+          |z -> List(List(Person(Frank,35)), List(Person(Sarah,43), Person(Betty,25)))
           |""".stripMargin
       val inst = Mapped(5, Map("foo"->1,"bar"->2), Some(Map("hey"->4,"you"->5)), Map("wow"->List(Person("Frank",35)),"blah"->List(Person("Sarah",43),Person("Betty",25))))
       val a = dynalens[Mapped]
+      // TODO: values() returns a list. How can I understand if it knows a "list of what type"?
+      for {
+        compiledScript <- Script.compile(script, a)
+        (x, newCtx)    <- a.run(compiledScript, inst)
+        resultStr       = toStringCtx(newCtx)
+      } yield assertTrue(
+        x == inst,
+        resultStr == expectedResult,
+        compiledScript.toString == expectedCompiled
+      )
+    },
+    test("Deep list method chains") {
+      val script =
+        """
+          |  val x = l2.distinct()
+          |  val y = x[2].sortAsc()
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(ValStmt(x,DistinctFn(GetFn(l2[]),None)), ValStmt(y,SortFn(GetFn(x[2]),None,true))))"""
+      val expectedResult =
+        """top -> ComplexLists(1,List(),List(List(1, 2, 3), List(5, 8, 3), List(1, 2, 3), List(0, 99, -2)))
+          |x -> List(List(1, 2, 3), List(5, 8, 3), List(0, 99, -2))
+          |y -> List(-2, 0, 99)
+          |""".stripMargin
+      val inst = ComplexLists(1, Nil, List(List(1,2,3),List(5,8,3),List(1,2,3),List(0,99,-2)))
+      val a = dynalens[ComplexLists]
       for {
         compiledScript <- Script.compile(script, a)
         (x, newCtx)    <- a.run(compiledScript, inst)
@@ -791,3 +814,5 @@ object Parsing extends ZIOSpecDefault:
 
 //  _ <- ZIO.succeed(println("&&& " + compiledScript))
 //  _ <- ZIO.succeed(println("??? " + resultStr))
+
+  // TODO: Math fns: min, max, sum, avg, median, abs
