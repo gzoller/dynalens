@@ -24,8 +24,9 @@ package co.blocke.dynalens
 import zio.*
 
 import java.util.Locale
-import scala.annotation.tailrec
 import NumPromote.*
+
+import scala.annotation.tailrec
 
 trait Fn[+R]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, R]
@@ -49,21 +50,8 @@ case class GetFn(path: String) extends Fn[Any] {
 
   import Path._ // for parsePath/PathElement/Field/IndexedField/partialPath
 
-
-  // ZZZ Temporary
-  // TODO: Remove this
-  private def showCtxKeys(ctx: DynaContext): String =
-    ctx.iterator
-      .map { case (k, (v, lens)) =>
-        val lensName = lens.map(_._typeName).getOrElse("∅")
-        s"$k=[${Option(v).fold("null")(_.getClass.getSimpleName)}; lens=$lensName]"
-      }
-      .toList
-      .sorted
-      .mkString("{", ", ", "}")
-
-
   // Generic walker that can traverse case classes, Maps and (indexed) collections
+  @tailrec
   private def walk(obj: Any, parts: List[PathElement]): Either[DynaLensError, Any] = {
     def fieldOf(p: Product, name: String): Option[Any] = {
       val names = p.productElementNames.iterator
@@ -679,8 +667,6 @@ case class MatchesRegexFn(recv: Fn[Any], pattern: Fn[Any]) extends BooleanFn {
 
 // --- Arithmetic  Functions ----
 
-import java.math.MathContext
-
 case class AbsFn(recv: Fn[Any]) extends Fn[Any] {
   def resolve(ctx: DynaContext) =
     for {
@@ -703,18 +689,22 @@ case class MinFn(recv: Fn[Any]) extends Fn[Any] {
     for {
       raw <- recv.resolve(ctx)
       box <- ZIO.fromEither(collect(raw, "min"))
-    } yield {
-      val v = toPromotedVector(box)
-      if (v.isEmpty) box.kind match {
-        case KDouble => 0.0
-        case KLong => 0L
-        case KInt => 0
-      } else box.kind match {
-        case KDouble => v.asInstanceOf[Vector[Double]].min
-        case KLong => v.asInstanceOf[Vector[Long]].min
-        case KInt => v.asInstanceOf[Vector[Int]].min
+      v    = toPromotedVector(box)
+      res <- box.kind match {
+        case KDouble =>
+          val vs = v.asInstanceOf[Vector[Double]]
+          ZIO.succeed(vs.minOption.getOrElse(0.0))
+        case KFloat =>
+          val vs = v.asInstanceOf[Vector[Float]]
+          ZIO.succeed(vs.minOption.getOrElse(0.0f))
+        case KLong =>
+          val vs = v.asInstanceOf[Vector[Long]]
+          ZIO.succeed(vs.minOption.getOrElse(0L))
+        case KInt =>
+          val vs = v.asInstanceOf[Vector[Int]]
+          ZIO.succeed(vs.minOption.getOrElse(0))
       }
-    }
+    } yield res
 }
 
 case class MaxFn(recv: Fn[Any]) extends Fn[Any] {
@@ -722,18 +712,22 @@ case class MaxFn(recv: Fn[Any]) extends Fn[Any] {
     for {
       raw <- recv.resolve(ctx)
       box <- ZIO.fromEither(collect(raw, "max"))
-    } yield {
-      val v = toPromotedVector(box)
-      if (v.isEmpty) box.kind match {
-        case KDouble => 0.0
-        case KLong => 0L
-        case KInt => 0
-      } else box.kind match {
-        case KDouble => v.asInstanceOf[Vector[Double]].max
-        case KLong => v.asInstanceOf[Vector[Long]].max
-        case KInt => v.asInstanceOf[Vector[Int]].max
+      v = toPromotedVector(box)
+      res <- box.kind match {
+        case KDouble =>
+          val vs = v.asInstanceOf[Vector[Double]]
+          ZIO.succeed(vs.maxOption.getOrElse(0.0))
+        case KFloat =>
+          val vs = v.asInstanceOf[Vector[Float]]
+          ZIO.succeed(vs.maxOption.getOrElse(0.0f))
+        case KLong =>
+          val vs = v.asInstanceOf[Vector[Long]]
+          ZIO.succeed(vs.maxOption.getOrElse(0L))
+        case KInt =>
+          val vs = v.asInstanceOf[Vector[Int]]
+          ZIO.succeed(vs.maxOption.getOrElse(0))
       }
-    }
+    } yield res
 }
 
 case class SumFn(recv: Fn[Any]) extends Fn[Any] {
@@ -741,14 +735,22 @@ case class SumFn(recv: Fn[Any]) extends Fn[Any] {
     for {
       raw <- recv.resolve(ctx)
       box <- ZIO.fromEither(collect(raw, "sum"))
-    } yield {
-      val v = toPromotedVector(box)
-      box.kind match {
-        case KDouble => v.asInstanceOf[Vector[Double]].foldLeft(0.0)(_ + _)
-        case KLong => v.asInstanceOf[Vector[Long]].foldLeft(0L)(_ + _)
-        case KInt => v.asInstanceOf[Vector[Int]].foldLeft(0)(_ + _)
+      v = toPromotedVector(box)
+      res <- box.kind match {
+        case KDouble =>
+          val vs = v.asInstanceOf[Vector[Double]]
+          ZIO.succeed(vs.foldLeft(0.0)(_ + _))
+        case KFloat =>
+          val vs = v.asInstanceOf[Vector[Float]]
+          ZIO.succeed(vs.foldLeft(0.0f)(_ + _))
+        case KLong =>
+          val vs = v.asInstanceOf[Vector[Long]]
+          ZIO.succeed(vs.foldLeft(0L)(_ + _))
+        case KInt =>
+          val vs = v.asInstanceOf[Vector[Int]]
+          ZIO.succeed(vs.foldLeft(0)(_ + _))
       }
-    }
+    } yield res
 }
 
 case class AvgFn(recv: Fn[Any]) extends Fn[Any] {
@@ -756,20 +758,23 @@ case class AvgFn(recv: Fn[Any]) extends Fn[Any] {
     for {
       raw <- recv.resolve(ctx)
       box <- ZIO.fromEither(collect(raw, "avg"))
-    } yield {
-      val v = toPromotedVector(box)
-      if v.isEmpty then 0.0
-      else box.kind match {
-        // average is fractional → Double
-        case KDouble => v.asInstanceOf[Vector[Double]].sum / v.size.toDouble
+      v = toPromotedVector(box)
+      res <- box.kind match {
+        // Average is always Double (even for Int/Long/Float inputs)
+        case KDouble =>
+          val vs = v.asInstanceOf[Vector[Double]]
+          ZIO.succeed(if (vs.isEmpty) 0.0 else vs.sum / vs.size.toDouble)
+        case KFloat =>
+          val vs = v.asInstanceOf[Vector[Float]]
+          ZIO.succeed(if (vs.isEmpty) 0.0 else vs.foldLeft(0.0)(_ + _.toDouble) / vs.size.toDouble)
         case KLong =>
           val vs = v.asInstanceOf[Vector[Long]]
-          vs.foldLeft(0.0)((a, b) => a + b) / vs.size.toDouble
+          ZIO.succeed(if (vs.isEmpty) 0.0 else vs.foldLeft(0.0)(_ + _.toDouble) / vs.size.toDouble)
         case KInt =>
           val vs = v.asInstanceOf[Vector[Int]]
-          vs.foldLeft(0.0)((a, b) => a + b) / vs.size.toDouble
+          ZIO.succeed(if (vs.isEmpty) 0.0 else vs.foldLeft(0.0)(_ + _.toDouble) / vs.size.toDouble)
       }
-    }
+    } yield res
 }
 
 case class MedianFn(recv: Fn[Any]) extends Fn[Any] {
@@ -777,27 +782,43 @@ case class MedianFn(recv: Fn[Any]) extends Fn[Any] {
     for {
       raw <- recv.resolve(ctx)
       box <- ZIO.fromEither(collect(raw, "median"))
-    } yield {
-      val v = toPromotedVector(box)
-      if v.isEmpty then 0.0
-      else box.kind match {
+      v = toPromotedVector(box)
+      res <- box.kind match {
+        // Median returns Double (common analytics convention)
         case KDouble =>
           val s = v.asInstanceOf[Vector[Double]].sorted
-          val n = s.length
-          if ((n & 1) == 1) s(n / 2)
-          else (s(n / 2 - 1) + s(n / 2)) / 2.0
+          ZIO.succeed {
+            val n = s.length
+            if (n == 0) 0.0
+            else if ((n & 1) == 1) s(n / 2)
+            else (s(n / 2 - 1) + s(n / 2)) / 2.0
+          }
+        case KFloat =>
+          val s = v.asInstanceOf[Vector[Float]].sorted
+          ZIO.succeed {
+            val n = s.length
+            if (n == 0) 0.0
+            else if ((n & 1) == 1) s(n / 2).toDouble
+            else (s(n / 2 - 1) + s(n / 2)).toDouble / 2.0
+          }
         case KLong =>
           val s = v.asInstanceOf[Vector[Long]].sorted
-          val n = s.length
-          if ((n & 1) == 1) s(n / 2).toDouble
-          else (s(n / 2 - 1) + s(n / 2)).toDouble / 2.0
+          ZIO.succeed {
+            val n = s.length
+            if (n == 0) 0.0
+            else if ((n & 1) == 1) s(n / 2).toDouble
+            else (s(n / 2 - 1) + s(n / 2)).toDouble / 2.0
+          }
         case KInt =>
           val s = v.asInstanceOf[Vector[Int]].sorted
-          val n = s.length
-          if ((n & 1) == 1) s(n / 2).toDouble
-          else (s(n / 2 - 1) + s(n / 2)).toDouble / 2.0
+          ZIO.succeed {
+            val n = s.length
+            if (n == 0) 0.0
+            else if ((n & 1) == 1) s(n / 2).toDouble
+            else (s(n / 2 - 1) + s(n / 2)).toDouble / 2.0
+          }
       }
-    }
+    } yield res
 }
 
 case class NegateFn(

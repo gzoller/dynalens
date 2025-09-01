@@ -218,15 +218,6 @@ object NegativeAndLimits extends ZIOSpecDefault:
         case _         => assertTrue(false).label("Expected 'this' misuse error")
       }
     },
-//    test("Arrow '->' on non-optional LHS should fail") {
-//      val script = "qty = -> (3)"
-//      val a = dynalens[Item]
-//      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 1)))
-//      result match {
-//        case Left(err) => assertTrue(err.msg.contains("'->' requires an optional scalar target"))
-//        case _         => assertTrue(false).label("Expected arrow misuse error")
-//      }
-//    },
     test("Optional scalar LHS with non-inferable RHS should fail") {
       // dunno?: Option[String], RHS is a boolean fn here
       val script = "dunno? = 3 > 5"

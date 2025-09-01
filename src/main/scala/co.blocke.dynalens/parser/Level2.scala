@@ -324,12 +324,6 @@ trait Level2 extends Level1 with ValueExprModule:
       }
     }
 
-  // somewhere near mapStmt or in a small PathUtils
-  private def addWildcardToListLike(path: String): String =
-    if (path.endsWith("[]") || path.endsWith("[]?")) path
-    else if (path.endsWith("?")) path.dropRight(1) + "[]?"
-    else path + "[]"
-
   // Parses: ( <expr> , <expr> )
   private def pairExpr[$: P](using ctx: ExprContext): P[Either[DLCompileError, (Fn[Any], Fn[Any])]] =
     P("(" ~/ WS0 ~ valueExpr ~ WS0 ~ "," ~ WS0 ~ valueExpr ~ WS0 ~ ")").map {

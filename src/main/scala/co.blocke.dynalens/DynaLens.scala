@@ -874,48 +874,6 @@ object DynaLens:
       }
     ).asExprOf[(String, Any, T) => ZIO[Any, DynaLensError, T]]
 
-  // Encodes the *value* shape that appears under a Map’s "__valType"
-  private def buildMapValueSchema(r: RTypeRef[?]): Any = r match {
-    case c: ScalaClassRef[?] =>
-      // Case class: expand fields (no __type tag for classes)
-      buildPathTree(c)
-
-    case s: SeqRef[?] =>
-      // List/Seq value
-      s.elementRef match {
-        case c2: ScalaClassRef[?] =>
-          buildPathTree(c2) + ("__type" -> "[]")
-        case _ =>
-          "[]"
-      }
-
-    case m: MapRef[?] =>
-      // Map value: record {} and recurse again for its value type
-      Map(
-        "__type" -> "{}",
-        "__valType" -> buildMapValueSchema(m.elementRef2)
-      )
-
-    case o: OptionRef[?] =>
-      // Optional value – encode with the right suffix
-      o.optionParamType match {
-        case c: ScalaClassRef[?] =>
-          buildPathTree(c) + ("__type" -> "{}?") // optional *object-like* payload
-        case s: SeqRef[?] =>
-          buildPathTree(s.elementRef) + ("__type" -> "[]?")
-        case m: MapRef[?] =>
-          Map(
-            "__type" -> "{}?",
-            "__valType" -> buildMapValueSchema(m.elementRef2)
-          )
-        case _ =>
-          "?" // optional scalar
-      }
-
-    case _ =>
-      "" // plain scalar
-  }
-
   /** Build the schema tree used for path rewriting/type checks. */
   // Build the schema tree used as typeInfo for the compiler/rewrite
   // Encodes containers with a typed child:

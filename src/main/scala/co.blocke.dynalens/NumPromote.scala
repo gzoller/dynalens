@@ -21,6 +21,8 @@
 
 package co.blocke.dynalens
 
+import scala.annotation.tailrec
+
 object NumPromote {
   sealed trait Kind
   case object KInt    extends Kind  // Byte/Short/Int
@@ -43,6 +45,7 @@ object NumPromote {
                        kind: Kind = KInt)
 
   /** Collect an Iterable[Any] into typed buckets + overall promoted kind. */
+  @tailrec
   def collect(raw: Any, op: String): Either[DynaLensError, Box] = raw match {
     case null                     => Right(Box()) // treat null/None as empty
     case o: Option[?]             => o match {
@@ -95,14 +98,14 @@ object NumPromote {
 
   /** Convert the Box to a single homogenous Vector in the promoted kind. */
   def toPromotedVector(b: Box): Vector[AnyVal] = b.kind match {
-    case KDouble =>
-      // push everything to Double
+    case KDouble | KFloat =>
+      // promote everything to Double (floats should already be represented in b.doubles)
       b.doubles ++ b.longs.map(_.toDouble) ++ b.ints.map(_.toDouble)
+
     case KLong =>
-      // push ints to Long, keep longs
       b.longs ++ b.ints.map(_.toLong)
+
     case KInt =>
-      // keep as Int
       b.ints
   }
 }

@@ -73,9 +73,11 @@ object CorrectPath:
   private inline def expectedOf(node: Any): String =
     node match
       case m: Map[?, ?] @unchecked =>
-        m.asInstanceOf[Map[String, Any]].get("__type").collect { case s: String => s }.getOrElse("")
+        m.asInstanceOf[Map[String, Any]].get("__type") match
+          case Some(s: String) => s
+          case _               => ""
       case s: String => s
-      case _ => ""
+      case _         => ""
 
   // Where do we descend for the NEXT segment?
   // Prefer explicit __elemType / __valType if present; otherwise fall back to the map itself,

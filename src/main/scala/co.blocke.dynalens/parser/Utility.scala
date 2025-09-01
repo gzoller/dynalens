@@ -24,53 +24,76 @@ package parser
 
 import Path.*
 
-import scala.annotation.tailrec
-
 object Utility:
 
   // We can't tell Boolean from path alone
   // Final-target typing using BOTH the path spelling (for [i]/[])
   // and the schema in ctx.typeInfo (__type for list/map, leaf "" / "?" for scalars).
   def getPathType(path: String)(using ctx: ExprContext): SymbolType = {
-    val segs = path.split("\\.").toList
-    val rawLast = segs.lastOption.getOrElse("")
+    val segs        = path.split("\\.").toList
+    val rawLast     = segs.lastOption.getOrElse("")
     val hasFixedIdx = rawLast.matches(""".*\[\d+\]$""")
     val hasWildcard = rawLast.endsWith("[]")
-    val hasOptQ = rawLast.endsWith("?")
+    val hasOptQ     = rawLast.endsWith("?")
+
+    inline def normalize(seg: String): String =
+      seg.replaceAll("""\[\d*\]""", "").stripSuffix("?")
+
+    // Inline version of the old targetNodeFor: walk by exact field names,
+    // and for the *last* segment return the node itself (map or string),
+    // without descending into __elemType/__valType.
+    def findNodeAtEnd(path: String): Option[Any] = {
+      @annotation.tailrec
+      def walk(cur: Map[String, Any], rest: List[String]): Option[Any] = rest match {
+        case Nil => Some(cur)
+        case segStr :: tail =>
+          cur.get(normalize(segStr)) match {
+            case Some(m: Map[?, ?] @unchecked) =>
+              val mm = m.asInstanceOf[Map[String, Any]]
+              if (tail.isEmpty) Some(mm) else walk(mm, tail)
+            case Some(s: String) =>
+              if (tail.isEmpty) Some(s) else None
+            case _ => None
+          }
+      }
+      walk(ctx.typeInfo, path.split("\\.").toList)
+    }
 
     def shapeOfNode(node: Any): SymbolType = node match
       case m: Map[?, ?] @unchecked =>
         val mm = m.asInstanceOf[Map[String, Any]]
         mm.get("__type") match
-          case Some("[]") => SymbolType.List
+          case Some("[]")  => SymbolType.List
           case Some("[]?") => SymbolType.OptionalList
-          case Some("{}") => SymbolType.Map
+          case Some("{}")  => SymbolType.Map
           case Some("{}?") => SymbolType.OptionalMap
-          case Some("?") => SymbolType.OptionalScalar
-          case _ => SymbolType.Scalar // class node (fields beneath)
+          case Some("?")   => SymbolType.OptionalScalar
+          case _           => SymbolType.Scalar // class node (fields beneath)
       case s: String =>
         if s == "?" then SymbolType.OptionalScalar else SymbolType.Scalar
       case _ => SymbolType.Scalar
 
-    // If the last segment is a fixed index: consult the list’s __elemType
     if (hasFixedIdx) {
-      val parentListPath = path.replaceAll("""\[\d+\]$""", "[]") // normalize to wildcard
-      Utility.targetNodeFor(parentListPath, ctx.typeInfo) match
+      // Normalize …[i] → …[] and consult the *list* node’s __elemType
+      val parentListPath = path.replaceAll("""\[\d+\]$""", "[]")
+      findNodeAtEnd(parentListPath) match
         case Some(m: Map[String @unchecked, Any @unchecked]) =>
           m.asInstanceOf[Map[String, Any]].get("__elemType") match
             case Some(elemNode) => shapeOfNode(elemNode)
-            case None => SymbolType.Scalar
+            case None           => SymbolType.Scalar
         case _ => SymbolType.Scalar
     } else {
-      // Normal: ask typeInfo for the last node’s shape
-      Utility.targetNodeFor(path, ctx.typeInfo) match
+      // Normal: ask schema for the last node’s shape
+      findNodeAtEnd(path) match
         case Some(node) => shapeOfNode(node)
         case None =>
           // Fallback to spelling if schema missing
-          if (hasWildcard) if (hasOptQ) SymbolType.OptionalList else SymbolType.List
-          else if (rawLast.matches(""".*\[\d+\]$"""))
+          if (hasWildcard) {
+            if (hasOptQ) SymbolType.OptionalList else SymbolType.List
+          } else if (rawLast.matches(""".*\[\d+\]$""")) {
             if (hasOptQ) SymbolType.OptionalScalar else SymbolType.Scalar
-          else if (hasOptQ) SymbolType.OptionalScalar else SymbolType.Scalar
+          } else if (hasOptQ) SymbolType.OptionalScalar
+          else SymbolType.Scalar
     }
   }
 
@@ -159,32 +182,6 @@ object Utility:
     "MedianFn" -> SymbolType.Scalar,
   )
 
-  private def normalize(seg: String): String =
-    seg.replaceAll("""\[\d*\]""", "").stripSuffix("?")
-
-  /** Return the node for the *final* segment of a path:
-   * - Map[String, Any] for object/list nodes (with "__type", caller may drop it)
-   * - String for leaf markers: "", "?", "{}?", "[]", "[]?", etc.
-   */
-  private def targetNodeFor(path: String, ti: Map[String, Any]): Option[Any] = {
-    val segs = path.split("\\.").toList
-
-    @annotation.tailrec
-    def walk(cur: Map[String, Any], rest: List[String]): Option[Any] = rest match
-      case Nil => Some(cur)
-      case segStr :: tail =>
-        cur.get(normalize(segStr)) match
-          case Some(m: Map[String @unchecked, Any @unchecked]) =>
-            if tail.isEmpty then Some(m) else walk(m, tail)
-          case Some(s: String) =>
-            if tail.isEmpty then Some(s) else None
-          case _ => None
-
-    walk(ti, segs)
-  }
-
-  // Utility.scala
-
   /** Return the *element/value* schema for a collection node at `basePath`.
    * - For List/Option[List], looks into "__elemType".
    * - For Map/Option[Map],   looks into "__valType".
@@ -196,29 +193,23 @@ object Utility:
       case m: Map[?, ?] @unchecked => m.asInstanceOf[Map[String, Any]]
       case _ => Map.empty
 
-    targetNodeFor(basePath, ti) match
+    nodeAtPath(basePath, ti) match
       case Some(m: Map[String @unchecked, Any @unchecked]) =>
-        // 1) List / Option[List] ⇒ element schema under "__elemType"
+        // List/Opt[List] element type?
         m.get("__elemType") match
           case Some(elemNode) =>
-            // If element is a class schema, drop its __type; else (scalar) → empty
             val em = asSchemaMap(elemNode)
             if em.nonEmpty then em - "__type" else Map.empty
-
           case None =>
-            // 2) Map / Option[Map] ⇒ value schema under "__valType"
+            // Map/Opt[Map] value type?
             m.get("__valType") match
               case Some(valNode) =>
                 val vm = asSchemaMap(valNode)
                 if vm.nonEmpty then vm - "__type" else Map.empty
-
               case None =>
-                // 3) Plain class schema (fields + "__type")
+                // Class schema
                 val fieldsOnly = m - "__type"
-                // If it actually had fields, return them; else scalar (empty)
                 if fieldsOnly.nonEmpty then fieldsOnly else Map.empty
-
-      // 4) Leaf marker ("" / "?" / "{}" / "[]") ⇒ scalar-ish → no element schema
       case Some(_: String) => Map.empty
       case _ => Map.empty
   }
@@ -273,38 +264,6 @@ object Utility:
       case (SymbolType.None, SymbolType.None) => true
       case _ => false
     }
-
-  // Return a Map("shipments" -> <elem schema>, "items" -> <elem schema>, ...)
-  def loopScopeFor(cleanPath: String, typeInfo: Map[String, Any]): Map[String, Any] = {
-    val parts = parsePath(cleanPath)
-    val indexedNames = parts.collect { case IndexedField(name, _, _) => name }
-    indexedNames.foldLeft(Map.empty[String, Any]) { (acc, collName) =>
-      // use your existing helper — it expects a *basePath* to the element node
-      // For a field 'items', element path is typically "<field>.__type"
-      val elemSchema = elementSchemaFor(collName, typeInfo)
-      if (elemSchema.nonEmpty) acc + (collName -> elemSchema) else acc
-    }
-  }
-
-  enum Shape {
-    case ScalarLike, ListLike, MapLike
-  }
-
-  private def isOptional(t: SymbolType): Boolean = t match
-    case SymbolType.OptionalScalar | SymbolType.OptionalList | SymbolType.OptionalMap => true
-    case _ => false
-
-  private def lhsInnerShape(t: SymbolType): Option[Shape] = t match
-    case SymbolType.OptionalScalar => Some(Shape.ScalarLike)
-    case SymbolType.OptionalList => Some(Shape.ListLike)
-    case SymbolType.OptionalMap => Some(Shape.MapLike)
-    case _ => None
-
-  private def rhsShape(t: SymbolType): Shape = t match
-    case SymbolType.Scalar | SymbolType.Boolean | SymbolType.OptionalScalar => Shape.ScalarLike
-    case SymbolType.List | SymbolType.OptionalList => Shape.ListLike
-    case SymbolType.Map | SymbolType.OptionalMap => Shape.MapLike
-  // SymbolType.None is a special “Option.None” marker; we won’t turn it into a shape here.
 
   /** Enforce that option-map (LHS is Optional*) doesn’t change container “kind”.
    * Allowed RHS for each LHS:
@@ -455,20 +414,22 @@ object Utility:
   }
 
   private def mapValueSym(node: Any): Option[SymbolType] = node match {
-      case mm: Map[?, ?] @unchecked =>
-        val m = mm.asInstanceOf[Map[String, Any]]
-        m.get("__type") match {
-          case Some("{}") | Some("{}?") =>
-            m.get("__valType") match {
-              case Some(s: String) => symbolTypeOfNode(s).orElse(Some(SymbolType.Scalar))
-              case Some(_: Map[?, ?]) => Some(SymbolType.Scalar) // class-valued → Scalar in our coarse system
-              case None => Some(SymbolType.Scalar)
-              //case Some(_) => ??? // default to scalar
-            }
-          case _ => None
-        }
-      case _ => None
-    }
+    case mm: Map[?, ?] @unchecked =>
+      val m = mm.asInstanceOf[Map[String, Any]]
+      m.get("__type") match {
+        case Some("{}") | Some("{}?") =>
+          m.get("__valType") match {
+            case Some(s: String) => symbolTypeOfNode(s).orElse(Some(SymbolType.Scalar))
+            case Some(_: Map[?, ?]) => Some(SymbolType.Scalar) // class-valued → Scalar in coarse system
+            case Some(_) => Some(SymbolType.Scalar) // unexpected shape → be conservative
+            case None => Some(SymbolType.Scalar) // default/fallback
+          }
+        case _ =>
+          None
+      }
+    case _ =>
+      None
+  }
 
   /** Non-optional value SymbolType returned by map.get() for a map at recvPath. */
   private def mapGetValueType(recvPath: String)(using ctx: ExprContext): Option[SymbolType] =
@@ -537,12 +498,11 @@ object Utility:
 
   /** Ensure the final segment of a list-like LHS has an explicit [] (or []? for OptionalList). */
   def addWildcardToListLike(path: String)(using ctx: ExprContext): String = {
-    // already has [i], [], or []? at the end? then leave it alone
     val alreadyIndexed = path.matches(""".*\[(\d+)?\]\??$""")
     if (alreadyIndexed) path
     else {
       val isOptList = getPathType(path) == SymbolType.OptionalList
-      val suffix = if (isOptList) "[]?" else "[]"
+      val suffix    = if (isOptList) "[]?" else "[]"
       val i = path.lastIndexOf('.')
       if (i >= 0) path.substring(0, i + 1) + path.substring(i + 1) + suffix
       else path + suffix
@@ -564,31 +524,15 @@ object Utility:
 
     inline def nodeType(node: Any): Option[String] = node match {
       case m: Map[?, ?] @unchecked =>
-        m.asInstanceOf[Map[String, Any]].get("__type").collect { case s: String => s }
+        m.asInstanceOf[Map[String, Any]].get("__type") match {
+          case Some(s: String) => Some(s)
+          case _ => None
+        }
       case s: String => Some(s)
-      case _         => None
+      case _ => None
     }
     inline def isListNode(node: Any): Boolean =
       nodeType(node).exists(t => t == "[]" || t == "[]?")
-
-    inline def descend(node: Any): Map[String, Any] = node match {
-      case mm: Map[?, ?] @unchecked =>
-        val m = mm.asInstanceOf[Map[String, Any]]
-        m.get("__type") match {
-          case Some("[]") | Some("[]?") =>
-            m.get("__elemType") match {
-              case Some(sub: Map[?, ?] @unchecked) => sub.asInstanceOf[Map[String, Any]]
-              case _                                => Map.empty
-            }
-          case Some("{}") | Some("{}?") =>
-            m.get("__valType") match {
-              case Some(sub: Map[?, ?] @unchecked) => sub.asInstanceOf[Map[String, Any]]
-              case _                                => Map.empty
-            }
-          case _ => m // class schema: fields live here
-        }
-      case _ => Map.empty
-    }
 
     @annotation.tailrec
     def go(cur: Map[String, Any], parts: List[String], acc: Map[String, Any]): Map[String, Any] =
@@ -627,33 +571,6 @@ object Utility:
       }
     case s: String => Some(s) // leaf encodings "", "?", etc.
     case _ => None
-  }
-
-  // Where to descend for the next segment.
-  // - List      → __elemType (if class schema) else no deeper fields
-  // - Map       → __valType  (if class schema) else no deeper fields
-  // - Class map → the map itself (its fields)
-  private def descend(node: Any): Map[String, Any] = node match {
-    case m: Map[?, ?] @unchecked =>
-      val mm = m.asInstanceOf[Map[String, Any]]
-      mm.get("__type") match {
-        case Some("[]") | Some("[]?") =>
-          mm.get("__elemType") match {
-            case Some(em: Map[?, ?] @unchecked) => em.asInstanceOf[Map[String, Any]]
-            case _ => Map.empty
-          }
-        case Some("{}") | Some("{}?") =>
-          mm.get("__valType") match {
-            case Some(vm: Map[?, ?] @unchecked) => vm.asInstanceOf[Map[String, Any]]
-            case _ =>
-              // No __valType → it’s actually a class schema, use its fields directly
-              mm - "__type" - "__valType" - "__elemType"
-          }
-        case _ =>
-          // No __type → class schema: fields live here
-          mm
-      }
-    case _ => Map.empty
   }
 
   /** Return the schema map of the **nearest list element** on the path, and a reasonable SymbolType for `this`. */
@@ -720,26 +637,6 @@ object Utility:
     inline def isListSeg(seg: String): Boolean =
       seg.indexOf('[') >= 0
 
-    // Descend one level in typeInfo schema
-    def descend(node: Any): Map[String, Any] = node match {
-      case m: Map[?, ?] @unchecked =>
-        val mm = m.asInstanceOf[Map[String, Any]]
-        mm.get("__type") match {
-          case Some("[]") | Some("[]?") =>
-            mm.get("__elemType")
-              .collect { case em: Map[?, ?] @unchecked => em.asInstanceOf[Map[String, Any]] }
-              .getOrElse(Map.empty)
-          case Some("{}") | Some("{}?") =>
-            mm.get("__valType")
-              .collect { case vm: Map[?, ?] @unchecked => vm.asInstanceOf[Map[String, Any]] }
-              // If __valType is absent, treat as class schema (fields live in this map)
-              .getOrElse(mm)
-          case _ =>
-            // No __type → class schema: fields live here
-            mm
-        }
-      case _ => Map.empty
-    }
 
     @annotation.tailrec
     def go(cur: Map[String, Any], segs: List[String]): Map[String, Any] = segs match {
@@ -762,4 +659,28 @@ object Utility:
     if (m0.nonEmpty) m0
     else if (parts.nonEmpty && !ti.contains(baseOf(parts.head))) go(ti, parts.tail)
     else Map.empty
+  }
+
+  // Where to descend for the next segment.
+  // - List      → __elemType (if class schema) else no deeper fields
+  // - Map       → __valType  (if class schema) else no deeper fields
+  // - Class map → the map itself (its fields)
+  private def descend(node: Any): Map[String, Any] = node match {
+    case m: Map[?, ?] @unchecked =>
+      val mm = m.asInstanceOf[Map[String, Any]]
+      mm.get("__type") match {
+        case Some("[]") | Some("[]?") =>
+          mm.get("__elemType")
+            .collect { case em: Map[?, ?] @unchecked => em.asInstanceOf[Map[String, Any]] }
+            .getOrElse(Map.empty)
+        case Some("{}") | Some("{}?") =>
+          mm.get("__valType")
+            .collect { case vm: Map[?, ?] @unchecked => vm.asInstanceOf[Map[String, Any]] }
+            // If __valType is absent, treat as class schema (fields live in this map)
+            .getOrElse(mm)
+        case _ =>
+          // No __type → class schema: fields live here
+          mm
+      }
+    case _ => Map.empty
   }
