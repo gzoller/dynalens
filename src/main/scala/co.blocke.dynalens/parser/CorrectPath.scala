@@ -1,3 +1,24 @@
+/*
+ * Copyright (c) 2025 Greg Zoller
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 package co.blocke.dynalens
 package parser
 
@@ -103,10 +124,23 @@ object CorrectPath:
             case Left(msg) => Left(DLCompileError(offset, msg))
             case Right(seg) =>
               if isFirst && seg.base == "this" then
-                ctx.receiver match
-                  case None => Left(DLCompileError(offset, "Use of 'this' with no receiver in scope"))
-                  case Some(recv) =>
-                    loop(nextNode(recv.fields), tail, acc :+ "this", isFirst=false, inReceiver=true)
+                (ctx.receiver, ctx.resolveSymbol("this")) match {
+                  case (Some(recv), _) =>
+                    return loop(
+                      nextNode(recv.fields),
+                      tail,
+                      acc :+ "this",
+                      isFirst = false,
+                      inReceiver = true
+                    )
+
+                  case (None, Some(_)) =>
+                    // Bare `this` is allowed; don't collapse to String here.
+                    return Right(acc :+ "this")
+
+                  case _ =>
+                    return Left(DLCompileError(offset, "Use of 'this' with no receiver in scope"))
+                }
               else {
                 if isFirst then
                   // 1) receiver-relative bare field?  (prefer this FIRST)

@@ -763,7 +763,92 @@ object Collections extends ZIOSpecDefault:
         compiled.toString == expectedCompiled,
         resultStr == expectedResult
       )
-    }
+    },
+    test("map map (identity)") {
+      val script =
+        """
+          |  m => (this.key, this.value)
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(MapStmt(m,Tuple2Fn(GetFn(this.key),GetFn(this.value)))))"""
+      val expectedResult =
+        """top -> Mapped(1,Map(a -> 10, b -> 20),None,Map())""".stripMargin + "\n"
+      val inst = Mapped(
+        id = 1,
+        m = Map("a" -> 10, "b" -> 20),
+        None,
+        Map.empty
+      )
+      val a = dynalens[Mapped]
+      for {
+        compiled <- Script.compile(script, a)
+        (updated, ctx) <- a.run(compiled, inst)
+        resultStr = toStringCtx(ctx)
+      } yield assertTrue(
+        updated == inst, // identity
+        compiled.toString == expectedCompiled,
+        resultStr == expectedResult
+      )
+    },
+    test("map map (value transform inline)") {
+      val script =
+        """
+          |  m => (this.key, this.value * 3)
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(MapStmt(m,Tuple2Fn(GetFn(this.key),MultiplyFn(GetFn(this.value),ConstantFn(3))))))"""
+      val expectedResult =
+        """top -> Mapped(1,Map(a -> 30, b -> 60),None,Map())""".stripMargin + "\n"
+      val inst = Mapped(
+        id = 1,
+        m = Map("a" -> 10, "b" -> 20),
+        None,
+        Map.empty
+      )
+      val lens = dynalens[Mapped]
+      for {
+        compiled <- Script.compile(script, lens)
+        (updated, ctx) <- lens.run(compiled, inst)
+        resultStr = toStringCtx(ctx)
+      } yield assertTrue(
+        updated == Mapped(1, Map("a" -> 30, "b" -> 60), None, Map.empty),
+        compiled.toString == expectedCompiled,
+        resultStr == expectedResult
+      )
+    },
+    test("map map (block body with val)") {
+      val script =
+        """
+          |  m => {
+          |    val x = this.value * 3
+          |    (this.key, x)
+          |  }
+          |""".stripMargin
+
+      val expectedCompiled =
+        """BlockStmt(List(MapStmt(m,BlockFn(List(ValStmt(x,MultiplyFn(GetFn(this.value),ConstantFn(3)))),Tuple2Fn(GetFn(this.key),GetFn(x))))))"""
+
+      val expectedResult =
+        """top -> Mapped(1,Map(a -> 30, b -> 60),None,Map())""".stripMargin + "\n"
+
+      val inst = Mapped(
+        id = 1,
+        m = Map("a" -> 10, "b" -> 20),
+        None,
+        Map.empty
+      )
+      val lens = dynalens[Mapped]
+
+      for {
+        compiled <- Script.compile(script, lens)
+        (updated, ctx) <- lens.run(compiled, inst)
+        resultStr = toStringCtx(ctx)
+      } yield assertTrue(
+        updated == Mapped(1, Map("a" -> 30, "b" -> 60),None,Map.empty),
+        compiled.toString == expectedCompiled,
+        resultStr == expectedResult
+      )
+    },
   )
 
 //  _ <- ZIO.succeed(println("&&& " + compiledScript))

@@ -471,7 +471,7 @@ object Utility:
     }
 
   /** Non-optional value SymbolType returned by map.get() for a map at recvPath. */
-  def mapGetValueType(recvPath: String)(using ctx: ExprContext): Option[SymbolType] =
+  private def mapGetValueType(recvPath: String)(using ctx: ExprContext): Option[SymbolType] =
     nodeAtPath(recvPath, ctx.typeInfo).flatMap {
       case mm: Map[?, ?] @unchecked =>
         // nodeAtPath returned the map node itself (older behavior)
@@ -482,3 +482,284 @@ object Utility:
       case _ =>
         None
     }
+
+  // Build a receiver for mapping a Map: expose `this.key` and `this.value`,
+  // and also push these into a new relative scope so bare `key`/`value` can be used if you allow it.
+  def addThisForMap(path: String, ctx: ExprContext): ExprContext = {
+    // Find the node for the map at `path`
+    val nodeOpt = nodeAtPath(path, ctx.typeInfo)
+
+    // Determine the value schema (from __valType), default to scalar ("") if unknown
+    val valueSchema: Any = nodeOpt match {
+      case Some(m: Map[?, ?] @unchecked) =>
+        val mm = m.asInstanceOf[Map[String, Any]]
+        mm.get("__valType").getOrElse("")
+      case _ => ""
+    }
+
+    // Synthetic receiver fields
+    val mapThis: Map[String, Any] = Map(
+      "key"   -> "",          // keys are scalar in our DSL
+      "value" -> valueSchema  // may be scalar ("") or a nested class map
+    )
+
+    val recv = Receiver(fields = mapThis, sym = SymbolType.Map)
+    ctx.copy(
+      receiver = Some(recv),
+      sym      = ctx.sym + ("this" -> SymbolType.Map)
+      // If you want bare `key`/`value` (without `this.`), also do:
+      // , scopes   = mapThis :: ctx.scopes
+    )
+  }
+
+  /** Return the schema node that represents the *value* of a Map at `recvPath`.
+   * For a map node, we expect a subtree like: Map("__type" -> "{}", "__valType" -> <node>)
+   */
+  private def mapValueNodeAt(recvPath: String)(using ctx: ExprContext): Option[Any] =
+    nodeAtPath(recvPath, ctx.typeInfo).flatMap {
+      case m: Map[?, ?] @unchecked =>
+        val mm = m.asInstanceOf[Map[String, Any]]
+        mm.get("__valType")
+      case _ => None
+    }
+
+  /** Build a Receiver for mapping over a Map entry: exposes `this.key` and `this.value`. */
+  def mapEntryReceiverFor(recvPath: String)(using ctx: ExprContext): Receiver = {
+    val valueNode: Any = mapValueNodeAt(recvPath).getOrElse("")
+    val fields: Map[String, Any] =
+      Map(
+        "key" -> "", // treat key as scalar (String/Int/etc.)
+        "value" -> valueNode // carry whatever schema the value has
+      )
+    // Treat the receiver "this" as Map (entry) for symbol kind
+    Receiver(fields = fields, sym = SymbolType.Map)
+  }
+
+  /** Ensure the final segment of a list-like LHS has an explicit [] (or []? for OptionalList). */
+  def addWildcardToListLike(path: String)(using ctx: ExprContext): String = {
+    // already has [i], [], or []? at the end? then leave it alone
+    val alreadyIndexed = path.matches(""".*\[(\d+)?\]\??$""")
+    if (alreadyIndexed) path
+    else {
+      val isOptList = getPathType(path) == SymbolType.OptionalList
+      val suffix = if (isOptList) "[]?" else "[]"
+      val i = path.lastIndexOf('.')
+      if (i >= 0) path.substring(0, i + 1) + path.substring(i + 1) + suffix
+      else path + suffix
+    }
+  }
+
+  def hasListSegment(path: String): Boolean =
+    path.split("\\.").exists(_.matches(""".*\[(\d+)?\]\??$"""))
+
+
+  // Bind each ancestor *collection* segment name to its node so RHS can resolve
+  // e.g. "pack.shipments.items.number" => Map("shipments" -> <node>, "items" -> <node>)
+  def loopScopesFor(path: String, ti: Map[String, Any]): Map[String, Any] = {
+    val segRx = """^([A-Za-z0-9_]+)(?:\[(?:\d*)\])?(\?)?$""".r
+    inline def baseOf(seg: String): String = seg match {
+      case segRx(base, _) => base
+      case _              => seg
+    }
+
+    inline def nodeType(node: Any): Option[String] = node match {
+      case m: Map[?, ?] @unchecked =>
+        m.asInstanceOf[Map[String, Any]].get("__type").collect { case s: String => s }
+      case s: String => Some(s)
+      case _         => None
+    }
+    inline def isListNode(node: Any): Boolean =
+      nodeType(node).exists(t => t == "[]" || t == "[]?")
+
+    inline def descend(node: Any): Map[String, Any] = node match {
+      case mm: Map[?, ?] @unchecked =>
+        val m = mm.asInstanceOf[Map[String, Any]]
+        m.get("__type") match {
+          case Some("[]") | Some("[]?") =>
+            m.get("__elemType") match {
+              case Some(sub: Map[?, ?] @unchecked) => sub.asInstanceOf[Map[String, Any]]
+              case _                                => Map.empty
+            }
+          case Some("{}") | Some("{}?") =>
+            m.get("__valType") match {
+              case Some(sub: Map[?, ?] @unchecked) => sub.asInstanceOf[Map[String, Any]]
+              case _                                => Map.empty
+            }
+          case _ => m // class schema: fields live here
+        }
+      case _ => Map.empty
+    }
+
+    @annotation.tailrec
+    def go(cur: Map[String, Any], parts: List[String], acc: Map[String, Any]): Map[String, Any] =
+      parts match {
+        case Nil => acc
+        case segStr :: tail =>
+          val base = baseOf(segStr)
+          cur.get(base) match {
+            case None       => acc
+            case Some(node) =>
+              val acc2 = if (isListNode(node)) acc + (base -> node) else acc
+              go(descend(node), tail, acc2)
+          }
+      }
+
+    val parts = path.split("\\.").toList
+    val res1  = go(ti, parts, Map.empty)
+
+    // If the very first segment isn’t a top-level field, try again without it.
+    if (res1.nonEmpty || parts.isEmpty || ti.contains(baseOf(parts.head))) res1
+    else go(ti, parts.tail, Map.empty)
+  }
+
+  private val Seg = """^([A-Za-z0-9_]+)(?:\[(?:\d*)\])?(\?)?$""".r
+
+  // Treat true maps only if `__type` is "{}" or "{}?" *and* there is a __valType.
+  // Otherwise, consider it a class schema (fields live directly in the map).
+  private def nodeType(node: Any): Option[String] = node match {
+    case m: Map[?, ?] @unchecked =>
+      val mm = m.asInstanceOf[Map[String, Any]]
+      mm.get("__type") match {
+        case Some(t@("[]" | "[]?")) => Some(t)
+        case Some(t@("{}" | "{}?")) =>
+          if (mm.contains("__valType")) Some(t) else None // class schema masquerading as "{}"
+        case _ => None
+      }
+    case s: String => Some(s) // leaf encodings "", "?", etc.
+    case _ => None
+  }
+
+  // Where to descend for the next segment.
+  // - List      → __elemType (if class schema) else no deeper fields
+  // - Map       → __valType  (if class schema) else no deeper fields
+  // - Class map → the map itself (its fields)
+  private def descend(node: Any): Map[String, Any] = node match {
+    case m: Map[?, ?] @unchecked =>
+      val mm = m.asInstanceOf[Map[String, Any]]
+      mm.get("__type") match {
+        case Some("[]") | Some("[]?") =>
+          mm.get("__elemType") match {
+            case Some(em: Map[?, ?] @unchecked) => em.asInstanceOf[Map[String, Any]]
+            case _ => Map.empty
+          }
+        case Some("{}") | Some("{}?") =>
+          mm.get("__valType") match {
+            case Some(vm: Map[?, ?] @unchecked) => vm.asInstanceOf[Map[String, Any]]
+            case _ =>
+              // No __valType → it’s actually a class schema, use its fields directly
+              mm - "__type" - "__valType" - "__elemType"
+          }
+        case _ =>
+          // No __type → class schema: fields live here
+          mm
+      }
+    case _ => Map.empty
+  }
+
+  /** Return the schema map of the **nearest list element** on the path, and a reasonable SymbolType for `this`. */
+  def nearestListElement(path: String, ti: Map[String, Any]): Option[(Map[String, Any], SymbolType)] = {
+    val parts = path.split("\\.").toList
+
+    @annotation.tailrec
+    def walk(
+              cur: Map[String, Any],
+              segs: List[String],
+              accElem: Option[(Map[String, Any], SymbolType)]
+            ): Option[(Map[String, Any], SymbolType)] = {
+      segs match {
+        case Nil =>
+          accElem
+
+        case seg :: tail =>
+          val base = seg match {
+            case Seg(b, _) => b
+            case _         => seg
+          }
+          cur.get(base) match {
+            case None =>
+              accElem
+
+            case Some(node) =>
+              val tpe = nodeType(node)
+              val acc2 =
+                tpe match {
+                  case Some("[]") =>
+                    Some((descend(node), SymbolType.Scalar))
+                  case Some("[]?") =>
+                    Some((descend(node), SymbolType.OptionalScalar))
+                  case other =>
+                    accElem
+                }
+              walk(descend(node), tail, acc2)
+          }
+      }
+    }
+
+    val fullTry = walk(ti, parts, None)
+    if (fullTry.isEmpty && parts.nonEmpty && !ti.contains(parts.head)) {
+      walk(ti, parts.tail, None)
+    } else fullTry
+  }
+
+  /** True if any segment on the path is a list in typeInfo. */
+  def hasListInTypeInfo(path: String, ti: Map[String, Any]): Boolean =
+    nearestListElement(path, ti).isDefined
+
+  // Returns the *fields* map of the nearest container class before the first list segment in `path`.
+  // If none, returns Map.empty.
+  def containerFieldsFor(path: String, ti: Map[String, Any]): Map[String, Any] = {
+    val parts = path.split("\\.").toList
+
+    // seg base: strip [i] / [] / ? suffixes
+    val segRx = """^([A-Za-z0-9_]+)(?:\[(\d*)\])?(\?)?$""".r
+    inline def baseOf(seg: String): String = seg match {
+      case segRx(b, _, _) => b
+      case _              => seg
+    }
+
+    inline def isListSeg(seg: String): Boolean =
+      seg.indexOf('[') >= 0
+
+    // Descend one level in typeInfo schema
+    def descend(node: Any): Map[String, Any] = node match {
+      case m: Map[?, ?] @unchecked =>
+        val mm = m.asInstanceOf[Map[String, Any]]
+        mm.get("__type") match {
+          case Some("[]") | Some("[]?") =>
+            mm.get("__elemType")
+              .collect { case em: Map[?, ?] @unchecked => em.asInstanceOf[Map[String, Any]] }
+              .getOrElse(Map.empty)
+          case Some("{}") | Some("{}?") =>
+            mm.get("__valType")
+              .collect { case vm: Map[?, ?] @unchecked => vm.asInstanceOf[Map[String, Any]] }
+              // If __valType is absent, treat as class schema (fields live in this map)
+              .getOrElse(mm)
+          case _ =>
+            // No __type → class schema: fields live here
+            mm
+        }
+      case _ => Map.empty
+    }
+
+    @annotation.tailrec
+    def go(cur: Map[String, Any], segs: List[String]): Map[String, Any] = segs match {
+      case Nil => Map.empty
+      case seg :: tail =>
+        if (isListSeg(seg)) {
+          // We stop *before* the first list segment: `cur` is the container node
+          descend(cur)
+        } else {
+          cur.get(baseOf(seg)) match {
+            case Some(next) => go(descend(next), tail)
+            case None       => Map.empty
+          }
+        }
+    }
+
+    // Try full path; if head isn't at root (e.g. paths prefixed with a root like "pack"),
+    // allow dropping the first segment and try again.
+    val m0 = go(ti, parts)
+    if (m0.nonEmpty) m0
+    else if (parts.nonEmpty && !ti.contains(baseOf(parts.head))) go(ti, parts.tail)
+    else Map.empty
+  }

@@ -49,6 +49,20 @@ case class GetFn(path: String) extends Fn[Any] {
 
   import Path._ // for parsePath/PathElement/Field/IndexedField/partialPath
 
+
+  // ZZZ Temporary
+  // TODO: Remove this
+  private def showCtxKeys(ctx: DynaContext): String =
+    ctx.iterator
+      .map { case (k, (v, lens)) =>
+        val lensName = lens.map(_._typeName).getOrElse("∅")
+        s"$k=[${Option(v).fold("null")(_.getClass.getSimpleName)}; lens=$lensName]"
+      }
+      .toList
+      .sorted
+      .mkString("{", ", ", "}")
+
+
   // Generic walker that can traverse case classes, Maps and (indexed) collections
   private def walk(obj: Any, parts: List[PathElement]): Either[DynaLensError, Any] = {
     def fieldOf(p: Product, name: String): Option[Any] = {
@@ -159,16 +173,42 @@ case class GetFn(path: String) extends Fn[Any] {
     val parts = parsePath(path)
 
     parts match {
-      case Field("this", _) :: Nil =>
-        ctx.get("this") match {
-          case Some((elem, _)) => ZIO.succeed(elem)
-          case None => ZIO.fail(DynaLensError("Use of 'this' with no receiver in scope"))
-        }
+      // this.key  (first try "key", then derive from this=(k,v))
+      case Field("this", _) :: Field("key",  _) :: Nil =>
+        ctx.valueOf("key")
+          .map(ZIO.succeed(_))
+          .getOrElse {
+            ctx.valueOf("this") match {
+              case Some(t: (Any, Any))                   => ZIO.succeed(t._1)
+              case Some(me: java.util.Map.Entry[?, ?])   => ZIO.succeed(me.getKey)
+              case _ => ZIO.fail(DynaLensError("Field not found: 'key'"))
+            }
+          }
 
+      // this.value  (first try "value", then derive from this=(k,v))
+      case Field("this", _) :: Field("value", _) :: Nil =>
+        ctx.valueOf("value")
+          .map(ZIO.succeed(_))
+          .getOrElse {
+            ctx.valueOf("this") match {
+              case Some(t: (Any, Any))                   => ZIO.succeed(t._2)
+              case Some(me: java.util.Map.Entry[?, ?])   => ZIO.succeed(me.getValue)
+              case _ => ZIO.fail(DynaLensError("Field not found: 'value'"))
+            }
+          }
+
+      // existing branch that handles generic `this.xxx` (navigate receiver)
       case Field("this", _) :: rest =>
         ctx.get("this") match {
-          case Some((elem, _)) => ZIO.fromEither(walk(elem, rest))
-          case None => ZIO.fail(DynaLensError("Use of 'this' with no receiver in scope"))
+          case Some((root, lensOpt)) =>
+            lensOpt match {
+              case Some(l) if rest.nonEmpty =>
+                l.get(partialPath(rest), root.asInstanceOf[l.ThisT])
+              case _ =>
+                ZIO.fromEither(walk(root, rest))
+            }
+          case None =>
+            ZIO.fail(DynaLensError("Use of 'this' with no receiver in scope"))
         }
 
       case (first @ IndexedField(name, idxOpt, _)) :: rest if ctx.contains(name) =>
@@ -249,9 +289,8 @@ case class GetFn(path: String) extends Fn[Any] {
               case IndexedField(_, Some(i), _) =>
                 v match {
                   case seq: Seq[?] =>
-                    val s = seq.asInstanceOf[Seq[Any]]
-                    if (i >= 0 && i < s.length) {
-                      val elem = s(i)
+                    if (i >= 0 && i < seq.length) {
+                      val elem = seq(i)
                       if (rest.isEmpty) ZIO.succeed(elem)
                       else ZIO.fromEither(walk(elem, rest))  // allow x[2].field, etc.
                     } else ZIO.fail(DynaLensError(s"Index $i out of bounds for '${first.name}'"))
@@ -1132,6 +1171,14 @@ case class MapGetFn(recv: Fn[Any], key: Fn[Any]) extends Fn[Any] {
           ZIO.fail(DynaLensError(s"get(): receiver is not a Map (got ${other.getClass.getSimpleName})"))
       }
     } yield v
+}
+
+case class Tuple2Fn(_1: Fn[Any], _2: Fn[Any]) extends Fn[Any] {
+  def resolve(ctx: DynaContext) =
+    for {
+      a <- _1.resolve(ctx)
+      b <- _2.resolve(ctx)
+    } yield (a, b)
 }
 
 // --- Collection (Iterable) Functions ----

@@ -330,37 +330,102 @@ trait Level2 extends Level1 with ValueExprModule:
     else if (path.endsWith("?")) path.dropRight(1) + "[]?"
     else path + "[]"
 
+  // Parses: ( <expr> , <expr> )
+  private def pairExpr[$: P](using ctx: ExprContext): P[Either[DLCompileError, (Fn[Any], Fn[Any])]] =
+    P("(" ~/ WS0 ~ valueExpr ~ WS0 ~ "," ~ WS0 ~ valueExpr ~ WS0 ~ ")").map {
+      case (Left(e1), _)  => Left(e1)
+      case (_, Left(e2))  => Left(e2)
+      case (Right(a: Fn[Any] @unchecked), Right(b: Fn[Any] @unchecked)) =>
+        Right((a, b))
+    }
+
+  // exactly like blockFn but forcing the final expression to be pairExpr
+  private def blockPairFn[$: P](using ctx0: ExprContext): P[ParseFnResult] =
+    P("{" ~/ WS0).flatMap { _ =>
+      given ExprContext = ctx0
+      statementSeq.flatMap { stmtsE =>
+        val folded =
+          stmtsE.foldLeft[Either[DLCompileError, (ExprContext, List[Statement])]](Right(ctx0 -> Nil)) {
+            case (Left(err), _)                               => Left(err)
+            case (_, Left(err))                               => Left(err)
+            case (Right((accCtx, ss)), Right((newCtx, stmt))) => Right(accCtx.merge(newCtx) -> (ss :+ stmt))
+          }
+
+        folded match {
+          case Left(e) => P(Pass(Left(e)))
+          case Right((finalCtx, ss)) =>
+            given ExprContext = finalCtx
+            P(pairExpr ~ WS0 ~ "}").map {
+              case Left(err)           => Left(err)
+              case Right(pair) =>
+                val (kFn, vFn) = pair   // already (Fn[Any], Fn[Any]) from pairExpr
+                Right(BlockFn(ss, Tuple2Fn(kFn, vFn)): Fn[Any])
+            }
+        }
+      }
+    }
+
   // '=>': always map
   private def mapStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(Index ~ pathBase ~ WS0 ~ "=>" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
-      CorrectPath.rewritePath(rawPath, pathOff) match {
+      CorrectPath.rewritePath(rawPath, pathOff) match
         case Left(err) => P(Pass(Left(err)))
 
         case Right(cleanPath) =>
-          // Set receiver/scope so bare names & `this` resolve relative to element
-          val ctxForRhs = Utility.addThisType(cleanPath, ctx)
+          val lhsSym: SymbolType = Utility.getPathType(cleanPath)(using ctx)
+          val hasList: Boolean   = Utility.hasListSegment(cleanPath)
+
+          // Start from original ctx
+          val baseRhsCtx: ExprContext =
+            lhsSym match {
+              case SymbolType.Map | SymbolType.OptionalMap =>
+                ctx.withReceiver(Utility.mapEntryReceiverFor(cleanPath)(using ctx))
+              case _ if hasList =>
+                // element receiver + loop scopes you already compute
+                val recvCtx = ctx.withReceiverFromPath(cleanPath)
+                val loopMap = Utility.loopScopesFor(cleanPath, ctx.typeInfo) // you already have this
+                recvCtx.pushScope(loopMap)
+              case SymbolType.OptionalScalar =>
+                ctx.withVals("this" -> SymbolType.Scalar)
+              case _ =>
+                ctx
+            }
+
+          // push the nearest container field map so bare names like `shipments` resolve
+          val containerScope = Utility.containerFieldsFor(cleanPath, ctx.typeInfo)
+          val ctxForRhs =
+            if (containerScope.nonEmpty) baseRhsCtx.pushScope(containerScope)
+            else baseRhsCtx
 
           given ExprContext = ctxForRhs
 
-          P(valueExpr ~ WS0).map {
-            case Left(e) => Left(e)
+          lhsSym match
+            case SymbolType.Map | SymbolType.OptionalMap =>
+              val pairAsFn: P[Either[DLCompileError, Fn[Any]]] =
+                P(
+                  blockPairFn |
+                    pairExpr.map {
+                      case Left(e)       => Left(e)
+                      case Right((k, v)) => Right(Tuple2Fn(k, v): Fn[Any])
+                    }
+                )
 
-            case Right(vfn) =>
-              val lhsSym = Utility.getPathType(cleanPath)
-              val isListLike = lhsSym == SymbolType.List || lhsSym == SymbolType.OptionalList
+              P(pairAsFn ~ WS0).map {
+                case Left(e)        => Left(e)
+                case Right(bodyFn)  => Right((ctx, MapStmt(cleanPath, bodyFn)))
+              }
 
-              // Normalize LHS: ensure [] for list-like targets so the mapper sees a collection boundary
-              val normalizedLhs =
-                if (isListLike) addWildcardToListLike(cleanPath) else cleanPath
-
-              // Only enforce option-scalar shape; list-like option maps are element-wise (RHS scalar OK)
-              Utility.checkRhsShapeForOptionMap(lhsSym, vfn, rhsOff) match
-                case Left(err) => Left(err)
-                case Right(_) =>
-                  val body = if (isListLike) LoopFn(vfn) else vfn
+            case _ =>
+              P(valueExpr ~ WS0).map {
+                case Left(e) => Left(e)
+                case Right(vfn) =>
+                  val isListLike = lhsSym == SymbolType.List || lhsSym == SymbolType.OptionalList
+                  val normalizedLhs =
+                    if (isListLike) Utility.addWildcardToListLike(cleanPath) else cleanPath
+                  val body: Fn[?] =
+                    if (isListLike) LoopFn(vfn) else vfn
                   Right((ctx, MapStmt(normalizedLhs, body)))
-          }
-      }
+              }
     }
 
   private def ifStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
