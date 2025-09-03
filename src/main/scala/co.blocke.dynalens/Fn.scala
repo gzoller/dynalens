@@ -1511,3 +1511,30 @@ case class UUIDFn() extends Fn[Any] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ZIO.succeed(java.util.UUID.randomUUID())
 }
+
+// --- Case Function ----
+
+case class CaseWhenFn(
+                       recv: Fn[Any],
+                       cases: Vector[(Any, Fn[Any])],     // pattern literal -> RHS expr
+                       default: Option[Fn[Any]],
+                       permissive: Boolean = false
+                     ) extends Fn[Any] {
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    for {
+      v <- recv.resolve(ctx)
+      out <- {
+        // first match by Scala “==”
+        cases.collectFirst { case (p, rhs) if v == p => rhs }
+          .map(_.resolve(ctx))
+          .getOrElse {
+            default match {
+              case Some(df) => df.resolve(ctx)
+              case None =>
+                if permissive then ZIO.succeed(v)
+                else ZIO.fail(DynaLensError(s"No case matched for value: $v"))
+            }
+          }
+      }
+    } yield out
+}

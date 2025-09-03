@@ -184,13 +184,13 @@ trait Level2 extends Level1 with ValueExprModule:
   def valueExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(
       ifFn |
-        blockFn | // optional block expression
-        concatExpr | // includes arithmeticExpr -> baseExpr (path+methods)
-        booleanExpr.map {
-          case Right(b) => Right(b.asInstanceOf[Fn[Any]]) // widen BooleanFn -> Fn[Any]
-          case Left(err) => Left(err)
-        }
-    )
+        blockFn |
+        concatExpr | // this already handles arithmetic and path+method stuff
+        booleanExpr
+    ).flatMap {
+      case Left(err) => P(Pass.map(_ => Left(err)))
+      case Right(base) => maybeCaseTail(base)
+    }
 
   def statementSeq[$: P](using ctx0: ExprContext): P[List[ParseStmtResult]] = {
     def loop(currentCtx: ExprContext): P[List[ParseStmtResult]] =
@@ -460,4 +460,71 @@ trait Level2 extends Level1 with ValueExprModule:
           t <- thenRes
           e <- elseRes
         yield IfFn(c, t, e)
+    }
+
+  private def defaultCase[$: P](using ctx: ExprContext): P[Either[DLCompileError, (String, Fn[Any])]] =
+    P("default" ~ WS0 ~ "->" ~ WS0 ~ valueExpr).map {
+      case Left(e) => Left(e)
+      case Right(fn) => Right("__default__" -> fn)
+    }
+
+  private def normalCase[$: P](using ctx: ExprContext): P[Either[DLCompileError, (Any, Fn[Any])]] =
+    P(literalValue ~ WS0 ~ "->" ~ WS0 ~ valueExpr).map {
+      case (Left(e), _) => Left(e)
+      case (_, Left(e)) => Left(e)
+      case (Right(key), Right(fn)) => Right(key -> fn)
+    }
+
+  // Parse whole block: { line (\n line)* [\n default -> expr] }
+  private def caseBlock[$: P](using ctx: ExprContext)
+  : P[Either[DLCompileError, (Vector[(Any, Fn[Any])], Option[Fn[Any]])]] =
+    P("{" ~ WS0 ~
+      normalCase.rep(sep = WS0) ~
+      defaultCase.? ~
+      WS0 ~ "}"
+    ).map { (caseLines, maybeDefault) =>
+      val errors = caseLines.collect { case Left(e) => e }
+      if errors.nonEmpty then
+        Left(errors.head)
+      else
+        val regularCases = caseLines.collect { case Right((k, v)) => (k, v) }
+
+        maybeDefault match
+          case Some(Left(e)) =>
+            Left(e)
+          case Some(Right((key, fn))) if key != "__default__" =>
+            // Should never happen, but defensive
+            Left(DLCompileError(implicitly[ParsingRun[?]].index, s"Expected 'default', found: $key"))
+          case Some(Right((_, fn))) =>
+            Right((regularCases.toVector, Some(fn)))
+          case None =>
+            Right((regularCases.toVector, None))
+    }
+
+  private def permissiveMode[$: P]: P[Boolean] =
+    P("(" ~ WS0 ~ "permissive" ~ WS0 ~ ")").map(_ => true).?.map(_.getOrElse(false))
+
+  // after you produce a base: P(valueExprCore).flatMap { base => ... }
+  private def maybeCaseTail[$: P](base: Fn[Any])(using ctx: ExprContext): P[Either[DLCompileError, Fn[Any]]] =
+    P(WS0 ~ "case" ~ WS0 ~ permissiveMode ~ WS0 ~ caseBlock).?.map {
+      case None =>
+        Right(base)
+
+      case Some((permissive, Right((pairs, df)))) =>
+        val bad = pairs.collectFirst {
+          case (p, _) if !(p.isInstanceOf[String] || p.isInstanceOf[Boolean] || p.isInstanceOf[Byte] ||
+            p.isInstanceOf[Short]  || p.isInstanceOf[Int]     || p.isInstanceOf[Long]  ||
+            p.isInstanceOf[Float]  || p.isInstanceOf[Double]) =>
+            s"case pattern must be a literal (string/number/boolean), got: ${p.getClass.getSimpleName}"
+        }
+
+        bad match {
+          case Some(msg) =>
+            Left(DLCompileError(implicitly[ParsingRun[?]].index, msg))
+          case None =>
+            Right(CaseWhenFn(base, pairs, df, permissive))
+        }
+
+      case Some((_, Left(e))) =>
+        Left(e)
     }

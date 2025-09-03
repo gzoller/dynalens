@@ -80,3 +80,20 @@ trait Level0:
         noneLiteral |
         booleanLiteral.map(b => Right(b: Fn[Any])) // Upcast BooleanFn to Fn[Any]
     )
+
+  // Just like constant but not wrapped
+  def literalValue[$: P]: P[Either[DLCompileError, Any]] =
+    P(
+      stringLiteral.map(_.map {
+        case ConstantFn(s: String) => s
+      }) |
+        numberLiteral.map(_.map {
+          case ConstantFn(n) => n
+        }) |
+        noneLiteral.map(_.map {
+          case NoneFn() => None
+        }) |
+        booleanLiteral.map {
+          case BooleanConstantFn(value) => Right(value)
+        }
+    )

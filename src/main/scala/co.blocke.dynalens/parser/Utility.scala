@@ -121,6 +121,15 @@ object Utility:
             case _                       => None // don't guess
           }
         }
+      case CaseWhenFn(_, cases, default, _) =>
+        // try to unify RHS types; if mixed, return None (don’t over-constrain)
+        val ts = cases.flatMap { case (_, fn) => Utility.rhsType(fn) } ++ default.toList.flatMap(Utility.rhsType)
+        if (ts.isEmpty) None
+        else {
+          val uniq = ts.toSet
+          if (uniq.size == 1) uniq.headOption
+          else None
+        }
       case _ => fnReturnTypes.get(fnName)
     }
   private val fnReturnTypes = Map(

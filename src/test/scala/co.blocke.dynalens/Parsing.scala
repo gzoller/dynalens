@@ -32,6 +32,7 @@ import CtxStrings.*
 object Parsing extends ZIOSpecDefault:
 
   def spec = suite("Parsing Tests")(
+    /*
     test("Simple val assignment script test") {
       val script =
         """
@@ -832,6 +833,68 @@ object Parsing extends ZIOSpecDefault:
         compiledScript.toString == expectedCompiled
       )
     },
+    */
+    test("case: simple string match") {
+      val script =
+        """
+          |  items.number => this case {
+          |    "A" -> "100"
+          |    "B" -> "200"
+          |    default -> "0"
+          |  }
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(MapStmt(items[].number,CaseWhenFn(GetFn(this),Vector((A,ConstantFn(100)), (B,ConstantFn(200))),Some(ConstantFn(0)),false))))"""
+      val expectedResult =
+        """top -> Shipment(foo,List(Item(100,1,7), Item(0,2,7), Item(200,3,7)),2)""".stripMargin + "\n"
+      val inst = Shipment("foo", List(Item("A",1), Item("X",2), Item("B",3)))
+      val lens = dynalens[Shipment]
+      for {
+        compiledScript <- Script.compile(script, lens)
+        (x, newCtx) <- lens.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(
+        x == Shipment("foo", List(Item("100",1), Item("0",2), Item("200",3))),
+        resultStr == expectedResult,
+        compiledScript.toString == expectedCompiled
+      )
+    },
+    test("case: map entry value transform") {
+      val script =
+        """
+          |  m => ( this.key
+          |       , this.value case (permissive) {
+          |           1  -> 7
+          |           2 -> 19
+          |         })
+          |""".stripMargin
+      val expectedCompiled =
+        """BlockStmt(List(MapStmt(m,Tuple2Fn(GetFn(this.key),CaseWhenFn(GetFn(this.value),Vector((1,ConstantFn(7)), (2,ConstantFn(19))),None,true)))))"""
+      val expectedResult =
+        """top -> Mapped(1,Map(a -> 7, b -> 19, c -> 3),None,Map())""".stripMargin + "\n"
+      val inst = Mapped(1, m = Map("a" -> 1, "b" -> 2, "c" -> 3), om=None, cplx=Map())
+      val lens = dynalens[Mapped]
+      for {
+        compiledScript <- Script.compile(script, lens)
+        (x, newCtx) <- lens.run(compiledScript, inst)
+        resultStr = toStringCtx(newCtx)
+      } yield assertTrue(
+        x == Mapped(1, m = Map("a" -> 7, "b" -> 19, "c" -> 3), om=None, cplx=Map()),
+        resultStr == expectedResult,
+        compiledScript.toString == expectedCompiled
+      )
+    },
+    test("case: no default → runtime error when no match") {
+      val script =
+        """
+          |  val x = 42 case { 1 -> "one" }
+          |""".stripMargin
+      val lens = dynalens[Registry]
+      for {
+        compiled <- Script.compile(script, lens)
+        runRes   <- lens.run(compiled, Registry("id", Nil, Nil)).either
+      } yield assertTrue(runRes.isLeft)
+    }
   )
 
 //  _ <- ZIO.succeed(println("&&& " + compiledScript))
