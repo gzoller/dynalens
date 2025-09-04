@@ -31,12 +31,12 @@ import scala.collection.mutable
 //
 // Map[ symbol, (value, lens?) ]
 type DynaContext = mutable.Map[String, (Any, Option[DynaLens[?]])]
-type Binding     = (Any, Option[DynaLens[?]])
+type Binding = (Any, Option[DynaLens[?]])
 
 // --- Keys & small helpers ----------------------------------------------------
 
 object CtxKey {
-  val Top  = "top"
+  val Top = "top"
   val This = "this"
   inline def coll(name: String): String = s"$name[]"
 
@@ -81,14 +81,14 @@ extension (ctx: DynaContext)
 
 /** Generic “with key” bracket: set key, run body, restore previous state. */
 def withKeyScoped[R](
-                      ctx: DynaContext,
-                      key: String,
-                      binding: Binding
-                    )(
-                      body: => ZIO[_BiMapRegistry, DynaLensError, R]
-                    ): ZIO[_BiMapRegistry, DynaLensError, R] = {
-  val prev: Option[Binding] = ctx.get(key)               // snapshot
-  ctx.update(key, binding)                               // set new binding
+    ctx: DynaContext,
+    key: String,
+    binding: Binding
+)(
+    body: => ZIO[_BiMapRegistry, DynaLensError, R]
+): ZIO[_BiMapRegistry, DynaLensError, R] = {
+  val prev: Option[Binding] = ctx.get(key) // snapshot
+  ctx.update(key, binding) // set new binding
 
   // ── IMPORTANT: defend against a null body ────────────────────────────────
   val safeBody: ZIO[_BiMapRegistry, DynaLensError, R] =
@@ -99,8 +99,8 @@ def withKeyScoped[R](
   safeBody.ensuring(
     ZIO.succeed {
       prev match {
-        case Some(old) => ctx.update(key, old)           // restore
-        case None      => ctx.remove(key)                // remove if we introduced it
+        case Some(old) => ctx.update(key, old) // restore
+        case None      => ctx.remove(key) // remove if we introduced it
       }
       ()
     }
@@ -109,27 +109,27 @@ def withKeyScoped[R](
 
 /** Bind `this` for the duration of `body`. */
 def withThisScoped[R](
-                       ctx: DynaContext,
-                       value: Any,
-                       lens: Option[DynaLens[?]] = None
-                     )(body: => ZIO[_BiMapRegistry, DynaLensError, R]): ZIO[_BiMapRegistry, DynaLensError, R] =
+    ctx: DynaContext,
+    value: Any,
+    lens: Option[DynaLens[?]] = None
+)(body: => ZIO[_BiMapRegistry, DynaLensError, R]): ZIO[_BiMapRegistry, DynaLensError, R] =
   withKeyScoped(ctx, CtxKey.This, (value, lens))(body)
 
 /** Bind loop symbol (e.g. “items”) to the current element for the duration of `body`. */
 def withLoopSymbol[R](
-                       ctx: DynaContext,
-                       key: String,
-                       value: Any,
-                       lens: Option[DynaLens[?]]
-                     )(body: => ZIO[_BiMapRegistry, DynaLensError, R]): ZIO[_BiMapRegistry, DynaLensError, R] =
+    ctx: DynaContext,
+    key: String,
+    value: Any,
+    lens: Option[DynaLens[?]]
+)(body: => ZIO[_BiMapRegistry, DynaLensError, R]): ZIO[_BiMapRegistry, DynaLensError, R] =
   withKeyScoped(ctx, key, (value, lens))(body)
 
 /** Bind the *whole collection* as `name[]` for the duration of `body`. */
 def withCollectionSymbol[R](
-                             ctx: DynaContext,
-                             loopKey: String,
-                             iterable: Iterable[?]
-                           )(body: => ZIO[_BiMapRegistry, DynaLensError, R]): ZIO[_BiMapRegistry, DynaLensError, R] =
+    ctx: DynaContext,
+    loopKey: String,
+    iterable: Iterable[?]
+)(body: => ZIO[_BiMapRegistry, DynaLensError, R]): ZIO[_BiMapRegistry, DynaLensError, R] =
   withKeyScoped(ctx, CtxKey.coll(loopKey), (iterable, None))(body)
 
 // --- Simple non-scoped convenience (kept for parity with your code) ---------
@@ -137,7 +137,6 @@ def withCollectionSymbol[R](
 /** Non-scoped setter for `this` (returns ctx to allow chaining). */
 def withElemCtx(elem: Any, ctx: DynaContext): DynaContext =
   ctx.set(CtxKey.This, (elem, None))
-
 
 // Keep alongside your DynaContext code
 
@@ -155,7 +154,7 @@ object CtxStrings:
 
     // order: "top" first, then alpha
     val ordered =
-      base.sortBy { case (k, _) => if (k == "top") "\u0000" else k }
+      base.sortBy { case (k, _) => if k == "top" then "\u0000" else k }
 
     // match your test snapshots: "key -> value.toString"
     ordered

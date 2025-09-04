@@ -27,19 +27,18 @@ import fastparse.*
 object Grammar extends Level2 {
 
   // Top-level script block — no `{}`, just a list of statements
-  def topLevelBlock[$: P](using ctx: ExprContext): P[Either[DLCompileError, BlockStmt]] =
-  {
+  def topLevelBlock[$: P](using ctx: ExprContext): P[Either[DLCompileError, BlockStmt]] = {
     given ExprContext = ctx
     statementSeq.map { stmtsE =>
       stmtsE.foldLeft[Either[DLCompileError, (ExprContext, List[Statement])]](Right(ctx -> Nil)) {
-        case (Left(err), _)                  => Left(err)
-        case (_, Left(err))                  => Left(err)
+        case (Left(err), _)                                => Left(err)
+        case (_, Left(err))                                => Left(err)
         case (Right((_, accStmts)), Right((newCtx, stmt))) =>
           // Thread the latest context forward; no merge
           Right(newCtx -> (accStmts :+ stmt))
       } match {
-        case Left(err)            => Left(err)
-        case Right((_, stmts))    => Right(BlockStmt(stmts))
+        case Left(err)         => Left(err)
+        case Right((_, stmts)) => Right(BlockStmt(stmts))
       }
     }
   }

@@ -51,20 +51,22 @@ trait Level0:
     P("None").map(_ => Right(NoneFn()))
 
   def numberLiteral[$: P]: P[ParseFnResult] =
-    P(Index ~ (CharIn("+\\-").? ~ CharsWhileIn("0-9") ~ ("." ~ CharsWhileIn("0-9")).?).!).map {
-      case (offset, raw) =>
-        val trimmed = raw.trim
-        if trimmed.contains('.') then {
-          try Right(ConstantFn(trimmed.toDouble))
-          catch case _: NumberFormatException =>
+    P(Index ~ (CharIn("+\\-").? ~ CharsWhileIn("0-9") ~ ("." ~ CharsWhileIn("0-9")).?).!).map { case (offset, raw) =>
+      val trimmed = raw.trim
+      if trimmed.contains('.') then {
+        try Right(ConstantFn(trimmed.toDouble))
+        catch
+          case _: NumberFormatException =>
             Left(DLCompileError(offset, s"Invalid double literal: $trimmed"))
-        } else {
-          try Right(ConstantFn(trimmed.toInt))
-          catch case _: NumberFormatException =>
+      } else {
+        try Right(ConstantFn(trimmed.toInt))
+        catch
+          case _: NumberFormatException =>
             try Right(ConstantFn(trimmed.toLong))
-            catch case _: NumberFormatException =>
-              Left(DLCompileError(offset, s"Invalid numeric literal: $trimmed"))
-        }
+            catch
+              case _: NumberFormatException =>
+                Left(DLCompileError(offset, s"Invalid numeric literal: $trimmed"))
+      }
     }
 
   def booleanLiteral[$: P]: P[BooleanFn] =
@@ -84,16 +86,16 @@ trait Level0:
   // Just like constant but not wrapped
   def literalValue[$: P]: P[Either[DLCompileError, Any]] =
     P(
-      stringLiteral.map(_.map {
-        case ConstantFn(s: String) => s
+      stringLiteral.map(_.map { case ConstantFn(s: String) =>
+        s
       }) |
-        numberLiteral.map(_.map {
-          case ConstantFn(n) => n
+        numberLiteral.map(_.map { case ConstantFn(n) =>
+          n
         }) |
-        noneLiteral.map(_.map {
-          case NoneFn() => None
+        noneLiteral.map(_.map { case NoneFn() =>
+          None
         }) |
-        booleanLiteral.map {
-          case BooleanConstantFn(value) => Right(value)
+        booleanLiteral.map { case BooleanConstantFn(value) =>
+          Right(value)
         }
     )

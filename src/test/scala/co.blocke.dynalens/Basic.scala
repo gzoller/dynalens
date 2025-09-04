@@ -170,6 +170,5 @@ object Basic extends ZIOSpecDefault:
         v <- ar.update("dunno?", None, inst)
         w <- ar.get("dunno?", v)
       } yield assertTrue(v == Maybe("foom", None, None) && w == None)
-    },
-
-).provide(BiMapRegistry.layer(EmptyBiMapRegistry))
+    }
+  ).provide(BiMapRegistry.layer(EmptyBiMapRegistry))

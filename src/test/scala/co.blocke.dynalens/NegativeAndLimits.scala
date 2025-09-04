@@ -147,8 +147,8 @@ object NegativeAndLimits extends ZIOSpecDefault:
         """
           |  l2[2] = 99
           |""".stripMargin
-      val inst = MyLists(1, List(1,2,3), None)
-      val a    = dynalens[MyLists]
+      val inst = MyLists(1, List(1, 2, 3), None)
+      val a = dynalens[MyLists]
       val effect =
         Script.compile(script, a).flatMap(compiled => a.run(compiled, inst))
 
@@ -157,7 +157,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       } yield res match {
         case Left(err) =>
           assertTrue(err.getMessage.contains("Index 2 out of bounds for field 'l2'"))
-        case Right(_)  =>
+        case Right(_) =>
           assertTrue(false).label("Expected a DynaLensError, but got success")
       }
     },
@@ -181,7 +181,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
     },
     test("Fixed index out of bounds should fail") {
       val script = "giftNums[10] = 9"
-      val inst = Registry("r1", List(1,2,3), Nil)
+      val inst = Registry("r1", List(1, 2, 3), Nil)
       val a = dynalens[Registry]
       val eff = Script.compile(script, a).flatMap(c => a.run(c, inst))
       for (res <- eff.either) yield res match {
@@ -191,7 +191,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
     },
     test("Unknown collection method should fail") {
       val script = "giftNums[].blorp()"
-      val inst = Registry("r1", List(1,2,3), Nil)
+      val inst = Registry("r1", List(1, 2, 3), Nil)
       val a = dynalens[Registry]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
       result match {
@@ -201,7 +201,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
     },
     test("Non-boolean predicate in filter should fail") {
       val script = "giftNums[].filter(123)"
-      val inst = Registry("r1", List(1,2,3), Nil)
+      val inst = Registry("r1", List(1, 2, 3), Nil)
       val a = dynalens[Registry]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
       result match {
@@ -240,11 +240,11 @@ object NegativeAndLimits extends ZIOSpecDefault:
     test("sortAsc with unknown key should fail") {
       val script = "pack.shipments.items.sortAsc(bogus)"
       val a = dynalens[Order] // whatever type has items[]
-      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Order("a",Pack("b",1,List(Shipment("c",List(Item("d",3))))))))
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Order("a", Pack("b", 1, List(Shipment("c", List(Item("d", 3))))))))
       result match {
         case Left(err) =>
           assertTrue(err.msg.contains("Field 'bogus' does not exist"))
-        case _         =>
+        case _ =>
           assertTrue(false).label("Expected unknown sort key error")
       }
     },
@@ -269,18 +269,24 @@ object NegativeAndLimits extends ZIOSpecDefault:
     test("Method not allowed on map/object receiver should fail") {
       val script = "pack.filter(this > 0)" // if pack is an object/map-ish node
       val a = dynalens[Order]
-      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Order(
-        "ord1",
-        Pack(
-          "pallet",
-          2,
-          List(
-            Shipment("aaa", List(Item("wow", 9, 5), Item("xyz", 1, 7), Item("abc", 19, 7)), 1),
-            Shipment("bbb", List(Item("free", 7, 5), Item("ace", 5, 7), Item("xyz", 1, 7)), 1)
+      val result = Script
+        .compileNoZIO(script, a)
+        .flatMap(c =>
+          a.runNoZIO(
+            c,
+            Order(
+              "ord1",
+              Pack(
+                "pallet",
+                2,
+                List(
+                  Shipment("aaa", List(Item("wow", 9, 5), Item("xyz", 1, 7), Item("abc", 19, 7)), 1),
+                  Shipment("bbb", List(Item("free", 7, 5), Item("ace", 5, 7), Item("xyz", 1, 7)), 1)
+                )
+              )
+            )
           )
         )
-      )
-      ))
       result match {
         case Left(err) => assertTrue(err.msg.contains("filter expected a collection, got: Pack"))
         case _         => assertTrue(false).label("Expected receiver kind error")
@@ -288,7 +294,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
     },
     test("filter using unknown relative field should fail") {
       val script = "giftNums[].filter(qty > 2)" // giftNums is List[Int], no 'qty' in element scope
-      val inst = Registry("r1", List(1,2,3), Nil)
+      val inst = Registry("r1", List(1, 2, 3), Nil)
       val a = dynalens[Registry]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
       result match {
@@ -302,7 +308,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
           |  val x = l1.distinct()
           |  val y = x[2].sortAsc()
           |""".stripMargin
-      val inst = ComplexLists(1, List(1,5,8,1,0,99,-2), Nil)
+      val inst = ComplexLists(1, List(1, 5, 8, 1, 0, 99, -2), Nil)
       val a = dynalens[ComplexLists]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
       result match {
@@ -315,7 +321,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
         """
           |  val x = cplx.values()[0] + 2
           |""".stripMargin
-      val inst = Mapped(1, Map.empty, None, Map("a"->List(Person("Sam",45))))
+      val inst = Mapped(1, Map.empty, None, Map("a" -> List(Person("Sam", 45))))
       val a = dynalens[Mapped]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
       result match {
@@ -368,12 +374,12 @@ object NegativeAndLimits extends ZIOSpecDefault:
           |           2 -> 19
           |         })
           |""".stripMargin
-      val inst = Mapped(1, m = Map("a" -> 1, "b" -> 2, "c" -> 3), om=None, cplx=Map())
+      val inst = Mapped(1, m = Map("a" -> 1, "b" -> 2, "c" -> 3), om = None, cplx = Map())
       val a = dynalens[Mapped]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
       result match {
         case Left(err) => assertTrue(err.msg.contains("No case matched for value: 3"))
         case _         => assertTrue(false).label("Expected relative path field error")
       }
-    },
+    }
   )

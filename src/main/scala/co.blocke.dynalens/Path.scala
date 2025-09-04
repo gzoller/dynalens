@@ -30,7 +30,7 @@ object Path:
   case class Field(name: String, isOptional: Boolean = false) extends PathElement
   case class IndexedField(name: String, index: Option[Int], isOptional: Boolean = false) extends PathElement
 
-  def parsePath(path: String): List[PathElement] = {
+  def parsePath(path: String): List[PathElement] =
     path.split("\\.").toList.map { segment =>
       val isOptional = segment.endsWith("?")
       val clean = if isOptional then segment.dropRight(1) else segment
@@ -42,17 +42,15 @@ object Path:
       else if clean.endsWith("[]") then
         val name = clean.dropRight(2)
         IndexedField(name, None, isOptional)
-      else
-        Field(clean, isOptional)
+      else Field(clean, isOptional)
     }
-  }
 
   // Strip all "noise" out of path--just raw path--for DynaLens low-level operations
   def partialPath(pathParts: List[PathElement]): String =
     pathParts
       .map {
-        case IndexedField(name, Some(i), _)   => s"$name[$i]"
-        case Field(name, _)                   => name
-        case IndexedField(name, _, _)         => name
+        case IndexedField(name, Some(i), _) => s"$name[$i]"
+        case Field(name, _)                 => name
+        case IndexedField(name, _, _)       => name
       }
       .mkString(".")

@@ -153,13 +153,13 @@ object Options extends ZIOSpecDefault:
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),Some(List(1, 2, 3)))
           |""".stripMargin
-      val inst = MyLists(1, List(1,2,3), None)
+      val inst = MyLists(1, List(1, 2, 3), None)
       val a = dynalens[MyLists]
       for {
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == MyLists(1,List(1, 2, 3),Some(List(1, 2, 3))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == MyLists(1, List(1, 2, 3), Some(List(1, 2, 3))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Update optional list 2") {
       val script =
@@ -177,13 +177,13 @@ object Options extends ZIOSpecDefault:
           |y -> List()
           |z -> false
           |""".stripMargin
-      val inst = MyLists(1, List(1,2,3), Some(List(1,2,3)))
+      val inst = MyLists(1, List(1, 2, 3), Some(List(1, 2, 3)))
       val a = dynalens[MyLists]
       for {
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == MyLists(1,List(1, 2, 3),None) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == MyLists(1, List(1, 2, 3), None) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Update optional list 3") {
       val script =
@@ -197,13 +197,13 @@ object Options extends ZIOSpecDefault:
         """top -> MyLists(1,List(1, 2, 3),None)
           |x -> List()
           |""".stripMargin
-      val inst = MyLists(1, List(1,2,3), None)
+      val inst = MyLists(1, List(1, 2, 3), None)
       val a = dynalens[MyLists]
       for {
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == MyLists(1,List(1, 2, 3),None) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == MyLists(1, List(1, 2, 3), None) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Indexed assignment with Some and None") {
       val script =
@@ -215,13 +215,13 @@ object Options extends ZIOSpecDefault:
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),Some(List(5, 15, 7)))
           |""".stripMargin
-      val inst = MyLists(1, List(1,2,3), Some(List(5,6,7)))
+      val inst = MyLists(1, List(1, 2, 3), Some(List(5, 6, 7)))
       val a = dynalens[MyLists]
       for {
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == MyLists(1,List(1, 2, 3),Some(List(5,15,7))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == MyLists(1, List(1, 2, 3), Some(List(5, 15, 7))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Indexed assignment with List of Option") {
       val script =
@@ -234,13 +234,13 @@ object Options extends ZIOSpecDefault:
       val expectedResult =
         """top -> ListOfOpt(1,List(Some(1), Some(15)))
           |""".stripMargin
-      val inst = ListOfOpt(1, List(Some(1),None,Some(3)))
+      val inst = ListOfOpt(1, List(Some(1), None, Some(3)))
       val a = dynalens[ListOfOpt]
       for {
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == ListOfOpt(1, List(Some(1),Some(15))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == ListOfOpt(1, List(Some(1), Some(15))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Map vs Update (update)") {
       val script =
@@ -252,13 +252,13 @@ object Options extends ZIOSpecDefault:
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),None)
           |""".stripMargin
-      val inst = MyLists(1, List(1,2,3), Some(List(4,5,6)))
+      val inst = MyLists(1, List(1, 2, 3), Some(List(4, 5, 6)))
       val a = dynalens[MyLists]
       for {
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == MyLists(1, List(1,2,3), None) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == MyLists(1, List(1, 2, 3), None) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Map vs Update (map) - 1") {
       val script =
@@ -276,7 +276,7 @@ object Options extends ZIOSpecDefault:
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Maybe("abc",Some("blahfoo"),None) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Maybe("abc", Some("blahfoo"), None) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Map vs Update (map) - 2") {
       val script =
@@ -288,13 +288,13 @@ object Options extends ZIOSpecDefault:
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),Some(List(13, 14, 15)))
           |""".stripMargin
-      val inst = MyLists(1, List(1,2,3), Some(List(4,5,6)))
+      val inst = MyLists(1, List(1, 2, 3), Some(List(4, 5, 6)))
       val a = dynalens[MyLists]
       for {
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == MyLists(1, List(1,2,3), Some(List(13,14,15))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == MyLists(1, List(1, 2, 3), Some(List(13, 14, 15))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("Map against None") {
       val script =
@@ -324,14 +324,14 @@ object Options extends ZIOSpecDefault:
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),Some(List(4, 5, 99)))
           |""".stripMargin
-      val inst = MyLists(1, List(1,2,3), Some(List(4,5,6)))
+      val inst = MyLists(1, List(1, 2, 3), Some(List(4, 5, 6)))
       val a = dynalens[MyLists]
       for {
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x ==  MyLists(1,List(1, 2, 3),Some(List(4, 5, 99))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
-    },
+      } yield assertTrue(x == MyLists(1, List(1, 2, 3), Some(List(4, 5, 99))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+    }
   )
 
 //  _ <- ZIO.succeed(println("&&& " + compiledScript))

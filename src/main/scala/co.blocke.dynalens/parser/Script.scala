@@ -39,7 +39,7 @@ object Script {
 
   private def parseScript(script: String)(using ExprContext): Either[DLCompileError, BlockStmt] =
     parse(script, s => Grammar.topLevelBlock(using s)) match {
-      case Parsed.Success(astEither, _) => astEither                    // Either[DLCompileError, BlockStmt]
+      case Parsed.Success(astEither, _) => astEither // Either[DLCompileError, BlockStmt]
       case f: Parsed.Failure            => Left(DLCompileError(f.index, f.trace().longMsg))
     }
 }

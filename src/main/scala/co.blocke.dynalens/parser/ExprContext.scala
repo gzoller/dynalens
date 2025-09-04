@@ -24,17 +24,17 @@ package parser
 
 // parser/package.scala (concept sketch)
 case class Receiver(
-                     name: String = "this",
-                     fields: Map[String, Any],          // element schema minus __type, or Map.empty for scalar receiver
-                     sym: SymbolType                    // Scalar, List, Map, Optional*, None
-                   )
+    name: String = "this",
+    fields: Map[String, Any], // element schema minus __type, or Map.empty for scalar receiver
+    sym: SymbolType // Scalar, List, Map, Optional*, None
+)
 
 case class ExprContext(
-                        typeInfo: Map[String, Any],
-                        sym: Map[String, SymbolType] = Map.empty,       // known symbols (vals + 'this')
-                        scopes: List[Map[String, Any]] = Nil,           // lexical/local frames (top is head)
-                        receiver: Option[Receiver] = None               // current “this”
-                      ) {
+    typeInfo: Map[String, Any],
+    sym: Map[String, SymbolType] = Map.empty, // known symbols (vals + 'this')
+    scopes: List[Map[String, Any]] = Nil, // lexical/local frames (top is head)
+    receiver: Option[Receiver] = None // current “this”
+) {
 
   def resolveSymbol(name: String): Option[SymbolType] =
     sym.get(name)
@@ -47,9 +47,9 @@ case class ExprContext(
     copy(scopes = m :: scopes)
 
   def withReceiverFromPath(path: String): ExprContext = {
-    val targetSym   = Utility.getPathType(path)(using this)
-    val elemSchema  = Utility.elementSchemaFor(path, typeInfo) // minus __type if element, else Map.empty
-    val recv        = Receiver(fields = elemSchema, sym = targetSym)
+    val targetSym = Utility.getPathType(path)(using this)
+    val elemSchema = Utility.elementSchemaFor(path, typeInfo) // minus __type if element, else Map.empty
+    val recv = Receiver(fields = elemSchema, sym = targetSym)
     copy(receiver = Some(recv), sym = sym + ("this" -> targetSym))
   }
 
@@ -57,9 +57,9 @@ case class ExprContext(
     copy(receiver = Some(recv), sym = sym + ("this" -> recv.sym))
 
   /** Merge contexts across sequential statements.
-   * - Keep/union schema and symbols (later wins)
-   * - Do NOT leak transient scopes/receiver across statements
-   */
+    * - Keep/union schema and symbols (later wins)
+    * - Do NOT leak transient scopes/receiver across statements
+    */
   def merge(that: ExprContext): ExprContext =
     this.copy(
       typeInfo = this.typeInfo ++ that.typeInfo, // allow additions like "__val_x"

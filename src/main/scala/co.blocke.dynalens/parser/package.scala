@@ -33,14 +33,13 @@ type ParseFnListResult = ParseResult[List[Fn[Any]]]
 
 case class DLCompileError(offset: Int, msg: String):
   def render(input: String): String =
-    val (line,pos) = offsetToLineCol(input)
+    val (line, pos) = offsetToLineCol(input)
     s"[$line,$pos] Error: $msg"
   private def offsetToLineCol(input: String): (Int, Int) =
     val lines = input.take(offset).split('\n')
     val line = lines.length
     val col = lines.lastOption.map(_.length).getOrElse(0) + 1
     (line, col)
-
 
 //extension [A](parser: P[Either[DLCompileError, A]])
 //  def withExprCtx(using ExprContext): P[Either[DLCompileError, A]] = parser
@@ -49,8 +48,8 @@ case class DLCompileError(offset: Int, msg: String):
 // ExprContext used during compilation
 //
 enum SymbolType:
-  case Scalar  // Fn[Any]
-  case Boolean  // BooleanFn
+  case Scalar // Fn[Any]
+  case Boolean // BooleanFn
   case Map
   case List
   case OptionalScalar
@@ -60,29 +59,37 @@ enum SymbolType:
 
 private def pretty(sym: SymbolType): String =
   sym match {
-    case SymbolType.Scalar => "scalar"
-    case SymbolType.Boolean => "boolean"
-    case SymbolType.Map => "map"
-    case SymbolType.List => "list"
+    case SymbolType.Scalar         => "scalar"
+    case SymbolType.Boolean        => "boolean"
+    case SymbolType.Map            => "map"
+    case SymbolType.List           => "list"
     case SymbolType.OptionalScalar => "optional scalar"
-    case SymbolType.OptionalList => "optional list"
-    case SymbolType.OptionalMap => "optional map"
-    case SymbolType.None => "none"
+    case SymbolType.OptionalList   => "optional list"
+    case SymbolType.OptionalMap    => "optional map"
+    case SymbolType.None           => "none"
   }
 
+// Math functions
 val M_MIN = "min"
 val M_MAX = "max"
 val M_SUM = "sum"
 val M_AVG = "avg"
 val M_MEDIAN = "median"
 val M_ABS = "abs"
+
+// Boolean functions (strings)
 val M_STARTSWITH = "startsWith"
 val M_ENDSWITH = "endsWith"
 val M_CONTAINS = "contains"
 val M_EQUALSIGNORECASE = "equalsIgnoreCase"
 val M_MATCHESREGEX = "matchesRegex"
+
 val M_ELSE = "else"
+
+// Option functions
 val M_ISDEFINED = "isDefined"
+
+// String functions
 val M_LEN = "len"
 val M_TOUPPERCASE = "toUpperCase"
 val M_TOLOWERCASE = "toLowerCase"
@@ -92,6 +99,8 @@ val M_SUBSTR = "substr"
 val M_REPLACE = "replace"
 val M_DATEFMT = "dateFmt"
 val M_TODATE = "toDate"
+
+// Seq functions (+ len, which is both)
 val M_SORTASC = "sortAsc"
 val M_SORTDESC = "sortDesc"
 val M_FILTER = "filter"
@@ -99,6 +108,14 @@ val M_DISTINCT = "distinct"
 val M_LIMIT = "limit"
 val M_REVERSE = "reverse"
 val M_CLEAN = "clean"
+
+// Map functions
 val M_KEYS = "keys"
 val M_VALUES = "values"
 val M_GET = "get"
+
+// Misc
+// val M_NOW = "now" // Date function
+// val M_UUID = "uuid"
+// val M_MAPFROM = "mapFrom"
+// val M_MAPTO = "mapTo"

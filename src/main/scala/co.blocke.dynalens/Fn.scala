@@ -48,7 +48,7 @@ case class ConstantFn[R](out: R) extends Fn[R]:
 
 case class GetFn(path: String) extends Fn[Any] {
 
-  import Path._ // for parsePath/PathElement/Field/IndexedField/partialPath
+  import Path.* // for parsePath/PathElement/Field/IndexedField/partialPath
 
   // Generic walker that can traverse case classes, Maps and (indexed) collections
   @tailrec
@@ -56,8 +56,8 @@ case class GetFn(path: String) extends Fn[Any] {
     def fieldOf(p: Product, name: String): Option[Any] = {
       val names = p.productElementNames.iterator
       var i = 0
-      while (names.hasNext) {
-        if (names.next() == name) return Some(p.productElement(i))
+      while names.hasNext do {
+        if names.next() == name then return Some(p.productElement(i))
         i += 1
       }
       None
@@ -101,7 +101,7 @@ case class GetFn(path: String) extends Fn[Any] {
             (coll, idxOpt) match {
               case (xs: Seq[?], Some(i)) =>
                 val s = xs.asInstanceOf[Seq[Any]]
-                if (i >= 0 && i < s.length) walk(s(i), tail)
+                if i >= 0 && i < s.length then walk(s(i), tail)
                 else Left(DynaLensError(s"Index $i out of bounds for field '$name'"))
 
               // wildcard `[]` makes no sense for a scalar get; treat as error
@@ -120,7 +120,7 @@ case class GetFn(path: String) extends Fn[Any] {
     val parts = parsePath(fullPath)
     parts match {
       case Path.IndexedField(base, None, _) :: rest if ctx.contains(base) || ctx.contains(base + "[]") =>
-        if (rest.isEmpty) {
+        if rest.isEmpty then {
           // prefer the collection binding if present
           ctx.get(base + "[]") match {
             case Some((coll, _)) => ZIO.succeed(coll)
@@ -150,9 +150,9 @@ case class GetFn(path: String) extends Fn[Any] {
   }
 
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] = {
-    if (!path.contains('.') && path.endsWith("[]")) {
+    if !path.contains('.') && path.endsWith("[]") then {
       val k = path // exactly "items[]", "orders[]", ...
-      if (ctx.contains(k)) {
+      if ctx.contains(k) then {
         val v = ctx(k)._1
         return ZIO.succeed(v)
       }
@@ -162,26 +162,28 @@ case class GetFn(path: String) extends Fn[Any] {
 
     parts match {
       // this.key  (first try "key", then derive from this=(k,v))
-      case Field("this", _) :: Field("key",  _) :: Nil =>
-        ctx.valueOf("key")
+      case Field("this", _) :: Field("key", _) :: Nil =>
+        ctx
+          .valueOf("key")
           .map(ZIO.succeed(_))
           .getOrElse {
             ctx.valueOf("this") match {
-              case Some(t: (Any, Any))                   => ZIO.succeed(t._1)
-              case Some(me: java.util.Map.Entry[?, ?])   => ZIO.succeed(me.getKey)
-              case _ => ZIO.fail(DynaLensError("Field not found: 'key'"))
+              case Some(t: (Any, Any))                 => ZIO.succeed(t._1)
+              case Some(me: java.util.Map.Entry[?, ?]) => ZIO.succeed(me.getKey)
+              case _                                   => ZIO.fail(DynaLensError("Field not found: 'key'"))
             }
           }
 
       // this.value  (first try "value", then derive from this=(k,v))
       case Field("this", _) :: Field("value", _) :: Nil =>
-        ctx.valueOf("value")
+        ctx
+          .valueOf("value")
           .map(ZIO.succeed(_))
           .getOrElse {
             ctx.valueOf("this") match {
-              case Some(t: (Any, Any))                   => ZIO.succeed(t._2)
-              case Some(me: java.util.Map.Entry[?, ?])   => ZIO.succeed(me.getValue)
-              case _ => ZIO.fail(DynaLensError("Field not found: 'value'"))
+              case Some(t: (Any, Any))                 => ZIO.succeed(t._2)
+              case Some(me: java.util.Map.Entry[?, ?]) => ZIO.succeed(me.getValue)
+              case _                                   => ZIO.fail(DynaLensError("Field not found: 'value'"))
             }
           }
 
@@ -208,14 +210,14 @@ case class GetFn(path: String) extends Fn[Any] {
                 val s = seq.asInstanceOf[Seq[Any]]
                 idxOpt match {
                   case Some(i) =>
-                    if (i >= 0 && i < s.length) {
+                    if i >= 0 && i < s.length then {
                       val elem = s(i)
-                      if (rest.isEmpty) ZIO.succeed(elem)
+                      if rest.isEmpty then ZIO.succeed(elem)
                       else ZIO.fromEither(walk(elem, rest))
                     } else ZIO.fail(DynaLensError(s"Index $i out of bounds for '$name'"))
                   case None =>
                     // wildcard: return the whole seq (or walk further if needed)
-                    if (rest.isEmpty) ZIO.succeed(s)
+                    if rest.isEmpty then ZIO.succeed(s)
                     else ZIO.fromEither(walk(s, rest))
                 }
 
@@ -224,13 +226,13 @@ case class GetFn(path: String) extends Fn[Any] {
                 val s = it.asInstanceOf[Iterable[Any]].toList
                 idxOpt match {
                   case Some(i) =>
-                    if (i >= 0 && i < s.length) {
+                    if i >= 0 && i < s.length then {
                       val elem = s(i)
-                      if (rest.isEmpty) ZIO.succeed(elem)
+                      if rest.isEmpty then ZIO.succeed(elem)
                       else ZIO.fromEither(walk(elem, rest))
                     } else ZIO.fail(DynaLensError(s"Index $i out of bounds for '$name'"))
                   case None =>
-                    if (rest.isEmpty) ZIO.succeed(s)
+                    if rest.isEmpty then ZIO.succeed(s)
                     else ZIO.fromEither(walk(s, rest))
                 }
 
@@ -254,13 +256,14 @@ case class GetFn(path: String) extends Fn[Any] {
       case Path.IndexedField(name, None, _) :: rest if ctx.contains(name + "[]") =>
         ctx.get(name + "[]") match {
           case Some((coll: Iterable[?] @unchecked, _)) =>
-            if (rest.isEmpty) ZIO.succeed(coll) // "items[]" alone → whole list
-            else ZIO.fail(
-              DynaLensError(
-                s"Internal: wildcard index for '$name[]' with a remaining path ('${Path.partialPath(rest)}'); " +
-                  s"this should be resolved via an element context, not the top lens."
+            if rest.isEmpty then ZIO.succeed(coll) // "items[]" alone → whole list
+            else
+              ZIO.fail(
+                DynaLensError(
+                  s"Internal: wildcard index for '$name[]' with a remaining path ('${Path.partialPath(rest)}'); " +
+                    s"this should be resolved via an element context, not the top lens."
+                )
               )
-            )
           case Some((other, _)) =>
             ZIO.fail(DynaLensError(s"Expected iterable bound at '$name[]', found: ${other.getClass.getSimpleName}"))
           case None =>
@@ -277,10 +280,10 @@ case class GetFn(path: String) extends Fn[Any] {
               case IndexedField(_, Some(i), _) =>
                 v match {
                   case seq: Seq[?] =>
-                    if (i >= 0 && i < seq.length) {
+                    if i >= 0 && i < seq.length then {
                       val elem = seq(i)
-                      if (rest.isEmpty) ZIO.succeed(elem)
-                      else ZIO.fromEither(walk(elem, rest))  // allow x[2].field, etc.
+                      if rest.isEmpty then ZIO.succeed(elem)
+                      else ZIO.fromEither(walk(elem, rest)) // allow x[2].field, etc.
                     } else ZIO.fail(DynaLensError(s"Index $i out of bounds for '${first.name}'"))
                   case other =>
                     ZIO.fail(DynaLensError(s"Value bound to '${first.name}' is not indexable (${other.getClass.getSimpleName})"))
@@ -292,13 +295,13 @@ case class GetFn(path: String) extends Fn[Any] {
 
               // plain `x` or `x.something`
               case Field(_, _) =>
-                if (rest.isEmpty) ZIO.succeed(v)
+                if rest.isEmpty then ZIO.succeed(v)
                 else ZIO.fromEither(walk(v, rest))
             }
 
           // --- lens-bound roots (unchanged) ---
           case Some((v, Some(boundLens))) =>
-            if (rest.isEmpty) ZIO.succeed(v)
+            if rest.isEmpty then ZIO.succeed(v)
             else boundLens.get(partialPath(rest), v.asInstanceOf[boundLens.ThisT])
 
           case None =>
@@ -542,14 +545,14 @@ case class toBooleanFn(inner: Fn[Any]) extends BooleanFn {
 
 // Helpers
 private def toStr(v: Any, op: String): Either[DynaLensError, String] = v match {
-  case null => Right("")
-  case None => Right("")
-  case s: String => Right(s)
+  case null             => Right("")
+  case None             => Right("")
+  case s: String        => Right(s)
   case cs: CharSequence => Right(cs.toString)
-  case _: Iterable[?] => Left(DynaLensError(s"$op may only be applied to a single value, not an Iterable"))
-  case _: Array[?] => Left(DynaLensError(s"$op may only be applied to a single value, not an Array"))
-  case p: Product => Right(p.toString) // case classes/tuples become "a(b,c)"
-  case other => Right(other.toString) // numbers, booleans, etc.
+  case _: Iterable[?]   => Left(DynaLensError(s"$op may only be applied to a single value, not an Iterable"))
+  case _: Array[?]      => Left(DynaLensError(s"$op may only be applied to a single value, not an Array"))
+  case p: Product       => Right(p.toString) // case classes/tuples become "a(b,c)"
+  case other            => Right(other.toString) // numbers, booleans, etc.
 }
 private def toDbl(v: String, op: String): Either[DynaLensError, Double] =
   try Right(v.toDouble)
@@ -588,12 +591,11 @@ case class ContainsFn(recv: Fn[Any], needle: Fn[Any]) extends BooleanFn {
 
 object ContainsFn {
 
-  private def containsDynamic(hay: Any, needle: Fn[Any], ctx: DynaContext)
-  : ZIO[_BiMapRegistry, DynaLensError, Boolean] = hay match {
+  private def containsDynamic(hay: Any, needle: Fn[Any], ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] = hay match {
 
     // ---- Option unwraps ----
-    case null => ZIO.succeed(false)
-    case None => ZIO.succeed(false)
+    case null        => ZIO.succeed(false)
+    case None        => ZIO.succeed(false)
     case Some(inner) => containsDynamic(inner, needle, ctx)
 
     // ---- String: substring ----
@@ -621,7 +623,7 @@ object ContainsFn {
             }
             .map(_.exists {
               case Right(true) => true
-              case _ => false
+              case _           => false
             })
 
         // Value case: compute the target value once, then == compare
@@ -660,7 +662,8 @@ case class MatchesRegexFn(recv: Fn[Any], pattern: Fn[Any]) extends BooleanFn {
       aStr <- ZIO.fromEither(toStr(aAny, "matchesRegex receiver"))
       pStr <- ZIO.fromEither(toStr(pAny, "matchesRegex pattern"))
       // compile once; fail cleanly on bad regexes
-      pat  <- ZIO.attempt(java.util.regex.Pattern.compile(pStr))
+      pat <- ZIO
+        .attempt(java.util.regex.Pattern.compile(pStr))
         .mapError(e => DynaLensError(s"Invalid regex: ${e.getMessage}"))
     } yield pat.matcher(aStr).matches()
 }
@@ -672,14 +675,14 @@ case class AbsFn(recv: Fn[Any]) extends Fn[Any] {
     for {
       raw <- recv.resolve(ctx)
       out <- raw match {
-        case null                => ZIO.fail(DynaLensError("abs() found null"))
-        case x: java.lang.Byte   => ZIO.succeed((if x < 0 then (-x).toByte else x): Byte)
-        case x: java.lang.Short  => ZIO.succeed(Math.abs(x.toInt).toShort)
-        case x: java.lang.Integer=> ZIO.succeed(Math.abs(x))
-        case x: java.lang.Long   => ZIO.succeed(Math.abs(x))
-        case x: java.lang.Float  => ZIO.succeed(Math.abs(x))
-        case x: java.lang.Double => ZIO.succeed(Math.abs(x))
-        case other               => ZIO.fail(DynaLensError(s"abs() expects numeric, got ${other.getClass.getSimpleName}"))
+        case null                 => ZIO.fail(DynaLensError("abs() found null"))
+        case x: java.lang.Byte    => ZIO.succeed((if x < 0 then (-x).toByte else x): Byte)
+        case x: java.lang.Short   => ZIO.succeed(Math.abs(x.toInt).toShort)
+        case x: java.lang.Integer => ZIO.succeed(Math.abs(x))
+        case x: java.lang.Long    => ZIO.succeed(Math.abs(x))
+        case x: java.lang.Float   => ZIO.succeed(Math.abs(x))
+        case x: java.lang.Double  => ZIO.succeed(Math.abs(x))
+        case other                => ZIO.fail(DynaLensError(s"abs() expects numeric, got ${other.getClass.getSimpleName}"))
       }
     } yield out
 }
@@ -689,7 +692,7 @@ case class MinFn(recv: Fn[Any]) extends Fn[Any] {
     for {
       raw <- recv.resolve(ctx)
       box <- ZIO.fromEither(collect(raw, "min"))
-      v    = toPromotedVector(box)
+      v = toPromotedVector(box)
       res <- box.kind match {
         case KDouble =>
           val vs = v.asInstanceOf[Vector[Double]]
@@ -763,16 +766,16 @@ case class AvgFn(recv: Fn[Any]) extends Fn[Any] {
         // Average is always Double (even for Int/Long/Float inputs)
         case KDouble =>
           val vs = v.asInstanceOf[Vector[Double]]
-          ZIO.succeed(if (vs.isEmpty) 0.0 else vs.sum / vs.size.toDouble)
+          ZIO.succeed(if vs.isEmpty then 0.0 else vs.sum / vs.size.toDouble)
         case KFloat =>
           val vs = v.asInstanceOf[Vector[Float]]
-          ZIO.succeed(if (vs.isEmpty) 0.0 else vs.foldLeft(0.0)(_ + _.toDouble) / vs.size.toDouble)
+          ZIO.succeed(if vs.isEmpty then 0.0 else vs.foldLeft(0.0)(_ + _.toDouble) / vs.size.toDouble)
         case KLong =>
           val vs = v.asInstanceOf[Vector[Long]]
-          ZIO.succeed(if (vs.isEmpty) 0.0 else vs.foldLeft(0.0)(_ + _.toDouble) / vs.size.toDouble)
+          ZIO.succeed(if vs.isEmpty then 0.0 else vs.foldLeft(0.0)(_ + _.toDouble) / vs.size.toDouble)
         case KInt =>
           val vs = v.asInstanceOf[Vector[Int]]
-          ZIO.succeed(if (vs.isEmpty) 0.0 else vs.foldLeft(0.0)(_ + _.toDouble) / vs.size.toDouble)
+          ZIO.succeed(if vs.isEmpty then 0.0 else vs.foldLeft(0.0)(_ + _.toDouble) / vs.size.toDouble)
       }
     } yield res
 }
@@ -789,32 +792,32 @@ case class MedianFn(recv: Fn[Any]) extends Fn[Any] {
           val s = v.asInstanceOf[Vector[Double]].sorted
           ZIO.succeed {
             val n = s.length
-            if (n == 0) 0.0
-            else if ((n & 1) == 1) s(n / 2)
+            if n == 0 then 0.0
+            else if (n & 1) == 1 then s(n / 2)
             else (s(n / 2 - 1) + s(n / 2)) / 2.0
           }
         case KFloat =>
           val s = v.asInstanceOf[Vector[Float]].sorted
           ZIO.succeed {
             val n = s.length
-            if (n == 0) 0.0
-            else if ((n & 1) == 1) s(n / 2).toDouble
+            if n == 0 then 0.0
+            else if (n & 1) == 1 then s(n / 2).toDouble
             else (s(n / 2 - 1) + s(n / 2)).toDouble / 2.0
           }
         case KLong =>
           val s = v.asInstanceOf[Vector[Long]].sorted
           ZIO.succeed {
             val n = s.length
-            if (n == 0) 0.0
-            else if ((n & 1) == 1) s(n / 2).toDouble
+            if n == 0 then 0.0
+            else if (n & 1) == 1 then s(n / 2).toDouble
             else (s(n / 2 - 1) + s(n / 2)).toDouble / 2.0
           }
         case KInt =>
           val s = v.asInstanceOf[Vector[Int]].sorted
           ZIO.succeed {
             val n = s.length
-            if (n == 0) 0.0
-            else if ((n & 1) == 1) s(n / 2).toDouble
+            if n == 0 then 0.0
+            else if (n & 1) == 1 then s(n / 2).toDouble
             else (s(n / 2 - 1) + s(n / 2)).toDouble / 2.0
           }
       }
@@ -1035,8 +1038,7 @@ case class InterpolateFn(template: Fn[Any], variables: Map[String, Fn[Any]]) ext
       }
 
       varsToUse =
-        if (variables.isEmpty)
-          TemplateUtils.extractVariables(templStr).map(v => v -> GetFn(v)).toMap
+        if variables.isEmpty then TemplateUtils.extractVariables(templStr).map(v => v -> GetFn(v)).toMap
         else variables
 
       resolvedVars <- ZIO.foreach(varsToUse.toList) { case (k, fn) =>
@@ -1131,16 +1133,15 @@ case class ReplaceFn(in: Fn[Any], target: Fn[Any], replacement: Fn[Any]) extends
 // --- Option Functions ----
 
 case class ElseFn(primary: Fn[Any], fallback: Fn[Any]) extends Fn[Any] {
-  override def resolve(ctx: DynaContext)
-  : ZIO[_BiMapRegistry, DynaLensError, Any] =
+  override def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     primary.resolve(ctx).flatMap {
-      case opt: Option[_] =>
+      case opt: Option[?] =>
         opt match {
-          case Some(v) => ZIO.succeed(v)           // pass-through value
-          case None    => fallback.resolve(ctx)    // only None triggers fallback
+          case Some(v) => ZIO.succeed(v) // pass-through value
+          case None    => fallback.resolve(ctx) // only None triggers fallback
         }
       case v =>
-        ZIO.succeed(v)                             // non-Option: pass-through
+        ZIO.succeed(v) // non-Option: pass-through
     }
 }
 
@@ -1151,10 +1152,10 @@ case class KeysFn(recv: Fn[Any]) extends Fn[List[Any]]:
     for {
       mAny <- recv.resolve(ctx)
       result <- mAny match {
-        case null => ZIO.succeed(Nil) // safe: no keys
-        case m: Map[?, ?] => ZIO.succeed(m.keys.toList)
+        case null               => ZIO.succeed(Nil) // safe: no keys
+        case m: Map[?, ?]       => ZIO.succeed(m.keys.toList)
         case Some(m: Map[?, ?]) => ZIO.succeed(m.keys.toList) // option-wrapped
-        case None => ZIO.succeed(Nil)
+        case None               => ZIO.succeed(Nil)
         case other =>
           ZIO.fail(DynaLensError(s"keys() can only be used on Map or Option[Map], but found ${other.getClass.getName}"))
       }
@@ -1165,10 +1166,10 @@ case class ValuesFn(recv: Fn[Any]) extends Fn[List[Any]]:
     for {
       mAny <- recv.resolve(ctx)
       result <- mAny match {
-        case null => ZIO.succeed(Nil)
-        case m: Map[?, ?] => ZIO.succeed(m.values.toList)
+        case null               => ZIO.succeed(Nil)
+        case m: Map[?, ?]       => ZIO.succeed(m.values.toList)
         case Some(m: Map[?, ?]) => ZIO.succeed(m.values.toList)
-        case None => ZIO.succeed(Nil)
+        case None               => ZIO.succeed(Nil)
         case other =>
           ZIO.fail(DynaLensError(s"values() can only be used on Map or Option[Map], but found ${other.getClass.getName}"))
       }
@@ -1177,9 +1178,9 @@ case class ValuesFn(recv: Fn[Any]) extends Fn[List[Any]]:
 case class MapGetFn(recv: Fn[Any], key: Fn[Any]) extends Fn[Any] {
   def resolve(ctx: DynaContext) =
     for {
-      m  <- recv.resolve(ctx)
-      k  <- key.resolve(ctx)
-      v  <- m match {
+      m <- recv.resolve(ctx)
+      k <- key.resolve(ctx)
+      v <- m match {
         case mm: Map[?, ?] @unchecked =>
           mm.asInstanceOf[Map[Any, Any]].get(k) match
             case Some(v) => ZIO.succeed(v)
@@ -1207,13 +1208,13 @@ case class Tuple2Fn(_1: Fn[Any], _2: Fn[Any]) extends Fn[Any] {
 // Wrap any Fn that produces a collection; pick element at fixed index
 case class IndexFn(recv: Fn[Any], index: Int) extends Fn[Any] {
   private def toList(v: Any): Either[DynaLensError, List[Any]] = v match {
-    case null => Left(DynaLensError(s"Cannot index into null"))
-    case None => Left(DynaLensError(s"Cannot index into None"))
-    case Some(s: Seq[?]) => Right(s.asInstanceOf[Seq[Any]].toList)
+    case null                  => Left(DynaLensError(s"Cannot index into null"))
+    case None                  => Left(DynaLensError(s"Cannot index into None"))
+    case Some(s: Seq[?])       => Right(s.asInstanceOf[Seq[Any]].toList)
     case Some(it: Iterable[?]) => Right(it.asInstanceOf[Iterable[Any]].toList)
-    case s: Seq[?] => Right(s.asInstanceOf[Seq[Any]].toList)
-    case it: Iterable[?] => Right(it.asInstanceOf[Iterable[Any]].toList)
-    case other => Left(DynaLensError(s"Indexing requires a collection, got: ${other.getClass.getSimpleName}"))
+    case s: Seq[?]             => Right(s.asInstanceOf[Seq[Any]].toList)
+    case it: Iterable[?]       => Right(it.asInstanceOf[Iterable[Any]].toList)
+    case other                 => Left(DynaLensError(s"Indexing requires a collection, got: ${other.getClass.getSimpleName}"))
   }
 
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
@@ -1222,7 +1223,7 @@ case class IndexFn(recv: Fn[Any], index: Int) extends Fn[Any] {
       list <- ZIO.fromEither(toList(raw))
       elem <- list.lift(index) match {
         case Some(e) => ZIO.succeed(e)
-        case None => ZIO.fail(DynaLensError(s"Index $index out of bounds"))
+        case None    => ZIO.fail(DynaLensError(s"Index $index out of bounds"))
       }
     } yield elem
 }
@@ -1231,14 +1232,16 @@ case class LoopFn(predicate: Fn[Any]) extends Fn[Any] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ctx.get("this") match {
       case Some((v: Iterable[?], lens)) =>
-        ZIO.foreach(v) { item =>
-          val localCtx = ctx.updatedWith("this", (item, lens))
-          predicate.resolve(localCtx)
-        }.map(_.toList) // replace with same type if you need
+        ZIO
+          .foreach(v) { item =>
+            val localCtx = ctx.updatedWith("this", (item, lens))
+            predicate.resolve(localCtx)
+          }
+          .map(_.toList) // replace with same type if you need
       case _ =>
         ZIO.fail(DynaLensError("LoopFn resolve() missing root object in context"))
     }
-  }
+}
 
 case class FilterFn(recv: Fn[Any], predicate: BooleanFn) extends Fn[Any] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
@@ -1247,7 +1250,7 @@ case class FilterFn(recv: Fn[Any], predicate: BooleanFn) extends Fn[Any] {
       seq <- ZIO.fromEither(asSeq(raw, "filter"))
       kept <- ZIO.foreach(seq) { e =>
         predicate.resolve(withElemCtx(e, ctx)).map {
-          case true => Some(e)
+          case true  => Some(e)
           case false => None
         }
       }
@@ -1256,23 +1259,24 @@ case class FilterFn(recv: Fn[Any], predicate: BooleanFn) extends Fn[Any] {
 
 case class SortFn(recv: Fn[Any], keyPath: Option[String], asc: Boolean = true) extends Fn[Any] {
 
-  private inline def opName: String = if (asc) "sortAsc" else "sortDesc"
+  private inline def opName: String = if asc then "sortAsc" else "sortDesc"
 
   private def asSeq(v: Any): Either[DynaLensError, List[Any]] = v match {
-    case null                 => Right(Nil)
-    case s: Seq[?]            => Right(s.asInstanceOf[Seq[Any]].toList)
-    case i: Iterable[?]       => Right(i.asInstanceOf[Iterable[Any]].toList)
-    case o: Option[?]         => o match {
-      case Some(s: Seq[?])      => Right(s.asInstanceOf[Seq[Any]].toList)
-      case Some(i: Iterable[?]) => Right(i.asInstanceOf[Iterable[Any]].toList)
-      case Some(x)              => Left(DynaLensError(s"$opName() expects an Iterable; got ${x.getClass.getSimpleName} in Some(...)"))
-      case None                 => Right(Nil)
-    }
+    case null           => Right(Nil)
+    case s: Seq[?]      => Right(s.asInstanceOf[Seq[Any]].toList)
+    case i: Iterable[?] => Right(i.asInstanceOf[Iterable[Any]].toList)
+    case o: Option[?] =>
+      o match {
+        case Some(s: Seq[?])      => Right(s.asInstanceOf[Seq[Any]].toList)
+        case Some(i: Iterable[?]) => Right(i.asInstanceOf[Iterable[Any]].toList)
+        case Some(x)              => Left(DynaLensError(s"$opName() expects an Iterable; got ${x.getClass.getSimpleName} in Some(...)"))
+        case None                 => Right(Nil)
+      }
     case other =>
       Left(DynaLensError(s"$opName() may only be applied to Iterable types, but got: ${other.getClass.getSimpleName}"))
   }
 
-  private implicit val cmpOrd: Ordering[Comparable[Any]] =
+  implicit private val cmpOrd: Ordering[Comparable[Any]] =
     (a: Comparable[Any], b: Comparable[Any]) => a.compareTo(b)
 
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
@@ -1293,7 +1297,7 @@ case class SortFn(recv: Fn[Any], keyPath: Option[String], asc: Boolean = true) e
             }
           } yield {
             val s = pairs.sortBy(_._2)
-            if (asc) s.map(_._1) else s.reverse.map(_._1)
+            if asc then s.map(_._1) else s.reverse.map(_._1)
           }
 
         case None =>
@@ -1305,7 +1309,7 @@ case class SortFn(recv: Fn[Any], keyPath: Option[String], asc: Boolean = true) e
             }
             .map { comps =>
               val s = comps.sorted
-              if (asc) s.toList else s.reverse.toList
+              if asc then s.toList else s.reverse.toList
             }
       }
     } yield sorted
@@ -1314,7 +1318,7 @@ case class SortFn(recv: Fn[Any], keyPath: Option[String], asc: Boolean = true) e
 case class DistinctFn(recv: Fn[Any], fieldPath: Option[String]) extends Fn[Any] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      raw   <- recv.resolve(ctx)
+      raw <- recv.resolve(ctx)
       items <- ZIO.fromEither(asSeq(raw, "distinct")) // or asIterable; returns Seq[Any]
 
       pairs <- fieldPath match {
@@ -1325,7 +1329,7 @@ case class DistinctFn(recv: Fn[Any], fieldPath: Option[String]) extends Fn[Any] 
         case Some(rawKey) =>
           // accept both "number" and "this.number"
           val keyPath =
-            if (rawKey.startsWith("this.")) rawKey
+            if rawKey.startsWith("this.") then rawKey
             else s"this.$rawKey"
 
           ZIO.foreach(items) { item =>
@@ -1337,9 +1341,9 @@ case class DistinctFn(recv: Fn[Any], fieldPath: Option[String]) extends Fn[Any] 
       // preserve first occurrence of each key (stable)
       deduped = {
         val seen = scala.collection.mutable.HashSet[Any]()
-        val buf  = scala.collection.mutable.ArrayBuffer[Any]()
+        val buf = scala.collection.mutable.ArrayBuffer[Any]()
         pairs.foreach { case (k, v) =>
-          if (!seen.contains(k)) { seen += k; buf += v }
+          if !seen.contains(k) then { seen += k; buf += v }
         }
         buf.toList
       }
@@ -1369,7 +1373,7 @@ case class CleanFn(recv: Fn[Any]) extends Fn[Any] {
     case None            => false
     case _: Unit         => false
     case s: CharSequence => s.toString.trim.nonEmpty
-    case it: Iterable[?] => it.iterator.hasNext      // keep non-empty collections
+    case it: Iterable[?] => it.iterator.hasNext // keep non-empty collections
     case _               => true
   }
 
@@ -1405,10 +1409,10 @@ case object IdentityFn extends Fn[Any]: // No-op function (for chaining)
 case class LengthFn(in: Fn[Any]) extends Fn[Int]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Int] =
     in.resolve(ctx).map {
-      case null                        => 0
+      case null => 0
       case c if c.isInstanceOf[Seq[?]] =>
         c.asInstanceOf[Seq[?]].length
-      case s                           =>
+      case s =>
         s.toString.length
     }
 
@@ -1515,17 +1519,18 @@ case class UUIDFn() extends Fn[Any] {
 // --- Case Function ----
 
 case class CaseWhenFn(
-                       recv: Fn[Any],
-                       cases: Vector[(Any, Fn[Any])],     // pattern literal -> RHS expr
-                       default: Option[Fn[Any]],
-                       permissive: Boolean = false
-                     ) extends Fn[Any] {
+    recv: Fn[Any],
+    cases: Vector[(Any, Fn[Any])], // pattern literal -> RHS expr
+    default: Option[Fn[Any]],
+    permissive: Boolean = false
+) extends Fn[Any] {
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
       v <- recv.resolve(ctx)
-      out <- {
+      out <-
         // first match by Scala “==”
-        cases.collectFirst { case (p, rhs) if v == p => rhs }
+        cases
+          .collectFirst { case (p, rhs) if v == p => rhs }
           .map(_.resolve(ctx))
           .getOrElse {
             default match {
@@ -1535,6 +1540,5 @@ case class CaseWhenFn(
                 else ZIO.fail(DynaLensError(s"No case matched for value: $v"))
             }
           }
-      }
     } yield out
 }

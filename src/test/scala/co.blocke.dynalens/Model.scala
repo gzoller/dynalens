@@ -39,5 +39,4 @@ case class MyLists(id: Int, l1: List[Int], l2: Option[List[Int]])
 case class ListOfOpt(id: Int, l1: List[Option[Int]])
 case class ComplexLists(id: Int, l1: List[Int], l2: List[List[Int]])
 
-case class Mapped(id: Int, m: Map[String,Int], om: Option[Map[String,Int]], cplx: Map[String, List[Person]])
-
+case class Mapped(id: Int, m: Map[String, Int], om: Option[Map[String, Int]], cplx: Map[String, List[Person]])

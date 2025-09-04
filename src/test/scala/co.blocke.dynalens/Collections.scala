@@ -48,7 +48,7 @@ object Collections extends ZIOSpecDefault:
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Registry("abc",List(2, 5, 5, 2),List()) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Registry("abc", List(2, 5, 5, 2), List()) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("filter (map--simple)") {
       val script =
@@ -64,7 +64,7 @@ object Collections extends ZIOSpecDefault:
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Registry("abc",List(2, 5, 5, 2),List()) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Registry("abc", List(2, 5, 5, 2), List()) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("filter (chain--class)") {
       val script =
@@ -84,7 +84,7 @@ object Collections extends ZIOSpecDefault:
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",100,5), Item("xyz",101,7)),1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 100, 5), Item("xyz", 101, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("filter (map--class)") {
       val script =
@@ -100,7 +100,7 @@ object Collections extends ZIOSpecDefault:
         compiledScript <- Script.compile(script, a)
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
-      } yield assertTrue(x == Shipment("aaa",List(Item("abc",100,5), Item("xyz",101,7)),1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
+      } yield assertTrue(x == Shipment("aaa", List(Item("abc", 100, 5), Item("xyz", 101, 7)), 1) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
     test("distinct (chain--simple)") {
       val script =
@@ -180,7 +180,7 @@ object Collections extends ZIOSpecDefault:
         (x, ctx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(ctx)
       } yield assertTrue(
-        x == Shipment("aaa",List(Item("abc",2,5), Item("abc",3,44), Item("xyz",1,7)),1),
+        x == Shipment("aaa", List(Item("abc", 2, 5), Item("abc", 3, 44), Item("xyz", 1, 7)), 1),
         resultStr == expectedResult,
         compiledScript.toString == expectedCompiled
       )
@@ -261,7 +261,7 @@ object Collections extends ZIOSpecDefault:
         (x, ctx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(ctx)
       } yield assertTrue(
-        x == Shipment("aaa",List(Item("abc",2,5), Item("xyz",1,7), Item("foo", 1, 7)),1),
+        x == Shipment("aaa", List(Item("abc", 2, 5), Item("xyz", 1, 7), Item("foo", 1, 7)), 1),
         resultStr == expectedResult,
         compiledScript.toString == expectedCompiled
       )
@@ -342,7 +342,7 @@ object Collections extends ZIOSpecDefault:
         (x, ctx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(ctx)
       } yield assertTrue(
-        x == Shipment("aaa",List(null, Item("foo", 1, 7), Item("xyz",1,7), null, Item("abc",2,5)),1),
+        x == Shipment("aaa", List(null, Item("foo", 1, 7), Item("xyz", 1, 7), null, Item("abc", 2, 5)), 1),
         resultStr == expectedResult,
         compiledScript.toString == expectedCompiled
       )
@@ -423,7 +423,7 @@ object Collections extends ZIOSpecDefault:
         (x, ctx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(ctx)
       } yield assertTrue(
-        x == Shipment("aaa", List(Item("abc",2,5), null, Item("xyz",1,7)), 1),
+        x == Shipment("aaa", List(Item("abc", 2, 5), null, Item("xyz", 1, 7)), 1),
         resultStr == expectedResult,
         compiledScript.toString == expectedCompiled
       )
@@ -443,8 +443,8 @@ object Collections extends ZIOSpecDefault:
       val a = dynalens[Registry]
       for {
         compiledScript <- Script.compile(script, a)
-        (x, ctx)       <- a.run(compiledScript, inst)
-        resultStr       = toStringCtx(ctx)
+        (x, ctx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(ctx)
       } yield assertTrue(
         x == inst,
         resultStr == expectedResult,
@@ -465,8 +465,8 @@ object Collections extends ZIOSpecDefault:
       val a = dynalens[Registry]
       for {
         compiledScript <- Script.compile(script, a)
-        (x, ctx)       <- a.run(compiledScript, inst)
-        resultStr       = toStringCtx(ctx)
+        (x, ctx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(ctx)
       } yield assertTrue(
         x == Registry("abc", List(2, 2, 5, 5, 7, 9), Nil),
         resultStr == expectedResult,
@@ -505,8 +505,8 @@ object Collections extends ZIOSpecDefault:
       val a = dynalens[Shipment]
       for {
         compiledScript <- Script.compile(script, a)
-        (x, ctx)       <- a.run(compiledScript, inst)
-        resultStr       = toStringCtx(ctx)
+        (x, ctx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(ctx)
       } yield assertTrue(
         x == inst,
         resultStr == expectedResult,
@@ -530,7 +530,8 @@ object Collections extends ZIOSpecDefault:
       )
       val inst = Shipment("aaa", items0, 1)
       val updated =
-        Shipment("aaa",
+        Shipment(
+          "aaa",
           List(
             Item("a", 1, 1),
             Item("b", 3, 3),
@@ -546,8 +547,8 @@ object Collections extends ZIOSpecDefault:
       val a = dynalens[Shipment]
       for {
         compiledScript <- Script.compile(script, a)
-        (x, ctx)       <- a.run(compiledScript, inst)
-        resultStr       = toStringCtx(ctx)
+        (x, ctx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(ctx)
       } yield assertTrue(
         x == updated,
         resultStr == expectedResult,
@@ -569,8 +570,8 @@ object Collections extends ZIOSpecDefault:
       val a = dynalens[Registry]
       for {
         compiledScript <- Script.compile(script, a)
-        (x, ctx)       <- a.run(compiledScript, inst)
-        resultStr       = toStringCtx(ctx)
+        (x, ctx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(ctx)
       } yield assertTrue(
         x == inst,
         resultStr == expectedResult,
@@ -591,8 +592,8 @@ object Collections extends ZIOSpecDefault:
       val a = dynalens[Registry]
       for {
         compiledScript <- Script.compile(script, a)
-        (x, ctx)       <- a.run(compiledScript, inst)
-        resultStr       = toStringCtx(ctx)
+        (x, ctx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(ctx)
       } yield assertTrue(
         x == Registry("abc", List(9, 7, 5, 5, 2, 2), Nil),
         resultStr == expectedResult,
@@ -630,8 +631,8 @@ object Collections extends ZIOSpecDefault:
       val a = dynalens[Shipment]
       for {
         compiledScript <- Script.compile(script, a)
-        (x, ctx)       <- a.run(compiledScript, inst)
-        resultStr       = toStringCtx(ctx)
+        (x, ctx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(ctx)
       } yield assertTrue(
         x == inst,
         resultStr == expectedResult,
@@ -655,7 +656,8 @@ object Collections extends ZIOSpecDefault:
       )
       val inst = Shipment("aaa", items0, 1)
       val updated =
-        Shipment("aaa",
+        Shipment(
+          "aaa",
           List(
             Item("e", 9, 9),
             Item("d", 7, 7),
@@ -671,8 +673,8 @@ object Collections extends ZIOSpecDefault:
       val a = dynalens[Shipment]
       for {
         compiledScript <- Script.compile(script, a)
-        (x, ctx)       <- a.run(compiledScript, inst)
-        resultStr       = toStringCtx(ctx)
+        (x, ctx) <- a.run(compiledScript, inst)
+        resultStr = toStringCtx(ctx)
       } yield assertTrue(
         x == updated,
         resultStr == expectedResult,
@@ -701,7 +703,7 @@ object Collections extends ZIOSpecDefault:
         (updated, ctx) <- lens.run(compiled, inst)
         resultStr = toStringCtx(ctx)
       } yield assertTrue(
-        updated == inst,                            // no mutation
+        updated == inst, // no mutation
         compiled.toString == expectedCompiled,
         resultStr == expectedResult
       )
@@ -844,11 +846,11 @@ object Collections extends ZIOSpecDefault:
         (updated, ctx) <- lens.run(compiled, inst)
         resultStr = toStringCtx(ctx)
       } yield assertTrue(
-        updated == Mapped(1, Map("a" -> 30, "b" -> 60),None,Map.empty),
+        updated == Mapped(1, Map("a" -> 30, "b" -> 60), None, Map.empty),
         compiled.toString == expectedCompiled,
         resultStr == expectedResult
       )
-    },
+    }
   )
 
 //  _ <- ZIO.succeed(println("&&& " + compiledScript))

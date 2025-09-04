@@ -47,7 +47,7 @@ object MathSpec extends ZIOSpecDefault:
         (updated, ctx) <- a.run(compiled, inst)
         resultStr = toStringCtx(ctx)
       } yield assertTrue(
-        updated == MyLists(10, List(1,2,3,4), None),
+        updated == MyLists(10, List(1, 2, 3, 4), None),
         compiled.toString == expectedCompiled
       ) &&
         assertTrue(
@@ -56,7 +56,6 @@ object MathSpec extends ZIOSpecDefault:
             resultStr.contains("s -> 10")
         )
     },
-
     test("min (val only)") {
       val script =
         """
@@ -76,7 +75,6 @@ object MathSpec extends ZIOSpecDefault:
         resultStr.contains("m -> -2")
       )
     },
-
     test("max (chained with filter)") {
       val script =
         """
@@ -84,7 +82,7 @@ object MathSpec extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled =
         """BlockStmt(List(ValStmt(mx,MaxFn(FilterFn(GetFn(l1[]),GreaterThanOrEqualFn(GetFn(this),ConstantFn(3)))))))"""
-      val inst = MyLists(5, List(1,3,2,10,4), None)
+      val inst = MyLists(5, List(1, 3, 2, 10, 4), None)
       val a = dynalens[MyLists]
       for {
         compiled <- Script.compile(script, a)
@@ -96,7 +94,6 @@ object MathSpec extends ZIOSpecDefault:
         resultStr.contains("mx -> 10")
       )
     },
-
     test("avg (val only, returns Double)") {
       val script =
         """
@@ -117,7 +114,6 @@ object MathSpec extends ZIOSpecDefault:
         resultStr.contains("a -> 5.0")
       )
     },
-
     test("median (odd length → Double of middle)") {
       val script =
         """
@@ -137,7 +133,6 @@ object MathSpec extends ZIOSpecDefault:
         resultStr.contains("med -> 7.0")
       )
     },
-
     test("median (even length → average of two middles)") {
       val script =
         """
@@ -157,7 +152,6 @@ object MathSpec extends ZIOSpecDefault:
         resultStr.contains("med -> 26.0")
       )
     },
-
     test("abs on scalar (assign back)") {
       val script =
         """
@@ -166,19 +160,18 @@ object MathSpec extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled =
         """BlockStmt(List(ValStmt(x,AbsFn(GetFn(id))), UpdateStmt(id,GetFn(x))))"""
-      val inst = MyLists(-12, List(1,2,3), None)
+      val inst = MyLists(-12, List(1, 2, 3), None)
       val a = dynalens[MyLists]
       for {
         compiled <- Script.compile(script, a)
         (updated, ctx) <- a.run(compiled, inst)
         resultStr = toStringCtx(ctx)
       } yield assertTrue(
-        updated == MyLists(12, List(1,2,3), None),
+        updated == MyLists(12, List(1, 2, 3), None),
         compiled.toString == expectedCompiled,
         resultStr.contains("x -> 12")
       )
     },
-
     test("sum on optional list when None → 0") {
       val script =
         """
@@ -186,7 +179,7 @@ object MathSpec extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled =
         """BlockStmt(List(ValStmt(s,SumFn(GetFn(l2[]?)))))"""
-      val inst = MyLists(0, List(1,2,3), None) // l2 = None
+      val inst = MyLists(0, List(1, 2, 3), None) // l2 = None
       val a = dynalens[MyLists]
       for {
         compiled <- Script.compile(script, a)
@@ -198,7 +191,6 @@ object MathSpec extends ZIOSpecDefault:
         resultStr.contains("s -> 0")
       )
     },
-
     test("sum on optional list when Some(...)") {
       val script =
         """
@@ -206,7 +198,7 @@ object MathSpec extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled =
         """BlockStmt(List(ValStmt(s,SumFn(GetFn(l2[]?)))))"""
-      val inst = MyLists(0, List(1,2,3), Some(List(10, 5)))
+      val inst = MyLists(0, List(1, 2, 3), Some(List(10, 5)))
       val a = dynalens[MyLists]
       for {
         compiled <- Script.compile(script, a)
@@ -218,7 +210,6 @@ object MathSpec extends ZIOSpecDefault:
         resultStr.contains("s -> 15")
       )
     },
-
     test("chain: sort then median") {
       val script =
         """
@@ -238,7 +229,6 @@ object MathSpec extends ZIOSpecDefault:
         resultStr.contains("med -> 4.0")
       )
     },
-
     test("chain: filter then sum") {
       val script =
         """
@@ -246,7 +236,7 @@ object MathSpec extends ZIOSpecDefault:
           |""".stripMargin
       val expectedCompiled =
         """BlockStmt(List(ValStmt(s,SumFn(FilterFn(GetFn(l1[]),EqualFn(ModuloFn(GetFn(this),ConstantFn(2)),ConstantFn(0)))))))"""
-      val inst = MyLists(0, List(1,2,3,4,5,6), None) // evens: 2+4+6=12
+      val inst = MyLists(0, List(1, 2, 3, 4, 5, 6), None) // evens: 2+4+6=12
       val a = dynalens[MyLists]
       for {
         compiled <- Script.compile(script, a)

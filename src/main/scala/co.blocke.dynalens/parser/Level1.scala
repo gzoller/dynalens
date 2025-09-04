@@ -27,7 +27,6 @@ import NoWhitespace.*
 
 import scala.annotation.tailrec
 
-
 sealed trait Idx
 case object Wildcard extends Idx // []
 case class Fixed(i: Int) extends Idx // [3]
@@ -74,12 +73,12 @@ trait Level1 extends Level0 {
   private def segment[$: P]: P[String] =
     P(identS ~ (wildcardIndex | indexPart | curlyBraces).? ~ optSuffix).map {
       case (name, Some(suffixPart), suf) => s"$name$suffixPart$suf"
-      case (name, None, suf) => s"$name$suf"
+      case (name, None, suf)             => s"$name$suf"
     }
 
   def pathBase[$: P]: P[String] =
-    P(segment ~ (!("." ~ identU ~ "(") ~ "." ~ segment).rep).map {
-      case (head, tail) => (head +: tail.toList).mkString(".")
+    P(segment ~ (!("." ~ identU ~ "(") ~ "." ~ segment).rep).map { case (head, tail) =>
+      (head +: tail.toList).mkString(".")
     }
 
   // 1) Non-failing path parser that *returns* the semantic error
@@ -92,19 +91,18 @@ trait Level1 extends Level0 {
   def path[$: P](using ctx: ExprContext): P[String] =
     pathEither.flatMap {
       case Right(clean) => P(Pass(clean))
-      case Left(err) => P(Fail.opaque(err.msg)) // <- only use where a hard parse failure is desired
+      case Left(err)    => P(Fail.opaque(err.msg)) // <- only use where a hard parse failure is desired
     }
 
   // 3) Make pathFn propagate domain errors (no parser Fail here)
   private def pathFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
     pathEither.map {
-      case Left(err) => Left(err) // bubble semantic error
+      case Left(err)   => Left(err) // bubble semantic error
       case Right(path) => Right(GetFn(path))
     }
 
   // Parses: "." ident "(" args ")"
-  private def methodCall[$: P](using ctx: ExprContext)
-  : P[Either[DLCompileError, (String, List[Fn[Any]], Int)]] =
+  private def methodCall[$: P](using ctx: ExprContext): P[Either[DLCompileError, (String, List[Fn[Any]], Int)]] =
     P(
       Index ~ // capture offset *before* the dot
         WS0 ~ "." ~ identifier.! ~
@@ -113,7 +111,7 @@ trait Level1 extends Level0 {
         WS0 ~ ")"
     ).map { case (off, name, argsRaw) =>
       val (errs, oks) = argsRaw.partitionMap(identity)
-      if (errs.nonEmpty) Left(errs.head)
+      if errs.nonEmpty then Left(errs.head)
       else Right((name, oks.toList, off))
     }
 
@@ -121,7 +119,7 @@ trait Level1 extends Level0 {
   private def maybeIndex[$: P](fn: Fn[Any]): P[Fn[Any]] =
     P("[" ~ CharsWhileIn("0-9").! ~ "]").?.map {
       case Some(iStr) => IndexFn(fn, iStr.toInt)
-      case None => fn
+      case None       => fn
     }
 
   // If helpful, define the builder type somewhere central:
@@ -133,7 +131,7 @@ trait Level1 extends Level0 {
         case GetFn(p) =>
           val elem = Utility.elementSchemaFor(p, ctx.typeInfo)
           val c0 = ctx.withReceiverFromPath(p)
-          if (elem.nonEmpty) c0.pushScope(elem) else c0
+          if elem.nonEmpty then c0.pushScope(elem) else c0
         case _ => ctx
       }
 
@@ -143,11 +141,11 @@ trait Level1 extends Level0 {
       // calls: Seq[Either[DLCompileError, (String, List[Fn[Any]], Int)]]
       val built: Either[DLCompileError, Fn[Any]] =
         calls.foldLeft[Either[DLCompileError, Fn[Any]]](Right(base)) {
-          case (Left(e), _) => Left(e)
+          case (Left(e), _)          => Left(e)
           case (Right(_), Left(err)) => Left(err)
           case (Right(cur), Right((name, args, off))) =>
             methodFunctions.get(name) match {
-              case Some(build3 /* (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]] */) =>
+              case Some(build3 /* (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]] */ ) =>
                 build3(cur, args, off) // <-- return Either directly (no Right(...))
               case None =>
                 Left(DLCompileError(off, s"Unknown method: $name"))
@@ -163,8 +161,8 @@ trait Level1 extends Level0 {
 
   def baseExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P((standaloneFn.map(Right(_)) | constant | pathFn).flatMap {
-      case Right(fn) => methodChain(fn)
-      case l@Left(_) => P(Pass(l))
+      case Right(fn)   => methodChain(fn)
+      case l @ Left(_) => P(Pass(l))
     } ~ WS0)
 
   // ---- Functions ----
@@ -173,48 +171,45 @@ trait Level1 extends Level0 {
     P(
       StringIn("now", "uuid").! ~ "(" ~ WS0 ~ ")"
     ).map {
-      case "now" => NowFn()
+      case "now"  => NowFn()
       case "uuid" => UUIDFn()
     }
 
   private def expectGetPath(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, String] =
     arg match {
       case g: GetFn => Right(g.path) // already corrected by your path parser
-      case other => Left(DLCompileError(off, s"$name(...) expects a field path argument, got ${other.getClass.getSimpleName}"))
+      case other    => Left(DLCompileError(off, s"$name(...) expects a field path argument, got ${other.getClass.getSimpleName}"))
     }
 
   private def expectBoolean(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, BooleanFn] =
     arg match {
       case b: BooleanFn => Right(b)
-      case other => Left(DLCompileError(off, s"$name(...) requires a boolean expression, got ${other.getClass.getSimpleName}"))
+      case other        => Left(DLCompileError(off, s"$name(...) requires a boolean expression, got ${other.getClass.getSimpleName}"))
     }
 
   private def expectConstInt(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, Int] =
     arg match {
       case ConstantFn(i: Int) => Right(i)
-      case ConstantFn(x) => Left(DLCompileError(off, s"$name(...) requires an integer literal, got ${x.getClass.getSimpleName}"))
-      case other => Left(DLCompileError(off, s"$name(...) requires an integer literal, got ${other.getClass.getSimpleName}"))
+      case ConstantFn(x)      => Left(DLCompileError(off, s"$name(...) requires an integer literal, got ${x.getClass.getSimpleName}"))
+      case other              => Left(DLCompileError(off, s"$name(...) requires an integer literal, got ${other.getClass.getSimpleName}"))
     }
 
   private def checkArgs(
-                         fnName: String,
-                         args: List[Fn[Any]],
-                         required: Int,
-                         offset: Int
-                       ): Either[DLCompileError, Unit] =
-    if (args.length != required)
-      Left(DLCompileError(offset, s"Function $fnName() expected $required argument(s), got ${args.length}"))
-    else
-      Right(())
+      fnName: String,
+      args: List[Fn[Any]],
+      required: Int,
+      offset: Int
+  ): Either[DLCompileError, Unit] =
+    if args.length != required then Left(DLCompileError(offset, s"Function $fnName() expected $required argument(s), got ${args.length}"))
+    else Right(())
 
-  private val methodFunctions
-  : Map[String, (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]] = Map(
-    M_MIN     -> { (recv, _, _) => Right(MinFn(recv)) },
-    M_MAX     -> { (recv, _, _) => Right(MaxFn(recv)) },
-    M_SUM     -> { (recv, _, _) => Right(SumFn(recv)) },
-    M_AVG     -> { (recv, _, _) => Right(AvgFn(recv)) },
-    M_MEDIAN  -> { (recv, _, _) => Right(MedianFn(recv)) },
-    M_ABS     -> { (recv, _, _) => Right(AbsFn(recv)) },
+  private val methodFunctions: Map[String, (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]] = Map(
+    M_MIN -> { (recv, _, _) => Right(MinFn(recv)) },
+    M_MAX -> { (recv, _, _) => Right(MaxFn(recv)) },
+    M_SUM -> { (recv, _, _) => Right(SumFn(recv)) },
+    M_AVG -> { (recv, _, _) => Right(AvgFn(recv)) },
+    M_MEDIAN -> { (recv, _, _) => Right(MedianFn(recv)) },
+    M_ABS -> { (recv, _, _) => Right(AbsFn(recv)) },
     M_STARTSWITH -> { (recv, args, off) =>
       for {
         _ <- checkArgs(M_STARTSWITH, args, 1, off)
@@ -348,7 +343,7 @@ trait Level1 extends Level0 {
     M_DISTINCT -> { (recv, args, off) =>
       args match {
         case Nil =>
-          Right(DistinctFn(recv,None))
+          Right(DistinctFn(recv, None))
         case a1 :: Nil =>
           expectGetPath(a1, M_DISTINCT, off).map(p => DistinctFn(recv, Some(p)))
         case _ =>
@@ -370,7 +365,7 @@ trait Level1 extends Level0 {
       for {
         _ <- checkArgs(M_CLEAN, args, 0, off)
       } yield CleanFn(recv)
-    },
+    }
   )
 
   // ---- Collection Statements ----
@@ -382,14 +377,13 @@ trait Level1 extends Level0 {
   }
 
   private def promoteToCollection(recv: Fn[Any])(using ctx: ExprContext): Fn[Any] = recv match
-    case g@GetFn(name) =>
+    case g @ GetFn(name) =>
       // If the bare name is in loop scope, prefer its collection binding `name[]`
       val inLoop = ctx.scopes.headOption.exists(_.contains(name))
       if inLoop then GetFn(s"$name[]") else g
     case other => other
 
-  def collectionStmt[$: P](booleanExpr: ExprContext ?=> P[ParseBoolResult])
-                          (using ctx: ExprContext): P[ParseStmtResult] = {
+  def collectionStmt[$: P](booleanExpr: ExprContext ?=> P[ParseBoolResult])(using ctx: ExprContext): P[ParseStmtResult] = {
 
     case object SortAscMethod extends CollectionMethodParser {
       val name: String = M_SORTASC
@@ -403,7 +397,7 @@ trait Level1 extends Level0 {
           case (offset, Some(rawKey)) =>
             // sortAsc(field) — rewrite/validate (possibly relative) key
             CorrectPath.rewritePath(rawKey, offset) match {
-              case Left(err) => Left(err)
+              case Left(err)       => Left(err)
               case Right(cleanKey) => Right(SortFn(inner, Some(cleanKey), asc = true))
             }
         }
@@ -419,7 +413,7 @@ trait Level1 extends Level0 {
 
           case (offset, Some(rawKey)) =>
             CorrectPath.rewritePath(rawKey, offset) match {
-              case Left(err) => Left(err)
+              case Left(err)       => Left(err)
               case Right(cleanKey) => Right(SortFn(inner, Some(cleanKey), asc = false))
             }
         }
@@ -432,7 +426,7 @@ trait Level1 extends Level0 {
         // Receiver (`this`) and bare field names are provided by the surrounding ctx
         booleanExpr.map {
           case Right(pred: BooleanFn) => Right(FilterFn(inner, pred): Fn[Any])
-          case Left(err) => Left(err)
+          case Left(err)              => Left(err)
         }
     }
 
@@ -449,7 +443,7 @@ trait Level1 extends Level0 {
           case (off, Some(rawKey)) =>
             // distinct(field) ⇒ rewrite/validate the (possibly relative) key
             CorrectPath.rewritePath(rawKey, off) match {
-              case Left(err) => Left(err)
+              case Left(err)       => Left(err)
               case Right(cleanKey) => Right(DistinctFn(inner, Some(cleanKey)))
             }
         }
@@ -460,7 +454,7 @@ trait Level1 extends Level0 {
 
       def parseFn[$: P](inner: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] =
         P(Index ~ number).map { case (off, n) =>
-          if (n >= 0) Right(LimitFn(inner, n))
+          if n >= 0 then Right(LimitFn(inner, n))
           else Left(DLCompileError(off, s"limit(...) requires a non-negative integer, found $n"))
         }
 
@@ -523,28 +517,27 @@ trait Level1 extends Level0 {
 
     val collectionMethodRegistry: Map[String, CollectionMethodParser] =
       List(SortAscMethod, SortDescMethod, FilterMethod, DistinctMethod, LimitMethod, ReverseMethod, CleanMethod, MapToMethod, MapFromMethod)
-        .map(m => m.name -> m).toMap
+        .map(m => m.name -> m)
+        .toMap
 
-    def parseMethodArgs[$: P](parser: CollectionMethodParser)
-                             (using ExprContext): P[ParseFnResult] =
+    def parseMethodArgs[$: P](parser: CollectionMethodParser)(using ExprContext): P[ParseFnResult] =
       P("(" ~/ WS0 ~ parser.parseFn(IdentityFn) ~ WS0 ~ ")")
 
     def lookupMethod[$: P](name: String): P[Either[DLCompileError, CollectionMethodParser]] =
       P(Index).map { off =>
-        collectionMethodRegistry.get(name)
+        collectionMethodRegistry
+          .get(name)
           .toRight(DLCompileError(off, s"Unknown collection method: $name"))
       }
 
-
     P(Index ~ path).flatMap { case (off0, basePath) =>
-
       // 1) Add a correctly-typed 'this' based on the base path (sets receiver + 'this' symbol)
       val ctxWithThis = Utility.addThisType(basePath, ctx)
 
       // 2) If basePath is a list of objects, push its element fields into a lexical scope
       val elemSchema = Utility.elementSchemaFor(basePath, ctxWithThis.typeInfo)
       val ctxForArgs =
-        if (elemSchema.nonEmpty) ctxWithThis.pushScope(elemSchema)
+        if elemSchema.nonEmpty then ctxWithThis.pushScope(elemSchema)
         else ctxWithThis
 
       given ExprContext = ctxForArgs
@@ -554,7 +547,7 @@ trait Level1 extends Level0 {
         for {
           resolved <- lookupMethod(name)
           fnRes <- resolved match {
-            case Left(err) => P(Pass(Left(err)))
+            case Left(err)  => P(Pass(Left(err)))
             case Right(par) => parseMethodArgs(par)
           }
         } yield fnRes
@@ -574,28 +567,26 @@ trait Level1 extends Level0 {
             P(&("(")).map(_ => n)
           }).rep
 
-          restFns <- moreNames.foldLeft(Pass(Right(Nil): ParseFnListResult): P[ParseFnListResult]) {
-            case (accP, methodName) =>
-              accP.flatMap {
-                case left@Left(_) => P(Pass(left)) // keep first error
-                case Right(accum) =>
-                  parseOneMethod(methodName).map {
-                    case Left(err) => Left(err)
-                    case Right(fn) => Right(accum :+ fn)
-                  }
-              }
+          restFns <- moreNames.foldLeft(Pass(Right(Nil): ParseFnListResult): P[ParseFnListResult]) { case (accP, methodName) =>
+            accP.flatMap {
+              case left @ Left(_) => P(Pass(left)) // keep first error
+              case Right(accum) =>
+                parseOneMethod(methodName).map {
+                  case Left(err) => Left(err)
+                  case Right(fn) => Right(accum :+ fn)
+                }
+            }
           }
+        } yield
+        // Combine into a single Fn, then into a MapStmt, and wrap as ParseStmtResult
+        (for {
+          f1 <- firstResult
+          rxs <- restFns
         } yield {
-          // Combine into a single Fn, then into a MapStmt, and wrap as ParseStmtResult
-          (for {
-            f1 <- firstResult
-            rxs <- restFns
-          } yield {
-            val all = f1 :: rxs
-            val fn = if (all.size == 1) all.head else PolyFn(all)
-            (ctx, MapStmt(basePath, fn)) // <- keep outer ctx here (don’t leak ctxForArgs)
-          }): ParseStmtResult
-        }
+          val all = f1 :: rxs
+          val fn = if all.size == 1 then all.head else PolyFn(all)
+          (ctx, MapStmt(basePath, fn)) // <- keep outer ctx here (don’t leak ctxForArgs)
+        }): ParseStmtResult
       }
     }
   }

@@ -20,7 +20,7 @@ case class Shipment(id: String, items:List[Item], shipMethod: Int)
 ```  
 # My script  
 shipMethod = 3 # set a top-level field  
-items[].qty = this * 2 # change all qty fields of all items  
+items[].qty => this * 2 # change all qty fields of all items  
 items[3].qty = this / 2 # change qty fields only of items[3]  
 items[3].qty = shipMethod # value set from top-level  
 ```   
@@ -59,11 +59,11 @@ val inst = Person("Mike", 45, "abc")
 ```
 val script = "age = age * 2" // This can come from anywhere in practice--eval'ed at runtime
 ```
-##### 4. Set up the parse/run for comprehension
+##### 4. Set up the parse/run for comprehension (ZIO)
 ```scala
 val lens = dynalens[Person]
 for{  
-  compiledScript <- Parser.parseScript(script)  
+  compiledScript <- Script.compile(script, lens) 
   (result,_) <- lens.run(compiledScript, inst)  
 } yield result // ZIO[Any,DynaLensError,Person]
 ```
@@ -80,8 +80,8 @@ val result: Either[DynaLensError, (Shipment, DynaContext)] =
 ```
 
 ### dynalens Script Language Reference
-* [Documentation](doc/language.md)
-* [Function Reference](doc/function.md)
+* [Documentation](doc/dyna_lens_documentation.md)
 
 ### Release History
 * 1.0.0 - Initial Release
+* 1.1.0 - Significant new functionality and refactor of both runtime and parser

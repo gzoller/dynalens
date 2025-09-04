@@ -29,8 +29,8 @@ object CorrectPath:
   private def parseSeg(name: String): Either[String, Seg] = name match
     case segRx(base, idxStr, optStr) =>
       val idx =
-        if (idxStr eq null) None
-        else if (idxStr.isEmpty) Some(Wildcard)
+        if idxStr eq null then None
+        else if idxStr.isEmpty then Some(Wildcard)
         else Some(Fixed(idxStr.toInt))
       Right(Seg(base, idx, opt = optStr != null))
     case _ =>
@@ -40,7 +40,7 @@ object CorrectPath:
     val idxTxt = idx match
       case Some(Wildcard) => "[]"
       case Some(Fixed(i)) => s"[$i]"
-      case None => ""
+      case None           => ""
     val optTxt = if opt then "?" else ""
     s"$base$idxTxt$optTxt"
 
@@ -50,14 +50,14 @@ object CorrectPath:
       case "[]" =>
         seg.idx match
           case Some(Fixed(i)) => Right(render(seg.base, Some(Fixed(i)), opt = false))
-          case _ => Right(render(seg.base, Some(Wildcard), opt = false))
+          case _              => Right(render(seg.base, Some(Wildcard), opt = false))
 
       // Optional list: keep '?' only for wildcard (container) access.
       // For element access '[n]', do NOT suffix '?' — you're addressing the element, not the optional container.
       case "[]?" =>
         seg.idx match
           case Some(Fixed(i)) => Right(render(seg.base, Some(Fixed(i)), opt = false))
-          case _ => Right(render(seg.base, Some(Wildcard), opt = true)) // container-level
+          case _              => Right(render(seg.base, Some(Wildcard), opt = true)) // container-level
 
       case "{}" | "{}?" | "?" | "" =>
         seg.idx match
@@ -90,11 +90,11 @@ object CorrectPath:
           case Some(t: String) if t == "[]" || t == "[]?" =>
             mm.get("__elemType") match
               case Some(em: Map[?, ?] @unchecked) => em.asInstanceOf[Map[String, Any]]
-              case _ => mm // <-- fallback to inlined fields
+              case _                              => mm // <-- fallback to inlined fields
           case Some(t: String) if t == "{}" || t == "{}?" =>
             mm.get("__valType") match
               case Some(vm: Map[?, ?] @unchecked) => vm.asInstanceOf[Map[String, Any]]
-              case _ => mm // <-- fallback to inlined fields
+              case _                              => mm // <-- fallback to inlined fields
           case _ =>
             // No __type → class schema map; fields live here
             mm
@@ -102,10 +102,10 @@ object CorrectPath:
         Map.empty
 
   /** Rewrite/validate a path under current ctx.
-   * - First tries absolute lookup in ctx.typeInfo.
-   * - If first segment not found and a receiver exists, treat bare name as relative to receiver and prefix `this.`.
-   * - Allows top-level `val` symbols recorded in ctx.sym to pass through unchanged (and they are terminal).
-   */
+    * - First tries absolute lookup in ctx.typeInfo.
+    * - If first segment not found and a receiver exists, treat bare name as relative to receiver and prefix `this.`.
+    * - Allows top-level `val` symbols recorded in ctx.sym to pass through unchanged (and they are terminal).
+    */
   def rewritePath(rawPath: String, offset: Int)(using ctx: ExprContext): Either[DLCompileError, String] =
     def scopeLookup(name: String): Option[Any] =
       ctx.scopes.collectFirst { case m if m.contains(name) => m(name) }
@@ -113,11 +113,7 @@ object CorrectPath:
     val segs = rawPath.split("\\.").toList
 
     @annotation.tailrec
-    def loop(current: Map[String, Any],
-             rest: List[String],
-             acc: List[String],
-             isFirst: Boolean,
-             inReceiver: Boolean): Either[DLCompileError, List[String]] =
+    def loop(current: Map[String, Any], rest: List[String], acc: List[String], isFirst: Boolean, inReceiver: Boolean): Either[DLCompileError, List[String]] =
       rest match
         case Nil => Right(acc)
 
@@ -150,7 +146,7 @@ object CorrectPath:
                   if recvMap.contains(seg.base) then
                     val node = recvMap(seg.base)
                     correct(seg, expectedOf(node)) match
-                      case Left(msg) => return Left(DLCompileError(offset, msg))
+                      case Left(msg)      => return Left(DLCompileError(offset, msg))
                       case Right(spelled) =>
                         // prefix explicit `this` and enter receiver subtree
                         return loop(
@@ -183,19 +179,17 @@ object CorrectPath:
                     correct(seg, expectedOf(node)) match
                       case Left(msg) => Left(DLCompileError(offset, msg))
                       case Right(spelled) =>
-                        loop(nextNode(node), tail, acc :+ spelled, isFirst=false, inReceiver=inReceiver)
+                        loop(nextNode(node), tail, acc :+ spelled, isFirst = false, inReceiver = inReceiver)
                   case None =>
                     if isFirst then
                       ctx.resolveSymbol(seg.base) match
                         case Some(_) =>
-                          if tail.nonEmpty then
-                            Left(DLCompileError(offset, s"Symbol '${seg.base}' is not a path; cannot access '${tail.head}'"))
+                          if tail.nonEmpty then Left(DLCompileError(offset, s"Symbol '${seg.base}' is not a path; cannot access '${tail.head}'"))
                           else Right(acc :+ segStr)
                         case None =>
                           Left(DLCompileError(offset, s"Field '${seg.base}' does not exist in typeInfo, receiver, or loop scope"))
-                    else
-                      Left(DLCompileError(offset, s"Field '${seg.base}' does not exist here"))
+                    else Left(DLCompileError(offset, s"Field '${seg.base}' does not exist here"))
               }
 
-    val res = loop(ctx.typeInfo, segs, Nil, isFirst=true, inReceiver=false).map(_.mkString("."))
+    val res = loop(ctx.typeInfo, segs, Nil, isFirst = true, inReceiver = false).map(_.mkString("."))
     res
