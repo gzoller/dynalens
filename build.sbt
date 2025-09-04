@@ -77,6 +77,8 @@ lazy val root = project
     )
   )
 
+Test / parallelExecution := false
+
 ThisBuild / githubWorkflowJobSetup := Seq(
   WorkflowStep.Run(
     name = Some("Ignore line ending differences in git"),

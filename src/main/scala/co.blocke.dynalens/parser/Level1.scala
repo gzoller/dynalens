@@ -22,7 +22,22 @@
 package co.blocke.dynalens
 package parser
 
-import fastparse.*, NoWhitespace.*
+import fastparse.*
+import NoWhitespace.*
+
+import scala.annotation.tailrec
+
+sealed trait Idx
+case object Wildcard extends Idx // []
+case class Fixed(i: Int) extends Idx // [3]
+case class Seg(base: String, idx: Option[Idx], opt: Boolean)
+
+private val segRx = "^([A-Za-z0-9_]+)(?:\\[(\\d*)\\])?(\\?)?$".r
+
+// A tiny module that exposes valueExpr bound to the current given ExprContext
+trait ValueExprModule {
+  def valueExpr[$: P](using ExprContext): P[ParseFnResult]
+}
 
 //
 // First level:
@@ -30,86 +45,125 @@ import fastparse.*, NoWhitespace.*
 //     functions
 //     collection statements
 //
-trait Level1 extends Level0:
-
+trait Level1 extends Level0 {
+  self: ValueExprModule =>
   // Simple symbol or dotted path, possibly with array notation
   //   foo.bar
   //   foo[].bar
   //   foo[3].bar
 
-  def path[$: P]: P[(String, Option[String])] = {
+  private def identS[$: P]: P[String] =
+    P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep).!
 
-    def fullPath[$: P]: P[String] =
-      P(CharsWhileIn("a-zA-Z0-9_.[]").rep(1).!)
+  private def identU[$: P]: P[Unit] =
+    P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep)
 
-    // Lookahead to see if the *last identifier* is followed by a `(`
-    def isFunc[$: P]: P[Boolean] =
-      P(
-        &("(").map(_ => true)
-          | Pass.map(_ => false)
-      )
+  private def indexPart[$: P]: P[String] =
+    P("[" ~ CharsWhileIn("0-9").! ~ "]").map(i => s"[$i]")
 
-    P(fullPath ~ isFunc).flatMap { case (raw, hasFunc) =>
-      if hasFunc then
-        val lastDot = raw.lastIndexOf('.')
-        if lastDot == -1 then
-          // This is like `foo()` — illegal in path context
-          Fail.opaque("Function call detected where path was expected")
-        else {
-          val base = raw.take(lastDot)
-          val fn = raw.drop(lastDot + 1)
-          Pass((base, Some(fn)))
+  private def wildcardIndex[$: P]: P[String] =
+    P("[]").!
+
+  private def curlyBraces[$: P]: P[String] =
+    P("{}").!
+
+  private def optSuffix[$: P]: P[String] =
+    P("?".!.?).map(_.getOrElse(""))
+
+  private def segment[$: P]: P[String] =
+    P(identS ~ (wildcardIndex | indexPart | curlyBraces).? ~ optSuffix).map {
+      case (name, Some(suffixPart), suf) => s"$name$suffixPart$suf"
+      case (name, None, suf)             => s"$name$suf"
+    }
+
+  def pathBase[$: P]: P[String] =
+    P(segment ~ (!("." ~ identU ~ "(") ~ "." ~ segment).rep).map { case (head, tail) =>
+      (head +: tail.toList).mkString(".")
+    }
+
+  // 1) Non-failing path parser that *returns* the semantic error
+  private def pathEither[$: P](using ctx: ExprContext): P[Either[DLCompileError, String]] =
+    P(Index ~ pathBase).map { case (offset, raw) =>
+      CorrectPath.rewritePath(raw, offset) // Either[DLCompileError, String]
+    }
+
+  // 2) Keep a strict version (for places where you *want* a hard parse error)
+  def path[$: P](using ctx: ExprContext): P[String] =
+    pathEither.flatMap {
+      case Right(clean) => P(Pass(clean))
+      case Left(err)    => P(Fail.opaque(err.msg)) // <- only use where a hard parse failure is desired
+    }
+
+  // 3) Make pathFn propagate domain errors (no parser Fail here)
+  private def pathFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
+    pathEither.map {
+      case Left(err)   => Left(err) // bubble semantic error
+      case Right(path) => Right(GetFn(path))
+    }
+
+  // Parses: "." ident "(" args ")"
+  private def methodCall[$: P](using ctx: ExprContext): P[Either[DLCompileError, (String, List[Fn[Any]], Int)]] =
+    P(
+      Index ~ // capture offset *before* the dot
+        WS0 ~ "." ~ identifier.! ~
+        "(" ~/ WS0 ~
+        valueExpr.rep(sep = "," ~/ WS0) ~
+        WS0 ~ ")"
+    ).map { case (off, name, argsRaw) =>
+      val (errs, oks) = argsRaw.partitionMap(identity)
+      if errs.nonEmpty then Left(errs.head)
+      else Right((name, oks.toList, off))
+    }
+
+  // parse optional fixed index and wrap.
+  private def maybeIndex[$: P](fn: Fn[Any]): P[Fn[Any]] =
+    P("[" ~ CharsWhileIn("0-9").! ~ "]").?.map {
+      case Some(iStr) => IndexFn(fn, iStr.toInt)
+      case None       => fn
+    }
+
+  // If helpful, define the builder type somewhere central:
+  // type MethodBuilder = (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]
+
+  def methodChain[$: P](base: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] = {
+    val argsCtx: ExprContext =
+      base match {
+        case GetFn(p) =>
+          val elem = Utility.elementSchemaFor(p, ctx.typeInfo)
+          val c0 = ctx.withReceiverFromPath(p)
+          if elem.nonEmpty then c0.pushScope(elem) else c0
+        case _ => ctx
+      }
+
+    given ExprContext = argsCtx
+
+    P(methodCall.rep).flatMap { calls =>
+      // calls: Seq[Either[DLCompileError, (String, List[Fn[Any]], Int)]]
+      val built: Either[DLCompileError, Fn[Any]] =
+        calls.foldLeft[Either[DLCompileError, Fn[Any]]](Right(base)) {
+          case (Left(e), _)          => Left(e)
+          case (Right(_), Left(err)) => Left(err)
+          case (Right(cur), Right((name, args, off))) =>
+            methodFunctions.get(name) match {
+              case Some(build3 /* (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]] */ ) =>
+                build3(cur, args, off) // <-- return Either directly (no Right(...))
+              case None =>
+                Left(DLCompileError(off, s"Unknown method: $name"))
+            }
         }
-      else Pass((raw, None))
+
+      built match {
+        case Left(err) => P(Pass(Left(err)))
+        case Right(fn) => maybeIndex(fn).map(f => Right(f)) // allow trailing [n] after the whole chain
+      }
     }
   }
 
-  private def pathFn[$: P](valueExpr: => P[Fn[Any]])(using ctx: ExprContext): P[Fn[Any]] =
-    P(path).flatMap { case (rawPath, maybeMethod) =>
-      val baseFn = GetFn(rawPath, searchThis = ctx.searchThis)
-
-      maybeMethod match
-        case None =>
-          P(Pass(baseFn))
-
-        case Some("else") =>
-          // This expects the format: `.else(...)`
-          P("(" ~ valueExpr ~ ")").map { elseFn =>
-            baseFn.copy(elseValue = Some(elseFn))
-          }
-
-        case Some("isDefined") =>
-          // This expects the format: `.else(...)`
-          P("(" ~ WS0 ~ ")").map { _ =>
-            baseFn.copy(isDefined = true)
-          }
-
-        case Some(methodName) =>
-          methodFunctions.get(methodName) match
-            case Some(fnBuilder) =>
-              P(methodArgs(valueExpr).map(args => fnBuilder(baseFn, args)))
-            case None =>
-              throw new RuntimeException(s"Unknown method: $methodName")
-    }
-
-  private def methodArgs[$: P](valueExpr: => P[Fn[Any]]): P[List[Fn[Any]]] =
-    P("(" ~ valueExpr.rep(sep = "," ~ WS0) ~ ")" ~ WS0).map(_.toList)
-
-  def methodCall[$: P](valueExpr: => P[Fn[Any]]): P[(String, List[Fn[Any]])] =
-    P(WS0 ~ "." ~ identifier.! ~ methodArgs(valueExpr))
-      .map { case (name, args) => (name, args.toList) }
-
-  def methodChain[$: P](base: Fn[Any], valueExpr: => P[Fn[Any]]): P[Fn[Any]] =
-    P(WS0 ~ methodCall(valueExpr).rep).map { chain =>
-      chain.foldLeft(base) { case (inner, (fnName, args)) =>
-        methodFunctions.get(fnName) match
-          case Some(fnBuilder) => fnBuilder(inner, args).asInstanceOf[Fn[Any]]
-          case None            => throw new RuntimeException(s"Unknown method: $fnName")
-      }
-    }
-
-  def baseExpr[$: P](valueExpr: => P[Fn[Any]])(using ctx: ExprContext): P[Fn[Any]] =
-    P((standaloneFn | constant | pathFn(valueExpr)).flatMap(base => methodChain(base, valueExpr)) ~ WS0)
+  def baseExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
+    P((standaloneFn.map(Right(_)) | constant | pathFn).flatMap {
+      case Right(fn)   => methodChain(fn)
+      case l @ Left(_) => P(Pass(l))
+    } ~ WS0)
 
   // ---- Functions ----
 
@@ -117,74 +171,200 @@ trait Level1 extends Level0:
     P(
       StringIn("now", "uuid").! ~ "(" ~ WS0 ~ ")"
     ).map {
-      case "now"  => NowFn
-      case "uuid" => UUIDFn
+      case "now"  => NowFn()
+      case "uuid" => UUIDFn()
     }
 
-  private def checkArgs(fnName: String, args: List[Fn[Any]], required: Int): Unit =
-    if args.length != required then throw new RuntimeException(s"Function $fnName() expected $required argument(s), got ${args.length}")
+  private def expectGetPath(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, String] =
+    arg match {
+      case g: GetFn => Right(g.path) // already corrected by your path parser
+      case other    => Left(DLCompileError(off, s"$name(...) expects a field path argument, got ${other.getClass.getSimpleName}"))
+    }
 
-  private val methodFunctions: Map[String, (Fn[Any], List[Fn[Any]]) => Fn[?]] = Map(
-    "startsWith" -> { (recv, args) =>
-      checkArgs("startsWith", args, 1)
-      StartsWithFn(recv.as[String], args.head.as[String])
+  private def expectBoolean(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, BooleanFn] =
+    arg match {
+      case b: BooleanFn => Right(b)
+      case other        => Left(DLCompileError(off, s"$name(...) requires a boolean expression, got ${other.getClass.getSimpleName}"))
+    }
+
+  private def expectConstInt(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, Int] =
+    arg match {
+      case ConstantFn(i: Int) => Right(i)
+      case ConstantFn(x)      => Left(DLCompileError(off, s"$name(...) requires an integer literal, got ${x.getClass.getSimpleName}"))
+      case other              => Left(DLCompileError(off, s"$name(...) requires an integer literal, got ${other.getClass.getSimpleName}"))
+    }
+
+  private def checkArgs(
+      fnName: String,
+      args: List[Fn[Any]],
+      required: Int,
+      offset: Int
+  ): Either[DLCompileError, Unit] =
+    if args.length != required then Left(DLCompileError(offset, s"Function $fnName() expected $required argument(s), got ${args.length}"))
+    else Right(())
+
+  private val methodFunctions: Map[String, (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]] = Map(
+    M_MIN -> { (recv, _, _) => Right(MinFn(recv)) },
+    M_MAX -> { (recv, _, _) => Right(MaxFn(recv)) },
+    M_SUM -> { (recv, _, _) => Right(SumFn(recv)) },
+    M_AVG -> { (recv, _, _) => Right(AvgFn(recv)) },
+    M_MEDIAN -> { (recv, _, _) => Right(MedianFn(recv)) },
+    M_ABS -> { (recv, _, _) => Right(AbsFn(recv)) },
+    M_STARTSWITH -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_STARTSWITH, args, 1, off)
+      } yield StartsWithFn(recv, args.head)
     },
-    "endsWith" -> { (recv, args) =>
-      checkArgs("endsWith", args, 1)
-      EndsWithFn(recv.as[String], args.head.as[String])
+    M_ENDSWITH -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_ENDSWITH, args, 1, off)
+      } yield EndsWithFn(recv, args.head)
     },
-    "contains" -> { (recv, args) =>
-      checkArgs("contains", args, 1)
-      ContainsFn(recv.as[String], args.head.as[String])
+    M_CONTAINS -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_CONTAINS, args, 1, off)
+      } yield ContainsFn(recv, args.head)
     },
-    "equalsIgnoreCase" -> { (recv, args) =>
-      checkArgs("equalsIgnoreCase", args, 1)
-      EqualsIgnoreCaseFn(recv.as[String], args.head.as[String])
+    M_KEYS -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_KEYS, args, 0, off)
+      } yield KeysFn(recv)
     },
-    "matchesRegex" -> { (recv, args) =>
-      checkArgs("matchesRegex", args, 1)
-      MatchesRegexFn(recv.as[String], args.head.as[String])
+    M_VALUES -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_VALUES, args, 0, off)
+      } yield ValuesFn(recv)
     },
-    "isDefined" -> { (recv, _) =>
-      IsDefinedFn(recv)
+    M_GET -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_GET, args, 1, off)
+      } yield MapGetFn(recv, args.head)
     },
-    "len" -> { (recv, _) =>
-      LengthFn(recv)
+    M_EQUALSIGNORECASE -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_EQUALSIGNORECASE, args, 1, off)
+      } yield EqualsIgnoreCaseFn(recv, args.head)
     },
-    "toUpperCase" -> { (recv, _) =>
-      ToUpperFn(recv)
+    M_MATCHESREGEX -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_MATCHESREGEX, args, 1, off)
+      } yield MatchesRegexFn(recv, args.head)
     },
-    "toLowerCase" -> { (recv, _) =>
-      ToLowerFn(recv)
+    M_ELSE -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_ELSE, args, 1, off)
+      } yield ElseFn(recv, args.head)
     },
-    "trim" -> { (recv, _) =>
-      TrimFn(recv)
+    M_ISDEFINED -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_ISDEFINED, args, 0, off)
+      } yield IsDefinedFn(recv)
     },
-    "template" -> { (recv, _) =>
-      val varMap = recv match
-        case ConstantFn(s: String) =>
-          TemplateUtils.extractVariables(s).map(v => v -> GetFn(v)).toMap
+    M_LEN -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_LEN, args, 0, off)
+      } yield LengthFn(recv)
+    },
+    M_TOUPPERCASE -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_TOUPPERCASE, args, 0, off)
+      } yield ToUpperFn(recv)
+    },
+    M_TOLOWERCASE -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_TOLOWERCASE, args, 0, off)
+      } yield ToLowerFn(recv)
+    },
+    M_TRIM -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_TRIM, args, 0, off)
+      } yield TrimFn(recv)
+    },
+    M_TEMPLATE -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_TEMPLATE, args, 0, off)
+      } yield {
+        val varMap = recv match
+          case ConstantFn(s: String) =>
+            TemplateUtils.extractVariables(s).map(v => v -> GetFn(v)).toMap
+          case _ =>
+            Map.empty[String, Fn[Any]] // template is not a constant, so defer resolution
+        InterpolateFn(recv, varMap)
+      }
+    },
+    M_SUBSTR -> { (recv, args, off) =>
+      if args.isEmpty then Left(DLCompileError(off, s"Function substr() expected at least 1 argument, but found none"))
+      else
+        val start = args.head.as[Int]
+        val endOpt = args.lift(1).map(_.as[Int])
+        Right(SubstringFn(recv, start, endOpt))
+    },
+    M_REPLACE -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_REPLACE, args, 2, off)
+      } yield ReplaceFn(recv, args.head, args(1))
+    },
+    M_DATEFMT -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_DATEFMT, args, 1, off)
+      } yield FormatDateFn(recv, args.head.as[String])
+    },
+    M_TODATE -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_TODATE, args, 1, off)
+      } yield ParseDateFn(recv, args.head.as[String])
+    },
+    M_SORTASC -> { (recv, args, off) =>
+      args match {
+        case Nil =>
+          Right(SortFn(recv, None, asc = true))
+        case a1 :: Nil =>
+          expectGetPath(a1, M_SORTASC, off).map(p => SortFn(recv, Some(p), asc = true))
         case _ =>
-          Map.empty[String, Fn[Any]] // template is not a constant, so defer resolution
-      InterpolateFn(recv, varMap)
+          Left(DLCompileError(off, s"Function sortAsc() expected 0 or 1 argument(s), got ${args.length}"))
+      }
     },
-    "substr" -> { (recv, args) =>
-      if args.isEmpty then throw new RuntimeException("substr() requires at least 1 argument")
-      val start = args.head.as[Int]
-      val endOpt = args.lift(1).map(_.as[Int])
-      SubstringFn(recv, start, endOpt)
+    M_SORTDESC -> { (recv, args, off) =>
+      args match {
+        case Nil =>
+          Right(SortFn(recv, None, asc = false))
+        case a1 :: Nil =>
+          expectGetPath(a1, M_SORTDESC, off).map(p => SortFn(recv, Some(p), asc = false))
+        case _ =>
+          Left(DLCompileError(off, s"Function sortDesc() expected 0 or 1 argument(s), got ${args.length}"))
+      }
     },
-    "replace" -> { (recv, args) =>
-      checkArgs("replace", args, 2)
-      ReplaceFn(recv, args.head, args(1))
+    M_FILTER -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_FILTER, args, 1, off)
+        pred <- expectBoolean(args.head, M_FILTER, off)
+      } yield FilterFn(recv, pred)
     },
-    "dateFmt" -> { (recv, args) =>
-      checkArgs("dateFmt", args, 1)
-      FormatDateFn(recv, args.head.as[String])
+    M_DISTINCT -> { (recv, args, off) =>
+      args match {
+        case Nil =>
+          Right(DistinctFn(recv, None))
+        case a1 :: Nil =>
+          expectGetPath(a1, M_DISTINCT, off).map(p => DistinctFn(recv, Some(p)))
+        case _ =>
+          Left(DLCompileError(off, s"Function distinct() expected 0 or 1 argument(s), got ${args.length}"))
+      }
     },
-    "toDate" -> { (recv, args) =>
-      checkArgs("toDate", args, 1)
-      ParseDateFn(recv, args.head.as[String])
+    M_LIMIT -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_LIMIT, args, 1, off)
+        n <- expectConstInt(args.head, M_LIMIT, off) // must be an int literal
+      } yield LimitFn(recv, n)
+    },
+    M_REVERSE -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_REVERSE, args, 0, off)
+      } yield ReverseFn(recv)
+    },
+    M_CLEAN -> { (recv, args, off) =>
+      for {
+        _ <- checkArgs(M_CLEAN, args, 0, off)
+      } yield CleanFn(recv)
     }
   )
 
@@ -192,107 +372,222 @@ trait Level1 extends Level0:
 
   private trait CollectionMethodParser {
     def name: String
-    def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]]
+
+    def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult]
   }
 
-  def collectionStmt[$: P](booleanExpr: ExprContext ?=> P[BooleanFn]): P[Statement] =
+  private def promoteToCollection(recv: Fn[Any])(using ctx: ExprContext): Fn[Any] = recv match
+    case g @ GetFn(name) =>
+      // If the bare name is in loop scope, prefer its collection binding `name[]`
+      val inLoop = ctx.scopes.headOption.exists(_.contains(name))
+      if inLoop then GetFn(s"$name[]") else g
+    case other => other
 
-    def simpleFieldPath[$: P]: P[String] =
-      P(CharsWhileIn("a-zA-Z0-9_.").!)
+  def collectionStmt[$: P](booleanExpr: ExprContext ?=> P[ParseBoolResult])(using ctx: ExprContext): P[ParseStmtResult] = {
 
     case object SortAscMethod extends CollectionMethodParser {
-      val name = "sortAsc"
-      def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        simpleFieldPath.?.map(p => SortFn(p))
+      val name: String = M_SORTASC
+
+      def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
+        P(Index ~ pathBase.?).map {
+          case (_, None) =>
+            // sortAsc() — natural ordering on the collection itself
+            Right(SortFn(inner, None, asc = true))
+
+          case (offset, Some(rawKey)) =>
+            // sortAsc(field) — rewrite/validate (possibly relative) key
+            CorrectPath.rewritePath(rawKey, offset) match {
+              case Left(err)       => Left(err)
+              case Right(cleanKey) => Right(SortFn(inner, Some(cleanKey), asc = true))
+            }
+        }
     }
 
     case object SortDescMethod extends CollectionMethodParser {
-      val name = "sortDesc"
-      def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        simpleFieldPath.?.map(p => SortFn(p, false))
+      val name: String = M_SORTDESC
+
+      def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
+        P(Index ~ pathBase.?).map {
+          case (_, None) =>
+            Right(SortFn(inner, None, asc = false))
+
+          case (offset, Some(rawKey)) =>
+            CorrectPath.rewritePath(rawKey, offset) match {
+              case Left(err)       => Left(err)
+              case Right(cleanKey) => Right(SortFn(inner, Some(cleanKey), asc = false))
+            }
+        }
     }
 
     case object FilterMethod extends CollectionMethodParser {
-      val name = "filter"
-      def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        booleanExpr(using ExprContext(searchThis = true)).map(v => FilterFn(toBooleanFn(v)))
+      val name: String = M_FILTER
+
+      def parseFn[$: P](inner: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] =
+        // Receiver (`this`) and bare field names are provided by the surrounding ctx
+        booleanExpr.map {
+          case Right(pred: BooleanFn) => Right(FilterFn(inner, pred): Fn[Any])
+          case Left(err)              => Left(err)
+        }
     }
 
     case object DistinctMethod extends CollectionMethodParser {
-      val name = "distinct"
-      def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        simpleFieldPath.?.map(p => DistinctFn(p))
+      val name: String = M_DISTINCT
+
+      def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
+        // optional field path
+        P(Index ~ pathBase.?).map {
+          case (_, None) =>
+            // distinct() with no field ⇒ distinct by whole element
+            Right(DistinctFn(inner, None))
+
+          case (off, Some(rawKey)) =>
+            // distinct(field) ⇒ rewrite/validate the (possibly relative) key
+            CorrectPath.rewritePath(rawKey, off) match {
+              case Left(err)       => Left(err)
+              case Right(cleanKey) => Right(DistinctFn(inner, Some(cleanKey)))
+            }
+        }
     }
 
     case object LimitMethod extends CollectionMethodParser {
-      val name = "limit"
-      def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        number.map(LimitFn.apply)
+      val name: String = M_LIMIT
+
+      def parseFn[$: P](inner: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] =
+        P(Index ~ number).map { case (off, n) =>
+          if n >= 0 then Right(LimitFn(inner, n))
+          else Left(DLCompileError(off, s"limit(...) requires a non-negative integer, found $n"))
+        }
+
       private def number[$: P]: P[Int] =
-        P(CharsWhileIn("0-9").!).map(_.toInt)
+        P(CharsWhileIn("0-9", min = 1).!).map(_.toInt)
     }
 
     case object ReverseMethod extends CollectionMethodParser {
-      val name = "reverse"
-      def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        P("(" ~ WS0 ~ ")" | Pass(())).map(_ => ReverseFn())
+      val name = M_REVERSE
+
+      def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
+        P(Index ~ (("(" ~ WS0 ~ ")").?)).map { _ =>
+          val recv = promoteToCollection(inner)
+          Right(ReverseFn(recv))
+        }
     }
 
     case object CleanMethod extends CollectionMethodParser {
-      val name = "clean"
-      def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        P("(" ~ WS0 ~ ")" | Pass(())).map(_ => CleanFn())
+      val name = M_CLEAN
+
+      def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
+        P(Index ~ (("(" ~ WS0 ~ ")").?)).map { _ =>
+          val recv = promoteToCollection(inner)
+          Right(CleanFn(recv))
+        }
     }
 
     case object MapToMethod extends CollectionMethodParser {
       val name = "mapTo"
-      def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        stringLiteral.map {
-          case ConstantFn(mapName) => MapFwdFn(mapName.toString)
-          case _                   => throw new RuntimeException("String-typed constant arg required for mapTo()")
+
+      def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
+        // We capture the current offset for good error messages
+        P(Index ~ stringLiteral).map { case (idx, strRes) =>
+          strRes match {
+            case Right(ConstantFn(mapName: String)) =>
+              Right(MapFwdFn(mapName)) // success: build the function
+
+            case Right(_) =>
+              Left(DLCompileError(idx, """mapTo(...) requires a string literal, e.g. mapTo("target")"""))
+
+            case Left(err) =>
+              Left(err) // bubble up any error produced by stringLiteral
+          }
         }
     }
 
     case object MapFromMethod extends CollectionMethodParser {
       val name = "mapFrom"
-      def parseFn[$: P](inner: Fn[Any]): P[Fn[Any]] =
-        stringLiteral.map {
-          case ConstantFn(mapName) => MapRevFn(mapName.toString)
-          case _                   => throw new RuntimeException("String-typed constant arg required for mapFrom()")
+
+      def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
+        P(Index ~ stringLiteral).map {
+          case (offset, Right(ConstantFn(mapName: String))) =>
+            Right(MapRevFn(mapName))
+          case (offset, Right(_)) =>
+            Left(DLCompileError(offset, "mapFrom(...) requires a string literal argument"))
+          case (_, Left(err)) =>
+            Left(err) // propagate any error produced by stringLiteral
         }
     }
 
     val collectionMethodRegistry: Map[String, CollectionMethodParser] =
-      List(SortAscMethod, SortDescMethod, FilterMethod, DistinctMethod, LimitMethod, ReverseMethod, CleanMethod, MapToMethod, MapFromMethod).map(m => m.name -> m).toMap
+      List(SortAscMethod, SortDescMethod, FilterMethod, DistinctMethod, LimitMethod, ReverseMethod, CleanMethod, MapToMethod, MapFromMethod)
+        .map(m => m.name -> m)
+        .toMap
 
-    P(path).flatMap {
-      case (basePath, Some(firstMethod)) =>
-        collectionMethodRegistry.get(firstMethod) match {
-          case Some(firstParser) =>
-            for {
-              firstFn <- P("(" ~/ WS0 ~ firstParser.parseFn(IdentityFn) ~ WS0 ~ ")")
-              restFns <- P((WS0 ~ "." ~ identifier.!).rep).flatMap { methodNames =>
-                methodNames.foldLeft(Pass(List.empty[Fn[Any]]): P[List[Fn[Any]]]) { case (accP, methodName) =>
-                  accP.flatMap { acc =>
-                    collectionMethodRegistry.get(methodName) match {
-                      case Some(parser) =>
-                        P("(" ~/ WS0 ~ parser.parseFn(IdentityFn) ~ WS0 ~ ")").map(fn => acc :+ fn)
-                      case None =>
-                        P(Fail.opaque(s"Unknown collection method: $methodName"))
-                    }
-                  }
-                }
-              }
-            } yield {
-              val allFns = firstFn +: restFns
-              if allFns.size == 1 then MapStmt(basePath, allFns.head)
-              else MapStmt(basePath, PolyFn(allFns))
-            }
+    def parseMethodArgs[$: P](parser: CollectionMethodParser)(using ExprContext): P[ParseFnResult] =
+      P("(" ~/ WS0 ~ parser.parseFn(IdentityFn) ~ WS0 ~ ")")
 
-          case None =>
-            Fail.opaque(s"Unknown collection method: $firstMethod")
+    def lookupMethod[$: P](name: String): P[Either[DLCompileError, CollectionMethodParser]] =
+      P(Index).map { off =>
+        collectionMethodRegistry
+          .get(name)
+          .toRight(DLCompileError(off, s"Unknown collection method: $name"))
+      }
+
+    P(Index ~ path).flatMap { case (off0, basePath) =>
+      // 1) Add a correctly-typed 'this' based on the base path (sets receiver + 'this' symbol)
+      val ctxWithThis = Utility.addThisType(basePath, ctx)
+
+      // 2) If basePath is a list of objects, push its element fields into a lexical scope
+      val elemSchema = Utility.elementSchemaFor(basePath, ctxWithThis.typeInfo)
+      val ctxForArgs =
+        if elemSchema.nonEmpty then ctxWithThis.pushScope(elemSchema)
+        else ctxWithThis
+
+      given ExprContext = ctxForArgs
+
+      // resolve + parse a single method’s args into a Fn
+      def parseOneMethod(name: String): P[ParseFnResult] =
+        for {
+          resolved <- lookupMethod(name)
+          fnRes <- resolved match {
+            case Left(err)  => P(Pass(Left(err)))
+            case Right(par) => parseMethodArgs(par)
+          }
+        } yield fnRes
+
+      // --- REQUIRE a first method: ".name(" ---
+      val firstMethodNameP: P[String] =
+        P(WS0 ~ "." ~ identifier.!).flatMap { name =>
+          P(&("(")).map(_ => name)
         }
 
-      case _ =>
-        Fail.opaque("Collection statement must have at least one method")
+      firstMethodNameP.flatMap { firstMethodName =>
+        for {
+          firstResult <- parseOneMethod(firstMethodName)
+
+          // zero+ additional methods, each must also be followed by '('
+          moreNames <- P((WS0 ~ "." ~ identifier.!).flatMap { n =>
+            P(&("(")).map(_ => n)
+          }).rep
+
+          restFns <- moreNames.foldLeft(Pass(Right(Nil): ParseFnListResult): P[ParseFnListResult]) { case (accP, methodName) =>
+            accP.flatMap {
+              case left @ Left(_) => P(Pass(left)) // keep first error
+              case Right(accum) =>
+                parseOneMethod(methodName).map {
+                  case Left(err) => Left(err)
+                  case Right(fn) => Right(accum :+ fn)
+                }
+            }
+          }
+        } yield
+        // Combine into a single Fn, then into a MapStmt, and wrap as ParseStmtResult
+        (for {
+          f1 <- firstResult
+          rxs <- restFns
+        } yield {
+          val all = f1 :: rxs
+          val fn = if all.size == 1 then all.head else PolyFn(all)
+          (ctx, MapStmt(basePath, fn)) // <- keep outer ctx here (don’t leak ctxForArgs)
+        }): ParseStmtResult
+      }
     }
+  }
+}

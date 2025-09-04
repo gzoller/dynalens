@@ -24,20 +24,19 @@ package co.blocke.dynalens
 import zio.*
 
 import scala.quoted.*
-import co.blocke.scala_reflection.reflect.ReflectOnType
-import co.blocke.scala_reflection.reflect.rtypeRefs.{FieldInfoRef, OptionRef, ScalaClassRef, ScalaOptionRef, SeqRef}
+import co.blocke.scala_reflection.*
+import co.blocke.scala_reflection.reflect.*
+import co.blocke.scala_reflection.reflect.rtypeRefs.*
 import co.blocke.scala_reflection.TypedName
 import Path.*
-
-import scala.annotation.tailrec
-
-case class DynaLensError(msg: String)
 
 case class DynaLens[T](
     _update: (String, Any, T) => ZIO[Any, DynaLensError, T],
     _get: (String, T) => ZIO[Any, DynaLensError, Any],
     _registry: Map[String, DynaLens[?]],
-    _typeName: String
+    _typeName: String,
+    _typeInfo: Map[String, Any],
+    _elemIsOptional: Map[String, Boolean] // per-field: Seq element is Option[_]?
 ):
   type ThisT = T
 
@@ -68,108 +67,322 @@ case class DynaLens[T](
         .getOrThrow()
     }
 
-  def get(path: String, obj: T): ZIO[Any, DynaLensError, Any] = {
-    val parsed = parsePath(path)
+  def get(path: String, obj: T): ZIO[Any, DynaLensError, Any] =
+    _getValue(parsePath(path), obj)
+
+  private def _getValue(pathElements: List[PathElement], obj: T): ZIO[Any, DynaLensError, Any] = {
 
     def step(current: Any, currentLens: DynaLens[?], path: List[PathElement]): ZIO[Any, DynaLensError, Any] =
       path match {
         case Nil =>
           ZIO.succeed(current)
 
-        case Field(f) :: rest =>
-          currentLens
-            ._get(f, current.asInstanceOf[currentLens.ThisT])
-            .flatMap { value =>
-              currentLens._registry.get(f) match {
-                case Some(nextLens) =>
-                  step(value, nextLens, rest)
-                case None =>
-                  if rest.isEmpty then ZIO.succeed(value)
-                  else step(value, currentLens, rest)
-              }
-            }
-
-        case IndexedField(f, i) :: rest =>
+        case Field(f, isOptional) :: rest =>
           currentLens
             ._get(f, current.asInstanceOf[currentLens.ThisT])
             .flatMap {
-              case list: Seq[Any] =>
-                if i < 0 && rest == Nil then // return whole Seq
-                  ZIO.succeed(list)
-                else
-                  list.lift(i) match {
-                    case Some(elem) =>
-                      currentLens._registry.get(f) match {
-                        case Some(elemLens) =>
-                          step(elem, elemLens, rest)
-                        case None =>
-                          if rest.isEmpty then ZIO.succeed(elem)
-                          else ZIO.fail(DynaLensError(s"No registry for '$f' to recurse into index"))
-                      }
-                    case None =>
-                      ZIO.fail(DynaLensError(s"Index $i out of bounds"))
-                  }
+              case None if isOptional =>
+                // short-circuit if the field is optional and None
+                ZIO.succeed(None)
 
-              case other =>
-                other match {
-                  case Some(elem) =>
-                    currentLens._registry.get(f) match {
-                      case Some(elemLens) =>
-                        step(elem, elemLens, rest)
-                      case None =>
-                        if rest.isEmpty then ZIO.succeed(elem)
-                        else ZIO.fail(DynaLensError(s"No registry for '$f' to recurse into index"))
-                    }
-                  case None => ZIO.fail(DynaLensError(s"Boom 2"))
-                  case _ =>
-                    ZIO.fail(DynaLensError(s"Expected sequence at '$f', but got ${other.getClass.getSimpleName}"))
+              case None =>
+                // fail if field missing and not optional
+                ZIO.fail(DynaLensError(s"Field '$f' is missing or null"))
+
+              case Some(value) =>
+                currentLens._registry.get(f) match {
+                  case Some(nextLens) =>
+                    step(value, nextLens, rest)
+                  case None =>
+                    if rest.isEmpty then
+                      if isOptional then ZIO.succeed(Some(value))
+                      else ZIO.succeed(value)
+                    else step(value, currentLens, rest)
+                }
+
+              case nonOptValue =>
+                // In case the lens returns a raw value (not wrapped in Option)
+                currentLens._registry.get(f) match {
+                  case Some(nextLens) =>
+                    step(nonOptValue, nextLens, rest)
+                  case None =>
+                    if rest.isEmpty then
+                      if isOptional then ZIO.succeed(Some(nonOptValue))
+                      else ZIO.succeed(nonOptValue)
+                    else step(nonOptValue, currentLens, rest)
+                }
+            }
+
+        case IndexedField(f, i, isOptional) :: rest =>
+          currentLens
+            ._get(f, current.asInstanceOf[currentLens.ThisT])
+            .flatMap {
+              case null | None =>
+                if isOptional then
+                  if i.isEmpty && rest == Nil then ZIO.succeed(Nil) // missing optional list → Nil
+                  else ZIO.fail(DynaLensError(s"Cannot index into missing optional list field '$f'"))
+                else ZIO.fail(DynaLensError(s"Field '$f' is not a Seq"))
+
+              case seq =>
+                val listZio: ZIO[Any, DynaLensError, Seq[Any]] = seq match {
+                  case s: Seq[?]                     => ZIO.succeed(s)
+                  case Some(s: Seq[?]) if isOptional => ZIO.succeed(s)
+                  case other =>
+                    ZIO.fail(DynaLensError(s"Expected Seq at field '$f', but got: ${other.getClass.getSimpleName}"))
+                }
+
+                listZio.flatMap { list =>
+                  (i, rest) match {
+                    case (None, Nil) =>
+                      // full list return
+                      ZIO.succeed(list)
+
+                    case (None, _ :: _) =>
+                      // Wildcard with a remaining path segment should never reach this low-level getter;
+                      // callers must either (a) map over elements, or (b) resolve via a bound element lens.
+                      ZIO.fail(
+                        DynaLensError(
+                          s"Internal: wildcard index for '$f[]' with a remaining path ('${Path.partialPath(rest)}'); " +
+                            s"this should be resolved via an element context, not the top lens."
+                        )
+                      )
+
+                    case (Some(idx), _) =>
+                      list.lift(idx) match {
+                        case Some(elem) =>
+                          currentLens._registry.get(f) match {
+                            case Some(elemLens) => step(elem, elemLens, rest)
+                            case None =>
+                              if rest.isEmpty then ZIO.succeed(elem)
+                              else ZIO.fail(DynaLensError(s"No registry for '$f' to recurse into index"))
+                          }
+                        case None =>
+                          ZIO.fail(DynaLensError(s"Index $idx out of bounds for field '$f'"))
+                      }
+                  }
                 }
             }
       }
 
-    step(obj, this, parsed)
+    step(obj, this, pathElements)
   }
 
-  def update(path: String, value: Any, obj: T): ZIO[Any, DynaLensError, T] = {
-    val parsed = parsePath(path)
+  sealed trait UpdateMode
+  private object UpdateMode {
+    case object Assign extends UpdateMode // '='
+    case object MapOver extends UpdateMode // '=>'
+  }
 
-    def step(current: Any, currentLens: DynaLens[?], path: List[PathElement]): ZIO[Any, DynaLensError, Any] = path match {
+  final case class Rhs(eval: DynaContext => ZIO[_BiMapRegistry, DynaLensError, Any])
+
+  private object Rhs {
+    def const(v: Any): Rhs = Rhs(_ => ZIO.succeed(v))
+  }
+
+  def update(path: String, value: Any, obj: T): ZIO[_BiMapRegistry, DynaLensError, T] =
+    _updateValue(parsePath(path), value, obj)
+
+  private def _updateValue(pathElements: List[PathElement], value: Any, obj: T): ZIO[_BiMapRegistry, DynaLensError, T] = {
+
+    def wrapIfNeeded(opt: Boolean, v: Any): Any =
+      if opt then
+        v match {
+          case _: Option[?] => v
+          case _            => Some(v)
+        }
+      else v
+
+    // withElemCtx should build a DynaContext anchored on the element
+    // def withElemCtx(elem: Any, base: DynaContext): DynaContext = ...
+
+    def step(
+        current: Any,
+        currentLens: DynaLens[?],
+        path: List[PathElement],
+        mode: UpdateMode,
+        rhsValue: Rhs,
+        baseCtx: DynaContext
+    ): ZIO[_BiMapRegistry, DynaLensError, Any] = path match {
       case Nil =>
         ZIO.fail(DynaLensError("Cannot update empty path"))
 
-      case Field(f) :: Nil =>
-        currentLens
-          ._update(f, value, current.asInstanceOf[currentLens.ThisT])
+      // Field leaf: foo = <rhs>
+      case Field(f, isOptional) :: Nil =>
+        rhsValue.eval(baseCtx).flatMap { raw =>
+          val finalValue = wrapIfNeeded(isOptional, raw)
+          currentLens._update(f, finalValue, current.asInstanceOf[currentLens.ThisT])
+        }
 
-      case Field(f) :: rest =>
+      // Field descent: foo.bar = ...
+      case Field(f, isOptional) :: rest =>
         for {
           nested <- currentLens._get(f, current.asInstanceOf[currentLens.ThisT])
           nextLens <- currentLens._registry.get(f) match
             case Some(a) => ZIO.succeed(a)
             case None    => ZIO.fail(DynaLensError(s"No nested lens for field '$f'"))
-          updatedNested <- step(nested, nextLens, rest)
-          updated <- currentLens._update(f, updatedNested, current.asInstanceOf[currentLens.ThisT])
+          updatedNested <- step(nested, nextLens, rest, mode, rhsValue, baseCtx)
+          wrapped = wrapIfNeeded(isOptional, updatedNested)
+          updated <- currentLens._update(f, wrapped, current.asInstanceOf[currentLens.ThisT])
         } yield updated
 
-      case IndexedField(f, i) :: rest =>
-        for {
-          rawList <- currentLens._get(f, current.asInstanceOf[currentLens.ThisT])
-          list <- ZIO
-            .attempt(rawList.asInstanceOf[Seq[Any]])
-            .mapError(_ => DynaLensError(s"Field '$f' is not a Seq"))
-          elem <- list.lift(i) match
-            case Some(e) => ZIO.succeed(e)
-            case None    => ZIO.fail(DynaLensError(s"Index $i out of bounds for field '$f'"))
-          nextLens <- currentLens._registry.get(f) match
-            case Some(a) => ZIO.succeed(a)
-            case None    => ZIO.fail(DynaLensError(s"No nested lens for collection field '$f'"))
-          updatedElem <- step(elem, nextLens, rest)
-          updatedList = list.updated(i, updatedElem)
-          updated <- currentLens._update(f, updatedList, current.asInstanceOf[currentLens.ThisT])
-        } yield updated
+      // Indexed (list) … (your normalized, MapOver/Assign split, with per-element ctx)
+      case IndexedField(f, idxOpt, fieldIsOpt) :: rest =>
+        currentLens
+          ._get(f, current.asInstanceOf[currentLens.ThisT])
+          .flatMap { raw =>
+            // Normalize to List[Any], gracing None/Some(None) -> Nil
+            val listOpt: Option[List[Any]] = raw match {
+              case null                  => Some(Nil)
+              case None                  => Some(Nil)
+              case Some(None)            => Some(Nil)
+              case Some(s: Seq[?])       => Some(s.toList)
+              case s: Seq[?]             => Some(s.toList)
+              case Some(it: Iterable[?]) => Some(it.toList)
+              case it: Iterable[?]       => Some(it.toList)
+              case _                     => None
+            }
+
+            listOpt match {
+              case None =>
+                ZIO.fail(DynaLensError(s"Field '$f' is not a Seq"))
+
+              case Some(list) =>
+                idxOpt match {
+
+                  // ------------------ wildcard [] ------------------
+                  case None =>
+                    rest match {
+                      // foo[] = rhs  (whole-list replacement)
+                      case Nil =>
+                        rhsValue.eval(baseCtx).flatMap { rv =>
+                          val elemIsOpt = currentLens._elemIsOptional.getOrElse(f, false)
+
+                          // If elements are optional, wrap each element unless already Option
+                          val rvElemAdjusted: Any = rv match {
+                            case s: Seq[?] if elemIsOpt =>
+                              s.map(wrapIfNeeded(true, _)).toList
+                            case it: Iterable[?] if elemIsOpt =>
+                              it.map(wrapIfNeeded(true, _)).toList
+                            case other => other
+                          }
+
+                          // If the field itself is optional (Option[List[_]]), apply Nil->None and box lists
+                          val finalValue: Any =
+                            if fieldIsOpt then
+                              rvElemAdjusted match {
+                                case s: Seq[?] if s.isEmpty => None
+                                case s: Seq[?]              => Some(s.toList)
+                                case it: Iterable[?]        => Some(it.toList)
+                                case opt: Option[?]         => opt
+                                case other                  => Some(other)
+                              }
+                            else rvElemAdjusted
+
+                          currentLens
+                            ._update(f, finalValue, current.asInstanceOf[currentLens.ThisT])
+                            .map(_.asInstanceOf[Any])
+                        }
+
+                      // foo[].bar = rhs  (map over list)
+                      case _ =>
+                        mode match {
+                          case UpdateMode.MapOver =>
+                            currentLens._registry.get(f) match {
+                              case Some(elemLens) =>
+                                ZIO
+                                  .foreach(list) { elem =>
+                                    step(
+                                      elem,
+                                      elemLens,
+                                      rest,
+                                      mode,
+                                      rhsValue,
+                                      withElemCtx(elem, baseCtx)
+                                    )
+                                  }
+                                  .flatMap { updatedItems =>
+                                    currentLens
+                                      ._update(f, updatedItems, current.asInstanceOf[currentLens.ThisT])
+                                      .map(_.asInstanceOf[Any])
+                                  }
+                              case None =>
+                                ZIO.fail(DynaLensError(s"No nested lens for collection field '$f'"))
+                            }
+                          case UpdateMode.Assign =>
+                            ZIO.fail(DynaLensError(s"Cannot assign to wildcard '$f[]' — use '=>' for map or assign the whole field"))
+                        }
+                    }
+
+                  // ------------------ fixed index [i] ------------------
+                  case Some(i) =>
+                    list.lift(i) match {
+                      case None =>
+                        ZIO.fail(DynaLensError(s"Index $i out of bounds for field '$f'"))
+
+                      case Some(elem) =>
+                        currentLens._registry.get(f) match {
+                          case Some(elemLens) =>
+                            if rest.nonEmpty then {
+                              // recurse inside element, then splice back
+                              step(
+                                elem,
+                                elemLens,
+                                rest,
+                                mode,
+                                rhsValue,
+                                withElemCtx(elem, baseCtx)
+                              ).flatMap { updatedElem =>
+                                val newSeq = list.updated(i, updatedElem)
+                                currentLens
+                                  ._update(f, newSeq, current.asInstanceOf[currentLens.ThisT])
+                                  .map(_.asInstanceOf[Any])
+                              }
+                            } else {
+                              // leaf element replace: wrap if element type is optional
+                              val elemCtx = withElemCtx(elem, baseCtx)
+                              val elemIsOpt = currentLens._elemIsOptional.getOrElse(f, false)
+                              rhsValue.eval(elemCtx).flatMap { rv =>
+                                val rvFinal = wrapIfNeeded(elemIsOpt, rv)
+                                val patched = list.updated(i, rvFinal)
+                                currentLens
+                                  ._update(f, patched, current.asInstanceOf[currentLens.ThisT])
+                                  .map(_.asInstanceOf[Any])
+                              }
+                            }
+
+                          case None =>
+                            if rest.isEmpty then {
+                              // same leaf element replace, but no elemLens
+                              val elemCtx = withElemCtx(elem, baseCtx)
+                              val elemIsOpt = currentLens._elemIsOptional.getOrElse(f, false)
+                              rhsValue.eval(elemCtx).flatMap { rv =>
+                                val rvFinal = wrapIfNeeded(elemIsOpt, rv)
+                                val patched = list.updated(i, rvFinal)
+                                currentLens
+                                  ._update(f, patched, current.asInstanceOf[currentLens.ThisT])
+                                  .map(_.asInstanceOf[Any])
+                              }
+                            } else {
+                              ZIO.fail(DynaLensError(s"No registry for '$f' to recurse into index"))
+                            }
+                        }
+                    }
+                }
+            }
+          }
     }
 
-    step(obj, this, parsed).asInstanceOf[ZIO[Any, DynaLensError, T]]
+    val rhs: Rhs = Rhs.const(value) // <-- constant RHS for '='
+    val baseCtx: DynaContext = DynaContext(obj, Some(this))
+
+    step(
+      obj,
+      this,
+      pathElements,
+      UpdateMode.Assign, // '=' path
+      rhs,
+      baseCtx
+    ).map(_.asInstanceOf[T])
   }
 
   private def walkPath(
@@ -177,40 +390,83 @@ case class DynaLens[T](
       current: Any,
       dynalens: DynaLens[?]
   ): ZIO[Any, DynaLensError, DynaContext] = {
+    val ctx = DynaContext(current, Some(dynalens))
 
-    val ctx: DynaContext = DynaContext(current, Some(dynalens))
-
-    @tailrec
     def step(
         path: List[PathElement],
-        currentLens: DynaLens[?]
+        value: Any,
+        lens: DynaLens[?]
     ): ZIO[Any, DynaLensError, Unit] = path match {
-      case Field(f) :: rest =>
-        currentLens._registry.get(f) match
-          case Some(nextLens) => step(rest, nextLens)
-          case None           => step(rest, currentLens)
+      case Field(f, isOptional) :: rest =>
+        for {
+          v <- lens._get(f, value.asInstanceOf[lens.ThisT])
+          nextLensOpt = lens._registry.get(f)
+          _ <- nextLensOpt match
+            case Some(nextLens) =>
+              v match {
+                case Some(real) =>
+                  // Optional[Complex] — unwrap and insert Complex lens into ctx
+                  ctx += (f -> (Some(real), Some(nextLens)))
+                  step(rest, real, nextLens)
+                case None =>
+                  if isOptional then ZIO.unit
+                  else ZIO.fail(DynaLensError(s"Field '$f' is missing or null"))
+                case other =>
+                  ctx += (f -> (Some(other), Some(nextLens)))
+                  step(rest, other, nextLens)
+              }
 
-      case IndexedField(f, _) :: rest =>
-        currentLens._registry.get(f) match {
-          case Some(loopLens) =>
-            // Insert into top-level map
-            ctx += (f -> (null, Some(loopLens)))
-            step(rest, loopLens)
-          case None => // simple field--just return current ctx
-            ZIO.unit
-        }
+            case None =>
+              step(rest, value, lens)
+        } yield ()
+
+      case IndexedField(f, _, isOptional) :: rest =>
+        for {
+          v <- lens._get(f, value.asInstanceOf[lens.ThisT])
+          _ <- v match {
+            case None | null =>
+              if isOptional then ZIO.unit
+              else ZIO.fail(DynaLensError(s"Expected non-optional list at '$f'"))
+
+            case Some(seq: Seq[?]) =>
+              // Multiple children — loop
+              val listZIO = ZIO.foreach(seq) { elem =>
+                lens._registry.get(f) match
+                  case Some(loopLens) =>
+                    step(rest, elem, loopLens)
+                  case None =>
+                    ZIO.unit
+              }
+              ctx += (f -> (None, lens._registry.get(f)))
+              listZIO.unit
+
+            case seq: Seq[?] =>
+              val listZIO = ZIO.foreach(seq) { elem =>
+                lens._registry.get(f) match
+                  case Some(loopLens) =>
+                    step(rest, elem, loopLens)
+                  case None =>
+                    ZIO.unit
+              }
+              ctx += (f -> (None, lens._registry.get(f)))
+              listZIO.unit
+
+            case other =>
+              ZIO.fail(DynaLensError(s"Expected sequence at '$f', got ${other.getClass.getSimpleName}"))
+          }
+        } yield ()
 
       case Nil =>
         ZIO.unit
     }
 
-    step(path, dynalens).as(ctx)
+    step(path, current, dynalens).as(ctx)
   }
 
   // Split path at Iterables to create sub-paths
   private def splitIntoLevels(path: List[PathElement]): List[List[PathElement]] = {
     val (levels, current) = path.foldLeft(List.empty[List[PathElement]] -> List.empty[PathElement]) {
-      case ((acc, current), pe @ IndexedField(_, -1)) =>
+      case ((acc, current), pe @ IndexedField(_, None, _)) =>
         (acc :+ (current :+ pe)) -> Nil
       case ((acc, current), pe) =>
         acc -> (current :+ pe)
@@ -219,72 +475,227 @@ case class DynaLens[T](
     (levels :+ current).filter(_.nonEmpty)
   }
 
+  // Walk registry lenses along a path prefix to reach the parent lens
+  private def lensForPathPrefix(root: DynaLens[?], parts: List[Path.PathElement]): Option[DynaLens[?]] =
+    parts.foldLeft(Option(root)) {
+      case (None, _)                                  => None
+      case (Some(cur), Path.Field(name, _))           => cur._registry.get(name)
+      case (Some(cur), Path.IndexedField(name, _, _)) => cur._registry.get(name) // element lens of the collection
+    }
+
   def map[R](
       path: String,
       fn: Fn[R],
       obj: T,
-      outerCtx: DynaContext = DynaContext.empty // <-- added outer context
-  ): ZIO[_BiMapRegistry, DynaLensError, T] =
+      outerCtx: DynaContext = DynaContext.empty
+  ): ZIO[_BiMapRegistry, DynaLensError, T] = {
 
     def processPaths(
-        paths: List[List[PathElement]],
+        paths: List[List[Path.PathElement]],
         refObj: Any,
-        dynalens: Option[DynaLens[?]],
-        ctx: DynaContext
+        dynalensOpt: Option[DynaLens[?]],
+        ctx: DynaContext,
+        outer: DynaContext,
+        bodyFn: Fn[Any]
     ): ZIO[_BiMapRegistry, DynaLensError, Any] =
-      dynalens
-        .map(lens =>
-          paths match {
-            case pathParts :: Nil =>
-              val partialPath = Path.partialPath(pathParts)
-              for {
-                in <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
-                maybeLens = pathParts.last match {
-                  case IndexedField(p, _) => lens._registry.get(p).orElse(None)
-                  case Field(p)           => None
-                }
-                _ = ctx.put("this", (in, maybeLens)) // assign loop param variable
-                enrichedCtx = outerCtx ++ ctx.toMap // <-- merge loop context with outer context
-                out <- fn.resolve(enrichedCtx)
-                updated <- lens.update(partialPath, out, refObj.asInstanceOf[lens.ThisT])
-              } yield updated
+      dynalensOpt match {
+        case None =>
+          ZIO.fail(DynaLensError("Internal: missing lens for map()"))
 
-            case pathParts :: rest =>
-              val partialPath = Path.partialPath(pathParts)
-              val loopKey = pathParts.last.name
-              for {
-                listVal <- lens.get(partialPath, refObj.asInstanceOf[lens.ThisT])
-                iterable <- ZIO.fromEither(listVal match {
-                  case i: Iterable[?]       => Right(i)
-                  case Some(i: Iterable[?]) => Right(i)
-                  case None                 => Right(Nil)
-                  case other =>
-                    Left(DynaLensError(s"Expected iterable at path '$partialPath', but found: ${other.getClass.getName}"))
-                })
-                maybeLensForList <- ctx.get(loopKey) match {
-                  case Some((_, existingLens)) => ZIO.succeed(existingLens)
-                  case None =>
-                    ZIO.fail(DynaLensError(s"No existing lens found in ctx for key: $loopKey"))
-                }
-                updatedIterable <- ZIO.foreach(iterable) { item =>
-                  ctx.update(loopKey, (item, maybeLensForList)) // update ctx with current item
-                  processPaths(rest, item, maybeLensForList, ctx) // recurse
-                }
-                updatedRefObj <- lens.update(partialPath, updatedIterable, refObj.asInstanceOf[lens.ThisT])
-              } yield updatedRefObj
+        case Some(lens) =>
+          for {
+            res <- paths match {
+              // ----- LEAF -----
+              case pathParts :: Nil =>
+                val partial = Path.partialPath(pathParts)
+                for {
+                  in <- lens._getValue(pathParts, refObj.asInstanceOf[lens.ThisT])
 
-            case Nil =>
-              ZIO.fail(DynaLensError("Should Never Happen(tm)"))
-          }
-        )
-        .orNull
+                  // if last segment was an indexed field, you already compute maybeLens
+                  maybeLens = pathParts.last match {
+                    case Path.IndexedField(fieldName, _, _) => lens._registry.get(fieldName)
+                    case _                                  => None
+                  }
 
-    val parsed = parsePath(path)
+                  // If it's a (option-)map, transform entries and write back right here.
+                  updatedRef <- in match {
+                    // ----- Map leaf -----
+                    case mm: scala.collection.Map[?, ?] @unchecked =>
+                      val m = mm.asInstanceOf[scala.collection.Map[Any, Any]]
+
+                      // lens for the MAP VALUE (if any)
+                      val parentLens = lensForPathPrefix(lens, pathParts.dropRight(1))
+                      val valueLens = parentLens.flatMap(_._registry.get(pathParts.last.name))
+
+                      // transform (k,v) -> (nk,nv)
+                      for {
+                        pairs <- ZIO.foreach(m.toList) { case (k, v) =>
+                          withKeyScoped(ctx, "key", (k, None)) {
+                            withKeyScoped(ctx, "value", (v, valueLens)) {
+                              withThisScoped(ctx, (k, v), valueLens) {
+                                fn.resolve(ctx).flatMap {
+                                  case (nk: Any, nv: Any) => ZIO.succeed((nk, nv))
+                                  case other =>
+                                    ZIO.fail(DynaLensError(s"Map body must return (key, value) tuple, got: ${other.getClass.getSimpleName}"))
+                                }
+                              }
+                            }
+                          }
+                        }
+                        rebuilt = pairs.toMap
+                        out <- lens.update(partial, rebuilt, refObj.asInstanceOf[lens.ThisT])
+                      } yield out
+
+                    // ----- Option[Map] leaf -----
+                    case Some(mm: scala.collection.Map[?, ?] @unchecked) =>
+                      val m = mm.asInstanceOf[scala.collection.Map[Any, Any]]
+                      val parentLens = lensForPathPrefix(lens, pathParts.dropRight(1))
+                      val valueLens = parentLens.flatMap(_._registry.get(pathParts.last.name))
+
+                      for {
+                        pairs <- ZIO.foreach(m.toList) { case (k, v) =>
+                          withKeyScoped(ctx, "key", (k, None)) {
+                            withKeyScoped(ctx, "value", (v, valueLens)) {
+                              withThisScoped(ctx, (k, v), valueLens) {
+                                fn.resolve(ctx).flatMap {
+                                  case (nk: Any, nv: Any) => ZIO.succeed((nk, nv))
+                                  case other =>
+                                    ZIO.fail(DynaLensError(s"Map body must return (key, value) tuple, got: ${other.getClass.getSimpleName}"))
+                                }
+                              }
+                            }
+                          }
+                        }
+                        rebuilt = pairs.toMap
+                        out <- lens.update(partial, Some(rebuilt), refObj.asInstanceOf[lens.ThisT])
+                      } yield out
+
+                    // Option[Map] == None → write back None (or keep as-is if you prefer)
+                    case None =>
+                      lens.update(partial, None, refObj.asInstanceOf[lens.ThisT])
+
+                    // ----- All other shapes: Option[non-map], list, scalar -----
+                    case Some(v) =>
+                      val enriched = outerCtx ++ ctx.set("this", (v, maybeLens)).toMap
+                      for {
+                        o <- fn.resolve(enriched)
+                        out <- lens.update(partial, Some(o), refObj.asInstanceOf[lens.ThisT])
+                      } yield out
+
+                    case nonOpt =>
+                      val enriched = outerCtx ++ ctx.set("this", (nonOpt, maybeLens)).toMap
+                      for {
+                        o <- fn.resolve(enriched)
+                        out <- lens.update(partial, o, refObj.asInstanceOf[lens.ThisT])
+                      } yield out
+                  }
+                } yield updatedRef
+
+              // ----- DESCENT -----
+              case pathParts :: rest =>
+                val partial = Path.partialPath(pathParts)
+                val collName = pathParts.last.name
+
+                for {
+                  collVal <- lens._getValue(pathParts, refObj.asInstanceOf[lens.ThisT])
+
+                  // Detect map vs list, and normalize to entries/items we can foreach
+                  isMap = collVal.isInstanceOf[scala.collection.immutable.Map[?, ?]] ||
+                    collVal.isInstanceOf[scala.collection.mutable.Map[?, ?]] ||
+                    collVal.isInstanceOf[Option[?]] && collVal.asInstanceOf[Option[?]].exists(_.isInstanceOf[scala.collection.Map[?, ?]])
+
+                  // For maps, iterate entries; for lists, iterate items (existing)
+                  iterableE <- ZIO.fromEither {
+                    collVal match {
+                      case m: scala.collection.Map[?, ?] @unchecked =>
+                        Right(m.asInstanceOf[scala.collection.Map[Any, Any]].toList) // entries
+                      case Some(m: scala.collection.Map[?, ?] @unchecked) =>
+                        Right(m.asInstanceOf[scala.collection.Map[Any, Any]].toList)
+                      case None =>
+                        Right(Nil)
+                      case it: Iterable[?] =>
+                        Right(it.asInstanceOf[Iterable[Any]])
+                      case Some(it: Iterable[?]) =>
+                        Right(it.asInstanceOf[Iterable[Any]])
+                      case other =>
+                        Left(DynaLensError(s"Expected iterable at path '$partial', but got: ${other.getClass.getName}"))
+                    }
+                  }
+
+                  // Discover the element/value lens if needed
+                  parentLens = lensForPathPrefix(lens, pathParts.dropRight(1))
+                  elemLens = parentLens.flatMap(_._registry.get(collName))
+
+                  _ <-
+                    if rest.nonEmpty && elemLens.isEmpty && !isMap then ZIO.fail(DynaLensError(s"No lens registered for elements of '$collName' (needed to map nested path '$partial')"))
+                    else ZIO.unit
+
+                  updatedIterable <- {
+                    if isMap then {
+                      // Iterate entries: (k, v)
+                      withCollectionSymbol(ctx, collName, iterableE) {
+                        ZIO.foreach(iterableE.asInstanceOf[List[(Any, Any)]]) { case (k, v) =>
+                          withKeyScoped(ctx, "key", (k, None)) {
+                            withKeyScoped(ctx, "value", (v, elemLens)) {
+                              withThisScoped(ctx, (k, v), elemLens) {
+                                if rest.nonEmpty then {
+                                  // Recurse into the VALUE part for nested paths
+                                  processPaths(rest, v, elemLens, ctx, outer, bodyFn).map(nv => (k, nv))
+                                } else {
+                                  // Leaf map: RHS must yield (newKey, newValue)
+                                  bodyFn.resolve(ctx).flatMap {
+                                    case (nk: Any, nv: Any) => ZIO.succeed((nk, nv))
+                                    case other =>
+                                      ZIO.fail(
+                                        DynaLensError(
+                                          s"Map body must return (key, value) tuple, got: ${other.getClass.getSimpleName}"
+                                        )
+                                      )
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    } else {
+                      // Existing list/seq path unchanged
+                      withCollectionSymbol(ctx, collName, iterableE) {
+                        ZIO.foreach(iterableE) { item =>
+                          withLoopSymbol(ctx, collName, item, elemLens) {
+                            processPaths(rest, item, elemLens, ctx, outer, bodyFn)
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  updatedRef <- {
+                    if isMap then {
+                      // Rebuild a real Map from updated entries and write it back
+                      val rebuilt = updatedIterable.asInstanceOf[List[(Any, Any)]].toMap
+                      lens._updateValue(pathParts, rebuilt, refObj.asInstanceOf[lens.ThisT])
+                    } else {
+                      // Existing list writeback
+                      lens._updateValue(pathParts, updatedIterable, refObj.asInstanceOf[lens.ThisT])
+                    }
+                  }
+                } yield updatedRef
+
+              case Nil =>
+                ZIO.fail(DynaLensError("Should Never Happen(tm)"))
+            }
+          } yield res
+      }
+
+    val parsed = Path.parsePath(path)
     for {
+      // establish a loop frame/bindings for the full path (top, etc.)
       ctx <- walkPath(parsed, obj, this)
       splitPaths = splitIntoLevels(parsed)
-      updated <- processPaths(splitPaths, obj, Some(this), ctx)
+      updated <- processPaths(splitPaths, obj, Some(this), ctx, outerCtx, fn.asInstanceOf[Fn[Any]])
     } yield updated.asInstanceOf[T]
+  }
 
 object DynaLens:
 
@@ -316,6 +727,7 @@ object DynaLens:
                       val keyExpr = Expr(field.name)
                       Some('{ $keyExpr -> $lensExpr })
                 case _ => None
+            // For Option[Seq] if option element type is a class make sure we put lens in registry
             case c: OptionRef[?] if c.optionParamType.isInstanceOf[SeqRef[?]] =>
               c.optionParamType match
                 case s: SeqRef[?] =>
@@ -335,9 +747,21 @@ object DynaLens:
           val listExpr: Expr[List[(String, DynaLens[?])]] = Expr.ofList(pairs)
           '{ Map.from[String, DynaLens[?]]($listExpr) }
         }
-        val typeNameExpr = Expr(s.typedName.toString)
 
-        '{ DynaLens[T]($updateLambdaExpr, $getLambdaExpr, $registryExpr, $typeNameExpr) }
+        val elemOptPairs =
+          s.fields.map { f =>
+            val isElemOpt = f.fieldRef match
+              case s: SeqRef[?] => s.elementRef.isInstanceOf[OptionRef[?]]
+              case _            => false
+            f.name -> isElemOpt
+          }
+        val elemIsOptionalExpr: Expr[Map[String, Boolean]] =
+          liftMapBoolean(elemOptPairs.toMap)
+
+        val typeNameExpr = Expr(s.typedName.toString)
+        val typeInfoExpr = liftTypeInfo(buildPathTree(s))
+
+        '{ DynaLens[T]($updateLambdaExpr, $getLambdaExpr, $registryExpr, $typeNameExpr, $typeInfoExpr, $elemIsOptionalExpr) }
 
       case x => throw new Exception(s"Sorry, dynalens only supports Scala case classes but received ${x.name}")
     }
@@ -450,3 +874,111 @@ object DynaLens:
         Match(fieldParam, cases :+ fallback)
       }
     ).asExprOf[(String, Any, T) => ZIO[Any, DynaLensError, T]]
+
+  /** Build the schema tree used for path rewriting/type checks. */
+  // Build the schema tree used as typeInfo for the compiler/rewrite
+  // Encodes containers with a typed child:
+  //   - lists: "__type" -> "[]"/"[]?", "__elemType" -> <shape>
+  //   - maps:  "__type" -> "{}"/"{}?", "__valType"  -> <shape>
+  //   - classes: fields map + "__type" -> "{}"/"{}?"
+  //   - scalars: ""
+  private def buildPathTree(r: RTypeRef[?]): Map[String, Any] = r match {
+    // ----- Case class / product type -----
+    case c: ScalaClassRef[?] =>
+      c.fields.map { f =>
+        val key = f.name
+        val fieldType = f.fieldRef
+
+        // shape builder for nested “value/element” positions
+        def valueShapeOf(ref: RTypeRef[?]): Any = ref match {
+          case scr: ScalaClassRef[?] =>
+            // full nested class shape
+            buildPathTree(scr) + ("__type" -> "{}")
+          case s: SeqRef[?] =>
+            Map(
+              "__type" -> "[]",
+              "__elemType" -> valueShapeOf(s.elementRef) // recursive element shape
+            )
+          case m: MapRef[?] =>
+            Map(
+              "__type" -> "{}",
+              "__valType" -> valueShapeOf(m.elementRef2) // recursive value shape
+            )
+          case _ =>
+            "" // primitive / string / other scalar
+        }
+
+        val node: Any = fieldType match {
+          // ----- Option[T] -----
+          case o: OptionRef[?] =>
+            o.optionParamType match {
+              case scr: ScalaClassRef[?] =>
+                // Optional case class → include its fields + {}?
+                buildPathTree(scr) + ("__type" -> "{}?")
+              case s: SeqRef[?] =>
+                // Optional list → []? with typed elem
+                Map(
+                  "__type" -> "[]?",
+                  "__elemType" -> valueShapeOf(s.elementRef)
+                )
+              case m: MapRef[?] =>
+                // Optional map → {}? with typed value
+                Map(
+                  "__type" -> "{}?",
+                  "__valType" -> valueShapeOf(m.elementRef2)
+                )
+              case _ =>
+                "?" // optional scalar
+            }
+
+          // ----- Seq/List/Array[T] -----
+          case s: SeqRef[?] =>
+            Map(
+              "__type" -> "[]",
+              "__elemType" -> valueShapeOf(s.elementRef)
+            )
+
+          // ----- Map[K,V] -----
+          case m: MapRef[?] =>
+            Map(
+              "__type" -> "{}",
+              "__valType" -> valueShapeOf(m.elementRef2)
+            )
+
+          // ----- Nested case class (non-container) -----
+          case scr: ScalaClassRef[?] =>
+            buildPathTree(scr) + ("__type" -> "{}")
+
+          // ----- Scalar -----
+          case _ =>
+            "" // primitive / string
+        }
+
+        key -> node
+      }.toMap
+
+    // Fallback: non-class root (unlikely in your use)
+    case _ =>
+      Map.empty
+  }
+
+  private def liftTypeInfo(map: Map[String, Any])(using Quotes): Expr[Map[String, Any]] = {
+    val liftedPairs: List[Expr[(String, Any)]] = map.toList.map {
+      case (k, v: String) =>
+        '{ Tuple2(${ Expr(k) }, ${ Expr(v) }) }
+      case (k, v: Map[String @unchecked, Any @unchecked]) =>
+        val nested: Expr[Map[String, Any]] = liftTypeInfo(v)
+        '{ Tuple2(${ Expr(k) }, $nested) }
+      case (k, _) =>
+        quotes.reflect.report.error(s"Unsupported type for key: $k"); '{ ??? }
+    }
+
+    val liftedListExpr: Expr[List[(String, Any)]] = Expr.ofList(liftedPairs)
+    '{ Map[String, Any]().++($liftedListExpr) }
+  }
+
+  private def liftMapBoolean(map: Map[String, Boolean])(using Quotes): Expr[Map[String, Boolean]] = {
+    val pairs: List[Expr[(String, Boolean)]] =
+      map.toList.map { case (k, v) => '{ (${ Expr(k) }, ${ Expr(v) }) } }
+    '{ Map[String, Boolean](${ Varargs(pairs) }*) }
+  }

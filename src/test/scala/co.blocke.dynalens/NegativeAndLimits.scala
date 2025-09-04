@@ -25,7 +25,9 @@ import zio.*
 import zio.test.*
 
 import DynaLens.*
-import parser.Parser
+import parser.Script
+
+import CtxStrings.*
 
 object NegativeAndLimits extends ZIOSpecDefault:
 
@@ -41,13 +43,13 @@ object NegativeAndLimits extends ZIOSpecDefault:
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(flag,IfFn(GreaterThanFn(GetFn(qty,false,None,false,false),ConstantFn(5)),BlockFn(List(),ConstantFn(big)),BlockFn(List(),ConstantFn(small))))))"""
+        """BlockStmt(List(ValStmt(flag,IfFn(GreaterThanFn(GetFn(qty),ConstantFn(5)),BlockFn(List(),ConstantFn(big)),BlockFn(List(),ConstantFn(small))))))"""
 
       val inst = Item("abc", 6)
       val a = dynalens[Item]
 
       for {
-        compiled <- Parser.parseScript(script)
+        compiled <- Script.compile(script, a)
         (_, ctx) <- a.run(compiled, inst)
       } yield assertTrue(
         ctx("flag")._1 == "big",
@@ -58,11 +60,11 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val script = "bogus = 99"
       val a = dynalens[Item]
 
-      val result = Parser.parseScriptNoZIO(script).flatMap(compiled => a.runNoZIO(compiled, Item("abc", 2)))
+      val result = Script.compileNoZIO(script, a).flatMap(compiled => a.runNoZIO(compiled, Item("abc", 2)))
 
       result match {
         case Left(err: DynaLensError) =>
-          assertTrue(err.msg.contains("Field not found: bogus"))
+          assertTrue(err.msg.contains("Error: Field 'bogus' does not exist in typeInfo"))
         case _ =>
           assertTrue(false).label("Expected error did not occur")
       }
@@ -71,7 +73,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val script = """val x = name > 5""" // name is String, not Int
       val a = dynalens[Person]
 
-      val result = Parser.parseScriptNoZIO(script).flatMap(compiled => a.runNoZIO(compiled, Person("bob", 35)))
+      val result = Script.compileNoZIO(script, a).flatMap(compiled => a.runNoZIO(compiled, Person("bob", 35)))
       result match {
         case Left(err: DynaLensError) =>
           assertTrue(err.msg.contains("Cannot compare types: class java.lang.String and class java.lang.Integer"))
@@ -87,7 +89,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
 
       val script = """giftDesc[].mapTo("testmap")"""
       val result = for {
-        compiled <- Parser.parseScript(script)
+        compiled <- Script.compile(script, a)
         output <- a.run(compiled, inst, ctx)
       } yield output
 
@@ -108,11 +110,11 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Registry]
 
       val expected = Registry("r1", Nil, List("a", "b"))
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftDesc[],CleanFn())))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftDesc[],CleanFn(IdentityFn))))"""
       val expectedResult = "top -> Registry(r1,List(),List(a, b))\n"
 
       for {
-        compiled <- Parser.parseScript(script)
+        compiled <- Script.compile(script, a)
         (x, ctx) <- a.run(compiled, inst)
         ctxStr = toStringCtx(ctx)
       } yield assertTrue(
@@ -127,11 +129,11 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Registry]
 
       val expected = Registry("r1", List(3, 4), Nil)
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums[],FilterFn(toBooleanFn(GreaterThanFn(GetFn(this,true,None,false,false),ConstantFn(2)))))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums[],FilterFn(IdentityFn,GreaterThanFn(GetFn(this),ConstantFn(2))))))"""
       val expectedResult = "top -> Registry(r1,List(3, 4),List())\n"
 
       for {
-        compiled <- Parser.parseScript(script)
+        compiled <- Script.compile(script, a)
         (x, ctx) <- a.run(compiled, inst)
         ctxStr = toStringCtx(ctx)
       } yield assertTrue(
@@ -140,28 +142,244 @@ object NegativeAndLimits extends ZIOSpecDefault:
         ctxStr == expectedResult
       )
     },
-    test("collection len in predicate") {
+    test("Assignment to optional list (empty)") {
       val script =
         """
-          |  interest[].qty = interest[].len() * 5
+          |  l2[2] = 99
           |""".stripMargin
-      val inst = Maybe("abc", Some("wow"), Some(List(Item("abc", 2, 5), Item("xyz", 1, 7))))
-      val a = dynalens[Maybe]
+      val inst = MyLists(1, List(1, 2, 3), None)
+      val a = dynalens[MyLists]
+      val effect =
+        Script.compile(script, a).flatMap(compiled => a.run(compiled, inst))
 
-      val result = for {
-        compiled <- Parser.parseScript(script)
-        output <- a.run(compiled, inst)
-      } yield output
-
-      result.exit.map {
-        case Exit.Failure(cause) =>
-          cause.failureOption match
-            case Some(DynaLensError(message)) =>
-              assertTrue(message.contains("Sorry...we don't support len() function on collections"))
-            case _ =>
-              assertTrue(false).label("Unexpected error structure")
+      for {
+        res <- effect.either // Either[DynaLensError, (MyLists, DynaContext)]
+      } yield res match {
+        case Left(err) =>
+          assertTrue(err.getMessage.contains("Index 2 out of bounds for field 'l2'"))
+        case Right(_) =>
+          assertTrue(false).label("Expected a DynaLensError, but got success")
+      }
+    },
+    test("Unknown nested field should fail") {
+      val script = "items[].bogus = 1"
+      val a = dynalens[Shipment]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, /* your instance */ ???))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Error: Field 'bogus' does not exist here"))
+        case _         => assertTrue(false).label("Expected unknown field error")
+      }
+    },
+    test("Indexing a non-list should fail") {
+      val script = "qty[0] = 1" // qty is an Int on Item
+      val a = dynalens[Item]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 2)))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Cannot index into non-list field 'qty"))
+        case _         => assertTrue(false).label("Expected 'not a Seq' error")
+      }
+    },
+    test("Fixed index out of bounds should fail") {
+      val script = "giftNums[10] = 9"
+      val inst = Registry("r1", List(1, 2, 3), Nil)
+      val a = dynalens[Registry]
+      val eff = Script.compile(script, a).flatMap(c => a.run(c, inst))
+      for (res <- eff.either) yield res match {
+        case Left(err) => assertTrue(err.getMessage.contains("Index 10 out of bounds for field 'giftNums'"))
+        case Right(_)  => assertTrue(false).label("Expected index OOB error")
+      }
+    },
+    test("Unknown collection method should fail") {
+      val script = "giftNums[].blorp()"
+      val inst = Registry("r1", List(1, 2, 3), Nil)
+      val a = dynalens[Registry]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Unknown collection method: blorp"))
+        case _         => assertTrue(false).label("Expected unknown method error")
+      }
+    },
+    test("Non-boolean predicate in filter should fail") {
+      val script = "giftNums[].filter(123)"
+      val inst = Registry("r1", List(1, 2, 3), Nil)
+      val a = dynalens[Registry]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Expected Boolean result at runtime, but got: Integer = 123"))
+        case _         => assertTrue(false).label("Expected boolean predicate error")
+      }
+    },
+    test("'this' outside collection/map should fail") {
+      val script = "qty = this * 2"
+      val a = dynalens[Item]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 3)))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Use of 'this' with no receiver in scope"))
+        case _         => assertTrue(false).label("Expected 'this' misuse error")
+      }
+    },
+    test("Optional scalar LHS with non-inferable RHS should fail") {
+      // dunno?: Option[String], RHS is a boolean fn here
+      val script = "dunno? = 3 > 5"
+      val a = dynalens[Maybe] // case class Maybe(id: String, dunno: Option[String], ...)
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Maybe("id", None, None)))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Error: Type mismatch: cannot assign Boolean to OptionalScalar at dunno?"))
+        case _         => assertTrue(false).label("Expected RHS inference/type error")
+      }
+    },
+    test("Assigning None to non-optional field should fail") {
+      val script = "qty = None"
+      val a = dynalens[Item]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 3)))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Type mismatch: cannot assign None to Scalar at qty"))
+        case _         => assertTrue(false).label("Expected None→non-optional error")
+      }
+    },
+    test("sortAsc with unknown key should fail") {
+      val script = "pack.shipments.items.sortAsc(bogus)"
+      val a = dynalens[Order] // whatever type has items[]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Order("a", Pack("b", 1, List(Shipment("c", List(Item("d", 3))))))))
+      result match {
+        case Left(err) =>
+          assertTrue(err.msg.contains("Field 'bogus' does not exist"))
         case _ =>
-          assertTrue(false).label("Expected mapTo key failure")
+          assertTrue(false).label("Expected unknown sort key error")
+      }
+    },
+    test("Use of undeclared val symbol should fail") {
+      val script = "qty = x + 1" // x never declared
+      val a = dynalens[Item]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 2)))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Field 'x' does not exist"))
+        case _         => assertTrue(false).label("Expected undeclared symbol error")
+      }
+    },
+    test("equalsIgnoreCase on non-strings should fail") {
+      val script = """val b = items.equalsIgnoreCase("x")"""
+      val a = dynalens[Shipment]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Shipment("aaa", List(Item("wow", 9, 5), Item("xyz", 1, 7), Item("abc", 19, 7)), 1)))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("equalsIgnoreCase receiver may only be applied to a single value, not an Iterable"))
+        case _         => assertTrue(false).label("Expected string-only method type error")
+      }
+    },
+    test("Method not allowed on map/object receiver should fail") {
+      val script = "pack.filter(this > 0)" // if pack is an object/map-ish node
+      val a = dynalens[Order]
+      val result = Script
+        .compileNoZIO(script, a)
+        .flatMap(c =>
+          a.runNoZIO(
+            c,
+            Order(
+              "ord1",
+              Pack(
+                "pallet",
+                2,
+                List(
+                  Shipment("aaa", List(Item("wow", 9, 5), Item("xyz", 1, 7), Item("abc", 19, 7)), 1),
+                  Shipment("bbb", List(Item("free", 7, 5), Item("ace", 5, 7), Item("xyz", 1, 7)), 1)
+                )
+              )
+            )
+          )
+        )
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("filter expected a collection, got: Pack"))
+        case _         => assertTrue(false).label("Expected receiver kind error")
+      }
+    },
+    test("filter using unknown relative field should fail") {
+      val script = "giftNums[].filter(qty > 2)" // giftNums is List[Int], no 'qty' in element scope
+      val inst = Registry("r1", List(1, 2, 3), Nil)
+      val a = dynalens[Registry]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Field 'qty' does not exist"))
+        case _         => assertTrue(false).label("Expected relative path field error")
+      }
+    },
+    test("invalid list method chains should fail") {
+      val script =
+        """
+          |  val x = l1.distinct()
+          |  val y = x[2].sortAsc()
+          |""".stripMargin
+      val inst = ComplexLists(1, List(1, 5, 8, 1, 0, 99, -2), Nil)
+      val a = dynalens[ComplexLists]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("sortAsc() may only be applied to Iterable types, but got: Integer"))
+        case _         => assertTrue(false).label("Expected relative path field error")
+      }
+    },
+    test("indexed list methods type mismatch must fail") {
+      val script =
+        """
+          |  val x = cplx.values()[0] + 2
+          |""".stripMargin
+      val inst = Mapped(1, Map.empty, None, Map("a" -> List(Person("Sam", 45))))
+      val a = dynalens[Mapped]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("AddFn does not support operands of types: class scala.collection.immutable.$colon$colon, class java.lang.Integer"))
+        case _         => assertTrue(false).label("Expected relative path field error")
+      }
+    },
+    test("map get (simple) fails on bad key for m") {
+      val script =
+        """
+          |  val x = m.get("zzz")
+          |""".stripMargin
+      val inst = Mapped(
+        id = 1,
+        m = Map("a" -> 10, "b" -> 20),
+        om = Some(Map("a" -> 5)),
+        cplx = Map("a" -> List(Person("p", 1)))
+      )
+      val a = dynalens[Mapped]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("get(): key 'zzz' not found"))
+        case _         => assertTrue(false).label("Expected relative path field error")
+      }
+    },
+    test("map get (optional map) fails on bad key for om") {
+      val script =
+        """
+          |  val x = om.get("zzz")
+          |""".stripMargin
+      val inst = Mapped(
+        id = 1,
+        m = Map("a" -> 10, "b" -> 20),
+        om = Some(Map("a" -> 5)),
+        cplx = Map("a" -> List(Person("p", 1)))
+      )
+      val a = dynalens[Mapped]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("get(): key 'zzz' not found"))
+        case _         => assertTrue(false).label("Expected relative path field error")
+      }
+    },
+    test("No case match (strict)") {
+      val script =
+        """
+          |  m => ( this.key
+          |       , this.value case {
+          |           1  -> 7
+          |           2 -> 19
+          |         })
+          |""".stripMargin
+      val inst = Mapped(1, m = Map("a" -> 1, "b" -> 2, "c" -> 3), om = None, cplx = Map())
+      val a = dynalens[Mapped]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("No case matched for value: 3"))
+        case _         => assertTrue(false).label("Expected relative path field error")
       }
     }
   )

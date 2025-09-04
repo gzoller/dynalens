@@ -21,42 +21,49 @@
 
 package co.blocke.dynalens
 
-type DynaContext = scala.collection.mutable.Map[String, (Any, Option[DynaLens[?]])]
+import zio.*
 
-object DynaContext:
-  def apply(target: Any, lens: Option[DynaLens[?]]): DynaContext =
-    scala.collection.mutable.Map("top" -> (target, lens))
+final case class DynaLensError(msg: String) extends Exception(msg)
 
-  def empty: DynaContext = scala.collection.mutable.Map.empty
+//
+// ExprContext used during compilation
+//
+enum SymbolType:
+  case Exempt // eg top
+  case Normal
+  case OptionalScalar
+  case OptionalScalaWithDefault
+  case OptionalList
+  case OptionalMap
 
-extension (ctx: DynaContext)
-  def updatedWith(k: String, v: (Any, Option[DynaLens[?]])): DynaContext =
-    val copy = ctx.clone().asInstanceOf[DynaContext]
-    copy += (k -> v)
-    copy
+def asSeq(v: Any, where: String): Either[DynaLensError, Seq[Any]] =
+  v match {
+    case null            => Right(Seq.empty) // be lenient
+    case s: Seq[?]       => Right(s.asInstanceOf[Seq[Any]])
+    case it: Iterable[?] => Right(it.toSeq.asInstanceOf[Seq[Any]])
+    case other           => Left(DynaLensError(s"$where expected a collection, got: ${other.getClass.getSimpleName}"))
+  }
 
-case class ExprContext(searchThis: Boolean = false)
+// Tiny record exposed to scripts when mapping over Map[K, V]
+final case class EntryKV(key: Any, value: Any)
 
-given defaultExprContext: ExprContext = ExprContext()
-
-def unwrapOption(
-    path: String,
-    obj: Any,
-    elseValue: Option[Fn[Any]],
-    isDefined: Boolean,
-    useRawValue: Boolean = false // don't unwrap Option
-): Either[DynaLensError, Either[Fn[Any], Any]] =
-  obj match
-    case opt: Option[?] =>
-      if isDefined then Right(Right(opt.isDefined))
-      else if path.endsWith("[]") then Right(Right(opt.getOrElse(Nil)))
-      else if useRawValue then Right(Right(opt))
-      else if elseValue.isDefined then
-        opt match
-          case Some(actual) => Right(Right(actual))
-          case None =>
-            Right(Left(elseValue.get)) // defer resolution
-      else Left(DynaLensError(s"Access to optional field '$path' requires .else(...)"))
-
-    case other =>
-      Right(Right(other))
+// Lens for EntryKV so GetFn("this.key") / GetFn("this.value") can descend
+val entryLens: DynaLens[EntryKV] =
+  DynaLens[EntryKV](
+    _update = (field, v, obj) =>
+      field match {
+        case "key"   => ZIO.succeed(obj.copy(key = v))
+        case "value" => ZIO.succeed(obj.copy(value = v))
+        case other   => ZIO.fail(DynaLensError(s"EntryKV: no such field '$other'"))
+      },
+    _get = (field, obj) =>
+      field match {
+        case "key"   => ZIO.succeed(Some(obj.key))
+        case "value" => ZIO.succeed(Some(obj.value))
+        case other   => ZIO.fail(DynaLensError(s"EntryKV: no such field '$other'"))
+      },
+    _registry = Map.empty, // no nested fields
+    _typeName = "EntryKV",
+    _typeInfo = Map("key" -> "", "value" -> "", "__type" -> "{}"),
+    _elemIsOptional = Map.empty
+  )

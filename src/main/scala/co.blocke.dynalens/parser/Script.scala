@@ -25,24 +25,21 @@ package parser
 import fastparse.*
 import zio.*
 
-object Parser:
+object Script {
 
-  def parseScript(script: String): ZIO[Any, DynaLensError, BlockStmt] =
-    ZIO
-      .attempt {
-        val result = parse(script, script => Grammar.topLevelBlock(using script))
-        result match {
-          case Parsed.Success(ast, _) => ast
-          case f: Parsed.Failure      => throw new RuntimeException(f.trace().longMsg)
-        }
-      }
-      .mapError(ex => DynaLensError(s"Parse error: ${ex.getMessage}"))
+  def compile(script: String, lens: DynaLens[?]): zio.Task[BlockStmt] =
+    given ExprContext = ExprContext(lens._typeInfo)
+    zio.ZIO
+      .fromEither(parseScript(script))
+      .mapError(err => DynaLensError(err.render(script)))
 
-  def parseScriptNoZIO(script: String): Either[DynaLensError, BlockStmt] =
-    Unsafe.unsafe { implicit unsafe =>
-      Runtime.default.unsafe
-        .run(
-          parseScript(script).either
-        )
-        .getOrThrow()
+  def compileNoZIO(script: String, lens: DynaLens[?]): Either[DynaLensError, BlockStmt] =
+    given ExprContext = ExprContext(lens._typeInfo)
+    parseScript(script).left.map(err => DynaLensError(err.render(script)))
+
+  private def parseScript(script: String)(using ExprContext): Either[DLCompileError, BlockStmt] =
+    parse(script, s => Grammar.topLevelBlock(using s)) match {
+      case Parsed.Success(astEither, _) => astEither // Either[DLCompileError, BlockStmt]
+      case f: Parsed.Failure            => Left(DLCompileError(f.index, f.trace().longMsg))
     }
+}
