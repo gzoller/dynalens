@@ -47,6 +47,7 @@ def asSeq(v: Any, where: String): Either[DynaLensError, Seq[Any]] =
 // Tiny record exposed to scripts when mapping over Map[K, V]
 final case class EntryKV(key: Any, value: Any)
 
+/*
 // Lens for EntryKV so GetFn("this.key") / GetFn("this.value") can descend
 val entryLens: DynaLens[EntryKV] =
   DynaLens[EntryKV](
@@ -65,5 +66,31 @@ val entryLens: DynaLens[EntryKV] =
     _registry = Map.empty, // no nested fields
     _typeName = "EntryKV",
     _typeInfo = Map("key" -> "", "value" -> "", "__type" -> "{}"),
+    _schema = Schema.buildSchema(
+      co.blocke.scala_reflection.RType.of[EntryKV]
+        .asInstanceOf[co.blocke.scala_reflection.impl.ScalaClassRef[?]]
+    ),
     _elemIsOptional = Map.empty
   )
+  */
+
+import scala.quoted.*
+
+given ToExpr[FieldType] with
+  def apply(ft: FieldType)(using Quotes): Expr[FieldType] = ft match
+    case ScalarType(name, typeName) =>
+      '{ ScalarType(${Expr(name)}, ${Expr(typeName)}) }
+    case OptionType(name, valueType, typeName) =>
+      '{ OptionType(${Expr(name)}, ${Expr(valueType)}, ${Expr(typeName)}) }
+    case ListType(name, elemType, typeName) =>
+      '{ ListType(${Expr(name)}, ${Expr(elemType)}, ${Expr(typeName)}) }
+    case MapType(name, keyType, valueType, typeName) =>
+      '{ MapType(${Expr(name)}, ${Expr(keyType)}, ${Expr(valueType)}, ${Expr(typeName)}) }
+    case ClassType(name, typeName) =>
+      '{ ClassType(${Expr(name)}, ${Expr(typeName)}) }
+    case ParamClassType(name, typeName, schema) =>
+      '{ ParamClassType(${Expr(name)}, ${Expr(typeName)}, ${Expr(schema)}) }
+
+given ToExpr[Schema] with
+  def apply(s: Schema)(using Quotes): Expr[Schema] =
+    '{ Schema(${Expr(s.className)}, ${Expr(s.fields)}, ${Expr(s.catalog)}) }

@@ -1,0 +1,8 @@
+
+Features for 1.2.0:
+
+* Full type system
+
+* Pluggable function definition
+
+* lens pairs (assign A->B)

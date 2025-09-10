@@ -36,6 +36,7 @@ case class DynaLens[T](
     _registry: Map[String, DynaLens[?]],
     _typeName: String,
     _typeInfo: Map[String, Any],
+    _schema: Schema,
     _elemIsOptional: Map[String, Boolean] // per-field: Seq element is Option[_]?
 ):
   type ThisT = T
@@ -761,7 +762,9 @@ object DynaLens:
         val typeNameExpr = Expr(s.typedName.toString)
         val typeInfoExpr = liftTypeInfo(buildPathTree(s))
 
-        '{ DynaLens[T]($updateLambdaExpr, $getLambdaExpr, $registryExpr, $typeNameExpr, $typeInfoExpr, $elemIsOptionalExpr) }
+        val schemaExpr = Expr(Schema.buildSchema(s))
+
+        '{ DynaLens[T]($updateLambdaExpr, $getLambdaExpr, $registryExpr, $typeNameExpr, $typeInfoExpr, $schemaExpr, $elemIsOptionalExpr) }
 
       case x => throw new Exception(s"Sorry, dynalens only supports Scala case classes but received ${x.name}")
     }
