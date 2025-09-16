@@ -22,8 +22,11 @@
 package co.blocke.dynalens
 
 import zio.*
+import scala.quoted.*
 
 final case class DynaLensError(msg: String) extends Exception(msg)
+
+final case class DynaLensBuildContext(quotes: Quotes)
 
 //
 // ExprContext used during compilation
@@ -47,35 +50,12 @@ def asSeq(v: Any, where: String): Either[DynaLensError, Seq[Any]] =
 // Tiny record exposed to scripts when mapping over Map[K, V]
 final case class EntryKV(key: Any, value: Any)
 
-/*
-// Lens for EntryKV so GetFn("this.key") / GetFn("this.value") can descend
-val entryLens: DynaLens[EntryKV] =
-  DynaLens[EntryKV](
-    _update = (field, v, obj) =>
-      field match {
-        case "key"   => ZIO.succeed(obj.copy(key = v))
-        case "value" => ZIO.succeed(obj.copy(value = v))
-        case other   => ZIO.fail(DynaLensError(s"EntryKV: no such field '$other'"))
-      },
-    _get = (field, obj) =>
-      field match {
-        case "key"   => ZIO.succeed(Some(obj.key))
-        case "value" => ZIO.succeed(Some(obj.value))
-        case other   => ZIO.fail(DynaLensError(s"EntryKV: no such field '$other'"))
-      },
-    _registry = Map.empty, // no nested fields
-    _typeName = "EntryKV",
-    _typeInfo = Map("key" -> "", "value" -> "", "__type" -> "{}"),
-    _schema = Schema.buildSchema(
-      co.blocke.scala_reflection.RType.of[EntryKV]
-        .asInstanceOf[co.blocke.scala_reflection.impl.ScalaClassRef[?]]
-    ),
-    _elemIsOptional = Map.empty
-  )
-  */
-
 import scala.quoted.*
 
+given ToExpr[ClassType] with
+  def apply(ct: ClassType)(using Quotes): Expr[ClassType] =
+    '{ ClassType(${ Expr(ct.name) }, ${ Expr(ct.typeName) }) }
+    
 given ToExpr[FieldType] with
   def apply(ft: FieldType)(using Quotes): Expr[FieldType] = ft match
     case ScalarType(name, typeName) =>
@@ -90,6 +70,8 @@ given ToExpr[FieldType] with
       '{ ClassType(${Expr(name)}, ${Expr(typeName)}) }
     case ParamClassType(name, typeName, schema) =>
       '{ ParamClassType(${Expr(name)}, ${Expr(typeName)}, ${Expr(schema)}) }
+    case SealedTraitType(name, subTypes, typeName) =>
+      '{ SealedTraitType(${Expr(name)}, ${Expr(subTypes)}, ${Expr(typeName)}) }
 
 given ToExpr[Schema] with
   def apply(s: Schema)(using Quotes): Expr[Schema] =

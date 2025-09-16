@@ -43,3 +43,22 @@ case class Mapped(id: Int, m: Map[String, Int], om: Option[Map[String, Int]], cp
 
 // Schema test classes
 case class Foo(a: String, b: Int)
+case class Listy(names: List[String])
+case class Opty(maybeId: Option[Int])
+case class Mappy(props: Map[String, Int])
+case class Combo(
+                  notes: Option[List[Int]],
+                  props: Map[String, Option[Int]]
+                )
+
+case class Address(city: String, zip: String)
+case class Wrapper[T](value: T)
+case class Person2(name: String, address: Address)
+case class Order2(id: String, item: Wrapper[Address])
+
+sealed trait Animal:
+  val name: String
+case class Dog(name: String, barkVolume: Int) extends Animal
+case class Cat(name: String, lives: Int)      extends Animal
+
+case class Zoo(animal: Animal)

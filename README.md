@@ -79,6 +79,10 @@ val result: Either[DynaLensError, (Shipment, DynaContext)] =
   } yield output
 ```
 
+### Limitations
+* Currently generic types (parameterized types like Foo[T]) are not supported.
+* Un-sealed traits are not supported
+
 ### dynalens Script Language Reference
 * [Documentation](doc/dyna_lens_documentation.md)
 

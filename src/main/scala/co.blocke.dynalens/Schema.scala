@@ -20,6 +20,9 @@ case class ParamClassType(
                            typeName: String, // Fully qualified, like "Wrapper[Int]"
                            schema: Schema // Fully resolved, **inlined**
                          ) extends FieldType
+case class SealedTraitType(name: String,
+                           subTypes: List[ClassType],
+                           typeName: String) extends FieldType
 
 case class ResolvedType(
                          fieldType: FieldType,
@@ -86,6 +89,22 @@ case class Schema(
             case pc: ParamClassType =>
               Schema(pc.schema.className, pc.schema.fields, catalog).resolvePath(tail, optDepth)
 
+            // ---- SealedTrait ----
+            case st: SealedTraitType =>
+              // The path must specify which concrete subtype to descend into.
+              // We expect the next segment to match one of the known ClassType names.
+              tail match
+                case subHead :: subTail =>
+                  st.subTypes.find(_.typeName.endsWith(subHead)) match
+                    case Some(classType) =>
+                      catalog.get(classType.typeName)
+                        .flatMap(_.resolvePath(subTail, optDepth))
+                    case None =>
+                      None
+                case Nil =>
+                  // If no subtype is specified, treat the trait itself as the end of the path
+                  Some(ResolvedType(st, optDepth))
+
             // ---- List[T] ----
             case lt: ListType =>
               lt.elementType match
@@ -141,41 +160,97 @@ case class Schema(
 
 
 object Schema:
-  def buildSchema(ref: ScalaClassRef[?]): Schema = {
+  def buildSchema(ref: ScalaClassRef[?]): Schema =
     val fields: List[FieldType] =
-      ref.fields.map { f =>
-        fieldTypeFromRTypeRef(f.name, f.fieldRef)
-      }
+      ref.fields.map(f => fieldTypeFromRTypeRef(f.name, f.fieldRef))
+
+    // Catalog only needs plain classes
+    val childSchemas: Map[String, Schema] =
+      ref.fields.collect {
+        case f if f.fieldRef.isInstanceOf[ScalaClassRef[?]] =>
+          val sc = f.fieldRef.asInstanceOf[ScalaClassRef[?]]
+          if sc.isAppliedType || sc.typeParamValues.nonEmpty then
+            // Applied type: do NOT put into catalog
+            None
+          else
+            Some(sc.name -> buildSchema(sc))
+      }.flatten.toMap
 
     Schema(
       className = ref.name,
       fields = fields,
-      catalog = Map.empty // we’ll fill this in once we handle nested classes
+      catalog = childSchemas
     )
-  }
 
   private def fieldTypeFromRTypeRef(fieldName: String, ref: RTypeRef[?]): FieldType = ref match
+    // --- Primitive scalars ---
     case p: PrimitiveRef =>
-      ScalarType(
+      ScalarType(fieldName, p.typedName.toString)
+
+    // --- Option[T] ---
+    case o: OptionRef[?] =>
+      val inner = fieldTypeFromRTypeRef(fieldName, o.optionParamType)
+      OptionType(
         name = fieldName,
-        typeName = p.typedName.toString
+        valueType = inner,
+        typeName = "scala.Option"
       )
 
-    // --- stubs for unhandled cases ---
-    case _: OptionRef[?] =>
-      ScalarType(fieldName, "Option[?]")
+    // --- Seq[T] / List[T] / Array[T] ---
+    case s: SeqRef[?] =>
+      val elem = fieldTypeFromRTypeRef(fieldName, s.elementRef)
+      ListType(
+        name = fieldName,
+        elementType = elem,
+        typeName = s.typedName.toString // "scala.List", "scala.Seq", "scala.Array"
+      )
 
-    case _: SeqRef[?] =>
-      ScalarType(fieldName, "List[?]")
+    // --- Map[K,V] ---
+    case m: MapRef[?] =>
+      val key = fieldTypeFromRTypeRef(fieldName, m.elementRef)
+      val value = fieldTypeFromRTypeRef(fieldName, m.elementRef2)
+      MapType(
+        name = fieldName,
+        keyType = key,
+        valueType = value,
+        typeName = m.typedName.toString // "scala.collection.immutable.Map", etc.
+      )
 
-    case _: MapRef[?] =>
-      ScalarType(fieldName, "Map[?,?]")
+    // ---- Traits
+    case t: TraitRef[?] if t.isSealed =>
+      val childSchemas: List[ClassType] =
+        t.sealedChildren.collect { case c: ScalaClassRef[?] =>
+          ClassType(fieldName, c.name)   // catalog entry will carry full schema
+        }
 
-    case _: ScalaClassRef[?] =>
-      ClassType(fieldName, "UnresolvedClass")
+      SealedTraitType(
+        name     = fieldName,
+        subTypes = childSchemas,
+        typeName = t.name
+      )
 
-    case _: TraitRef[?] =>
-      ScalarType(fieldName, "Trait[?]")
+    case t: TraitRef[?] =>
+      // Open trait: refuse or stub out
+      // (Throwing exception here is ok--this is called from macro during compilation, not runtime)
+      throw new UnsupportedOperationException(
+        s"DynaLens Schema only supports sealed traits: ${t.name}"
+      )
+
+    // --- Nested classes (still stubbed for now) ---
+    case sc: ScalaClassRef[?] =>
+      if sc.isAppliedType || sc.typeParamValues.nonEmpty then
+        // e.g., Wrapper[String] => inline its fully-resolved schema
+        ParamClassType(
+          name     = fieldName,
+          typeName = sc.typedName.toString,   // "Wrapper[java.lang.String]"
+          schema   = buildSchema(sc)          // inline the applied class' own schema
+        )
+      else
+        // plain non-generic class reference
+        ClassType(
+          name     = fieldName,
+          typeName = sc.name                   // fully qualified, e.g. "com.foo.Address"
+        )
 
     case _: SelfRefRef[?] =>
       ScalarType(fieldName, "SelfRef[?]")

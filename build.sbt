@@ -46,7 +46,7 @@ ThisBuild / githubWorkflowPublishTargetBranches := Seq(
   RefPredicate.Equals(Ref.Branch("main"))
 )
 ThisBuild / mimaFailOnNoPrevious := false
-ThisBuild / tlBaseVersion := "1.0"
+ThisBuild / tlBaseVersion := "1.1"
 
 // Only needed if you use publishing with TypelevelCiReleasePlugin
 ThisBuild / githubWorkflowPublishTargetBranches := Seq(

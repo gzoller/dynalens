@@ -29,6 +29,7 @@ object Script {
 
   def compile(script: String, lens: DynaLens[?]): zio.Task[BlockStmt] =
     given ExprContext = ExprContext(lens._typeInfo)
+    println("Here: "+lens._typeInfo)
     zio.ZIO
       .fromEither(parseScript(script))
       .mapError(err => DynaLensError(err.render(script)))

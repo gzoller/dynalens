@@ -1,6 +1,3 @@
-package co.blocke.dynalens
-
-
 import zio.test.*
 import DynaLens.*
 
@@ -136,6 +133,92 @@ object SchemaSpec extends ZIOSpecDefault {
         s.fields.map(_.name) == List("a", "b"),
         s.fields.map(_.typeName) == List("java.lang.String", "scala.Int"),
         s.catalog.isEmpty
+      )
+    },
+    test("list of primitives") {
+      val lens = dynalens[Listy]
+      val schema = lens._schema
+
+      assertTrue(
+        schema.className == "co.blocke.dynalens.Listy",
+        schema.fields.collect { case l: ListType => l.typeName } == List("scala.collection.immutable.List[java.lang.String]"),
+        schema.fields.collect { case l: ListType => l.elementType.typeName } == List("java.lang.String")
+      )
+    },
+    test("option of primitive") {
+      val lens = dynalens[Opty]
+      val schema = lens._schema
+
+      assertTrue(
+        schema.className == "co.blocke.dynalens.Opty",
+        schema.fields.collect { case o: OptionType => o.typeName } == List("scala.Option"),
+        schema.fields.collect { case o: OptionType => o.valueType.typeName } == List("scala.Int")
+      )
+    },
+    test("map of string->int") {
+      val lens = dynalens[Mappy]
+      val schema = lens._schema
+
+      assertTrue(
+        schema.className == "co.blocke.dynalens.Mappy",
+        schema.fields.collect { case m: MapType => m.typeName }.head.startsWith("scala.collection"),
+        schema.fields.collect { case m: MapType => m.keyType.typeName } == List("java.lang.String"),
+        schema.fields.collect { case m: MapType => m.valueType.typeName } == List("scala.Int")
+      )
+    },
+    test("option of list, and map with option values") {
+      val lens = dynalens[Combo]
+      val schema = lens._schema
+
+      val notes = schema.fields.collectFirst { case o: OptionType if o.name == "notes" => o }
+      val props = schema.fields.collectFirst { case m: MapType if m.name == "props"   => m }
+
+      assertTrue(
+        notes.isDefined,
+        notes.get.valueType.isInstanceOf[ListType],
+        props.isDefined,
+        props.get.valueType.isInstanceOf[OptionType]
+      )
+    },
+    test("nested plain class is added to master catalog") {
+      val lens   = dynalens[Person2]
+      val schema = lens._schema
+
+      // the Person schema should have a ClassType field for 'address'
+      val addressField = schema.fields.collectFirst { case c: ClassType if c.name == "address" => c }
+      assertTrue(addressField.isDefined)
+
+      // the Address schema must be present in the master catalog
+      val inCatalog = schema.catalog.get(addressField.get.typeName)
+      assertTrue(inCatalog.isDefined)
+
+      // and the Address schema itself should contain its fields
+      assertTrue(
+        inCatalog.get.fields.exists {
+          case ScalarType(n, t) if n == "city" && t == "java.lang.String" => true
+          case _ => false
+        }
+      )
+    },
+    test("parameterized class field is inlined, not in master catalog") {
+      val lens   = dynalens[Order2]
+      val schema = lens._schema
+
+      // the Order schema should have a ParamClassType field for 'item'
+      val itemField = schema.fields.collectFirst { case p: ParamClassType if p.name == "item" => p }
+      assertTrue(itemField.isDefined)
+
+      val paramClass = itemField.get
+
+      // the master catalog should NOT contain a schema for Wrapper[String]
+      assertTrue(schema.catalog.get(paramClass.typeName).isEmpty)
+
+      // but the ParamClassType must contain its own inline schema with a value field
+      assertTrue(
+        paramClass.schema.fields.exists {
+          case ClassType(n, t) if n == "value" && t.endsWith("Address") => true
+          case _ => false
+        }
       )
     }
   )
