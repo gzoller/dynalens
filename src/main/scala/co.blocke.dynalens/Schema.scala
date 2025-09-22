@@ -13,16 +13,19 @@ case class ScalarType(name: String, typeName: String) extends FieldType
 case class OptionType(name: String, valueType: FieldType, typeName: String) extends FieldType
 case class ListType(name: String, elementType: FieldType, typeName: String) extends FieldType
 case class MapType(name: String, keyType: FieldType, valueType: FieldType, typeName: String) extends FieldType
-case class ClassType(name: String, typeName: String) extends FieldType:
-  def resolve(master: Schema): Schema = master.catalog(typeName)
-case class ParamClassType(
-                           name: String,
-                           typeName: String, // Fully qualified, like "Wrapper[Int]"
-                           schema: Schema // Fully resolved, **inlined**
-                         ) extends FieldType
-case class SealedTraitType(name: String,
-                           subTypes: List[ClassType],
-                           typeName: String) extends FieldType
+case class ClassType(
+                      name: String,
+                      typeName: String,
+                      fields: List[FieldType]
+                    ) extends FieldType
+case class SealedTraitType(
+                            name: String,
+                            typeName: String,
+                            fields: List[FieldType],
+                            subTypes: List[String]
+                          ) extends FieldType
+
+case class ValType(name: String, valueType: FieldType, typeName: String) extends FieldType
 
 case class ResolvedType(
                          fieldType: FieldType,
@@ -38,149 +41,99 @@ case class ResolvedType(
     if optionalDepth > 0 then s"Option[$base]" else base
 
 
-case class Schema(
-                   className: String,
-                   fields: List[FieldType],
-                   catalog: Map[String, Schema]
-                 ):
-  def resolvePath(path: String): Option[ResolvedType] =
-    resolvePath(path.split('.').toList, 0)
-
-  def resolvePath(path: List[String], optDepth: Int): Option[ResolvedType] = path match
-    case Nil => None
-
-    case head :: Nil =>
-      fields.find(_.name == head) match
-        // 👇 If the leaf itself is Option[T], unwrap to T and bump optional depth
-        case Some(ot: OptionType) =>
-          Some(ResolvedType(ot.valueType, optDepth + 1))
-
-        case Some(ft) =>
-          Some(ResolvedType(ft, optDepth))
-
-        case None =>
-          // no synthetic .key/.value at leaf level
-          None
-
-    case head :: tail =>
-      fields.find(_.name == head) match
-        case Some(ft) =>
-          ft match
-            // ---- Option[T] ----
-            case ot: OptionType =>
-              ot.valueType match
-                case ct: ClassType =>
-                  catalog.get(ct.typeName).flatMap { sub =>
-                    Schema(ct.typeName, sub.fields, catalog).resolvePath(tail, optDepth + 1)
-                  }
-                case pc: ParamClassType =>
-                  Schema(pc.schema.className, pc.schema.fields, catalog).resolvePath(tail, optDepth + 1)
-                case inner =>
-                  // Not a class-like thing; keep going only if the tail is empty (otherwise it's a dead end).
-                  if tail.isEmpty then Some(ResolvedType(inner, optDepth + 1)) else None
-
-            // ---- Class ----
-            case ct: ClassType =>
-              catalog.get(ct.typeName).flatMap { sub =>
-                Schema(ct.typeName, sub.fields, catalog).resolvePath(tail, optDepth)
-              }
-
-            // ---- ParamClass (already inlined schema) ----
-            case pc: ParamClassType =>
-              Schema(pc.schema.className, pc.schema.fields, catalog).resolvePath(tail, optDepth)
-
-            // ---- SealedTrait ----
-            case st: SealedTraitType =>
-              // The path must specify which concrete subtype to descend into.
-              // We expect the next segment to match one of the known ClassType names.
-              tail match
-                case subHead :: subTail =>
-                  st.subTypes.find(_.typeName.endsWith(subHead)) match
-                    case Some(classType) =>
-                      catalog.get(classType.typeName)
-                        .flatMap(_.resolvePath(subTail, optDepth))
-                    case None =>
-                      None
-                case Nil =>
-                  // If no subtype is specified, treat the trait itself as the end of the path
-                  Some(ResolvedType(st, optDepth))
-
-            // ---- List[T] ----
-            case lt: ListType =>
-              lt.elementType match
-                case ct: ClassType =>
-                  catalog.get(ct.typeName).flatMap { sub =>
-                    Schema(ct.typeName, sub.fields, catalog).resolvePath(tail, optDepth)
-                  }
-                case pc: ParamClassType =>
-                  Schema(pc.schema.className, pc.schema.fields, catalog).resolvePath(tail, optDepth)
-                case elem =>
-                  // Treat as terminal unless you later add explicit []/index semantics.
-                  if tail.isEmpty then Some(ResolvedType(elem, optDepth)) else None
-
-            // ---- Map[K,V] ----
-            case mt: MapType =>
-              tail match
-                case "key" :: Nil =>
-                  Some(ResolvedType(mt.keyType, optDepth))
-
-                case "value" :: valueTail =>
-                  mt.valueType match
-                    case ot: OptionType =>
-                      ot.valueType match
-                        case ct: ClassType =>
-                          catalog.get(ct.typeName).flatMap { sub =>
-                            Schema(ct.typeName, sub.fields, catalog).resolvePath(valueTail, optDepth + 1)
-                          }
-                        case pc: ParamClassType =>
-                          Schema(pc.schema.className, pc.schema.fields, catalog).resolvePath(valueTail, optDepth + 1)
-                        case inner =>
-                          if valueTail.isEmpty then Some(ResolvedType(inner, optDepth + 1)) else None
-
-                    case ct: ClassType =>
-                      catalog.get(ct.typeName).flatMap { sub =>
-                        Schema(ct.typeName, sub.fields, catalog).resolvePath(valueTail, optDepth)
-                      }
-
-                    case pc: ParamClassType =>
-                      Schema(pc.schema.className, pc.schema.fields, catalog).resolvePath(valueTail, optDepth)
-
-                    case other =>
-                      if valueTail.isEmpty then Some(ResolvedType(other, optDepth)) else None
-
-                case _ =>
-                  // If caller doesn’t ask for .key/.value, we treat the map itself as terminal.
-                  Some(ResolvedType(mt, optDepth))
-
-            // ---- Scalar or anything else terminal ----
-            case other =>
-              if tail.isEmpty then Some(ResolvedType(other, optDepth)) else None
-
-        case None => None
-
-
 object Schema:
-  def buildSchema(ref: ScalaClassRef[?]): Schema =
-    val fields: List[FieldType] =
-      ref.fields.map(f => fieldTypeFromRTypeRef(f.name, f.fieldRef))
 
-    // Catalog only needs plain classes
-    val childSchemas: Map[String, Schema] =
-      ref.fields.collect {
-        case f if f.fieldRef.isInstanceOf[ScalaClassRef[?]] =>
-          val sc = f.fieldRef.asInstanceOf[ScalaClassRef[?]]
-          if sc.isAppliedType || sc.typeParamValues.nonEmpty then
-            // Applied type: do NOT put into catalog
-            None
-          else
-            Some(sc.name -> buildSchema(sc))
-      }.flatten.toMap
+  /** Build a full ClassType tree for a ScalaClassRef */
+  def build(ref: RTypeRef[?]): ClassType = ref match
+    case sc: ScalaClassRef[?] =>
+      ClassType(
+        name     = "",                      // root has no parent field name
+        typeName = ref.name,
+        fields   = sc.fields.map(f => fieldTypeFromRTypeRef(f.name, f.fieldRef))
+      )
+    case tr: TraitRef[?] if tr.isSealed =>
+      val commonFields =
+        tr.fields.map(f => fieldTypeFromRTypeRef(f.name, f.fieldRef))
 
-    Schema(
-      className = ref.name,
-      fields = fields,
-      catalog = childSchemas
-    )
+      val subTypes =
+        tr.sealedChildren.collect {
+          case c: ScalaClassRef[?] if c.isCaseClass => c.typedName.toString
+        }
+
+      ClassType(
+        name     = tr.name,
+        typeName = tr.name,
+        fields   = List(
+          SealedTraitType(
+            name      = tr.name,
+            typeName  = tr.name,
+            fields    = commonFields,  // shared fields like `name`
+            subTypes  = subTypes
+          )
+        )
+      )
+    case other =>
+      throw new UnsupportedOperationException(
+        s"Schema.build() supports only case classes and sealed traits, not ${other.getClass.getSimpleName}"
+      )
+
+  /** Resolve a dotted path inside a ClassType tree. */
+  def resolvePath(root: ClassType, path: String): Option[ResolvedType] =
+    resolvePath(root, path.split('.').toList, optDepth = 0)
+
+  @tailrec
+  private def resolvePath(node: ClassType, segments: List[String], optDepth: Int): Option[ResolvedType] =
+    segments match
+      case Nil => None
+      case head :: tail =>
+        node.fields.find(_.name == head) match
+          case Some(ft) =>
+            ft match
+              case o: OptionType =>
+                resolveOption(o, tail, optDepth)
+              case c: ClassType =>
+                if tail.isEmpty then Some(ResolvedType(c, optDepth))
+                else resolvePath(c, tail, optDepth)
+              case s: SealedTraitType =>
+                resolveTrait(s, tail, optDepth)
+              case l: ListType =>
+                resolveList(l, tail, optDepth)
+              case m: MapType =>
+                resolveMap(m, tail, optDepth)
+              case other =>
+                if tail.isEmpty then Some(ResolvedType(other, optDepth)) else None
+          case None => None
+
+  // --- helper resolvers, each working with inlined fields ---
+  private def resolveOption(o: OptionType, tail: List[String], optDepth: Int): Option[ResolvedType] =
+    o.valueType match
+      case c: ClassType => resolvePath(c, tail, optDepth + 1)
+      case other        => if tail.isEmpty then Some(ResolvedType(other, optDepth + 1)) else None
+
+  private def resolveTrait(s: SealedTraitType, tail: List[String], optDepth: Int): Option[ResolvedType] =
+    tail match
+      case Nil => Some(ResolvedType(s, optDepth))
+      case subHead :: subTail =>
+        s.subTypes.find(_.endsWith(subHead)).flatMap { _ =>
+          // Find the concrete ClassType already inlined somewhere under root
+          s.fields.collectFirst {
+            case c: ClassType if c.typeName.endsWith(subHead) =>
+              resolvePath(c, subTail, optDepth)
+          }.flatten
+        }
+
+  private def resolveList(l: ListType, tail: List[String], optDepth: Int): Option[ResolvedType] =
+    l.elementType match
+      case c: ClassType => resolvePath(c, tail, optDepth)
+      case other        => if tail.isEmpty then Some(ResolvedType(other, optDepth)) else None
+
+  private def resolveMap(m: MapType, tail: List[String], optDepth: Int): Option[ResolvedType] =
+    tail match
+      case "key" :: Nil   => Some(ResolvedType(m.keyType, optDepth))
+      case "value" :: st  => resolvePath(
+        m.valueType.asInstanceOf[ClassType], st, optDepth
+      )
+      case _              => if tail.isEmpty then Some(ResolvedType(m, optDepth)) else None
 
   private def fieldTypeFromRTypeRef(fieldName: String, ref: RTypeRef[?]): FieldType = ref match
     // --- Primitive scalars ---
@@ -218,16 +171,9 @@ object Schema:
 
     // ---- Traits
     case t: TraitRef[?] if t.isSealed =>
-      val childSchemas: List[ClassType] =
-        t.sealedChildren.collect { case c: ScalaClassRef[?] =>
-          ClassType(fieldName, c.name)   // catalog entry will carry full schema
-        }
-
-      SealedTraitType(
-        name     = fieldName,
-        subTypes = childSchemas,
-        typeName = t.name
-      )
+      val commonFields = t.fields.map(f => fieldTypeFromRTypeRef(f.name, f.fieldRef))
+      val subTypes = t.sealedChildren.collect { case c: ScalaClassRef[?] => c.typedName.toString }
+      SealedTraitType(fieldName, t.name, commonFields, subTypes)
 
     case t: TraitRef[?] =>
       // Open trait: refuse or stub out
@@ -238,19 +184,15 @@ object Schema:
 
     // --- Nested classes (still stubbed for now) ---
     case sc: ScalaClassRef[?] =>
-      if sc.isAppliedType || sc.typeParamValues.nonEmpty then
-        // e.g., Wrapper[String] => inline its fully-resolved schema
-        ParamClassType(
-          name     = fieldName,
-          typeName = sc.typedName.toString,   // "Wrapper[java.lang.String]"
-          schema   = buildSchema(sc)          // inline the applied class' own schema
-        )
-      else
-        // plain non-generic class reference
-        ClassType(
-          name     = fieldName,
-          typeName = sc.name                   // fully qualified, e.g. "com.foo.Address"
-        )
+      // Build inline schema for this class
+      val fieldTypes: List[FieldType] =
+        sc.fields.map(f => fieldTypeFromRTypeRef(f.name, f.fieldRef))
+
+      ClassType(
+        name     = fieldName,
+        typeName = sc.name,
+        fields   = fieldTypes
+      )
 
     case _: SelfRefRef[?] =>
       ScalarType(fieldName, "SelfRef[?]")

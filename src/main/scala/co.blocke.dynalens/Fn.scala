@@ -29,8 +29,10 @@ import NumPromote.*
 import scala.annotation.tailrec
 
 trait Fn[+R]:
+  def recv: Option[Fn[?]] = None
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, R]
   def as[T]: Fn[T] = this.asInstanceOf[Fn[T]]
+  def methodName: String = this.getClass.getSimpleName.stripSuffix("Fn").decapitalize
 
 // Marker trait for boolean-returning functions
 trait BooleanFn extends Fn[Boolean]
@@ -561,30 +563,33 @@ private def toDbl(v: String, op: String): Either[DynaLensError, Double] =
       Left(DynaLensError(s"$op expected a numeric value for formatting, but got: '$v'"))
   }
 
-case class StartsWithFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
+case class StartsWithFn(receiver: Fn[Any], other: Fn[Any]) extends BooleanFn {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
-      aAny <- recv.resolve(ctx)
+      aAny <- receiver.resolve(ctx)
       bAny <- other.resolve(ctx)
       aStr <- ZIO.fromEither(toStr(aAny, "startsWith receiver"))
       bStr <- ZIO.fromEither(toStr(bAny, "startsWith argument"))
     } yield aStr.startsWith(bStr)
 }
 
-case class EndsWithFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
+case class EndsWithFn(receiver: Fn[Any], other: Fn[Any]) extends BooleanFn {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
-      aAny <- recv.resolve(ctx)
+      aAny <- receiver.resolve(ctx)
       bAny <- other.resolve(ctx)
       aStr <- ZIO.fromEither(toStr(aAny, "endsWith receiver"))
       bStr <- ZIO.fromEither(toStr(bAny, "endsWith argument"))
     } yield aStr.endsWith(bStr)
 }
 
-case class ContainsFn(recv: Fn[Any], needle: Fn[Any]) extends BooleanFn {
+case class ContainsFn(receiver: Fn[Any], needle: Fn[Any]) extends BooleanFn {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
-      hay <- recv.resolve(ctx)
+      hay <- receiver.resolve(ctx)
       res <- ContainsFn.containsDynamic(hay, needle, ctx)
     } yield res
 }
@@ -644,20 +649,22 @@ object ContainsFn {
   }
 }
 
-case class EqualsIgnoreCaseFn(recv: Fn[Any], other: Fn[Any]) extends BooleanFn {
+case class EqualsIgnoreCaseFn(receiver: Fn[Any], other: Fn[Any]) extends BooleanFn {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
-      aAny <- recv.resolve(ctx)
+      aAny <- receiver.resolve(ctx)
       bAny <- other.resolve(ctx)
       aStr <- ZIO.fromEither(toStr(aAny, "equalsIgnoreCase receiver"))
       bStr <- ZIO.fromEither(toStr(bAny, "equalsIgnoreCase argument"))
     } yield aStr.equalsIgnoreCase(bStr)
 }
 
-case class MatchesRegexFn(recv: Fn[Any], pattern: Fn[Any]) extends BooleanFn {
+case class MatchesRegexFn(receiver: Fn[Any], pattern: Fn[Any]) extends BooleanFn {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for {
-      aAny <- recv.resolve(ctx)
+      aAny <- receiver.resolve(ctx)
       pAny <- pattern.resolve(ctx)
       aStr <- ZIO.fromEither(toStr(aAny, "matchesRegex receiver"))
       pStr <- ZIO.fromEither(toStr(pAny, "matchesRegex pattern"))
@@ -670,10 +677,11 @@ case class MatchesRegexFn(recv: Fn[Any], pattern: Fn[Any]) extends BooleanFn {
 
 // --- Arithmetic  Functions ----
 
-case class AbsFn(recv: Fn[Any]) extends Fn[Any] {
+case class AbsFn(receiver: Fn[Any]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext) =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       out <- raw match {
         case null                 => ZIO.fail(DynaLensError("abs() found null"))
         case x: java.lang.Byte    => ZIO.succeed((if x < 0 then (-x).toByte else x): Byte)
@@ -687,10 +695,11 @@ case class AbsFn(recv: Fn[Any]) extends Fn[Any] {
     } yield out
 }
 
-case class MinFn(recv: Fn[Any]) extends Fn[Any] {
+case class MinFn(receiver: Fn[Any]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext) =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       box <- ZIO.fromEither(collect(raw, "min"))
       v = toPromotedVector(box)
       res <- box.kind match {
@@ -710,10 +719,11 @@ case class MinFn(recv: Fn[Any]) extends Fn[Any] {
     } yield res
 }
 
-case class MaxFn(recv: Fn[Any]) extends Fn[Any] {
+case class MaxFn(receiver: Fn[Any]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext) =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       box <- ZIO.fromEither(collect(raw, "max"))
       v = toPromotedVector(box)
       res <- box.kind match {
@@ -733,10 +743,11 @@ case class MaxFn(recv: Fn[Any]) extends Fn[Any] {
     } yield res
 }
 
-case class SumFn(recv: Fn[Any]) extends Fn[Any] {
+case class SumFn(receiver: Fn[Any]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext) =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       box <- ZIO.fromEither(collect(raw, "sum"))
       v = toPromotedVector(box)
       res <- box.kind match {
@@ -756,10 +767,11 @@ case class SumFn(recv: Fn[Any]) extends Fn[Any] {
     } yield res
 }
 
-case class AvgFn(recv: Fn[Any]) extends Fn[Any] {
+case class AvgFn(receiver: Fn[Any]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext) =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       box <- ZIO.fromEither(collect(raw, "avg"))
       v = toPromotedVector(box)
       res <- box.kind match {
@@ -780,10 +792,11 @@ case class AvgFn(recv: Fn[Any]) extends Fn[Any] {
     } yield res
 }
 
-case class MedianFn(recv: Fn[Any]) extends Fn[Any] {
+case class MedianFn(receiver: Fn[Any]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext) =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       box <- ZIO.fromEither(collect(raw, "median"))
       v = toPromotedVector(box)
       res <- box.kind match {
@@ -825,11 +838,12 @@ case class MedianFn(recv: Fn[Any]) extends Fn[Any] {
 }
 
 case class NegateFn(
-    target: Fn[Any]
+                     receiver: Fn[Any]
 ) extends Fn[Any]:
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      t <- target.resolve(ctx)
+      t <- receiver.resolve(ctx)
       result <- t match {
         case a: Int    => ZIO.succeed(a * -1)
         case a: Long   => ZIO.succeed(a * -1)
@@ -1000,23 +1014,26 @@ case class DivideFn(
 
 // --- String Builder Functions ----
 
-case class TrimFn(in: Fn[Any]) extends Fn[String] {
+case class TrimFn(receiver: Fn[Any]) extends Fn[String] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
-    in.resolve(ctx).flatMap { v =>
+    receiver.resolve(ctx).flatMap { v =>
       ZIO.fromEither(toStr(v, "trim()")).map(_.trim)
     }
 }
 
-case class ToLowerFn(in: Fn[Any]) extends Fn[String] {
+case class ToLowerFn(receiver: Fn[Any]) extends Fn[String] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
-    in.resolve(ctx).flatMap { v =>
+    receiver.resolve(ctx).flatMap { v =>
       ZIO.fromEither(toStr(v, "toLowerCase()")).map(_.toLowerCase)
     }
 }
 
-case class ToUpperFn(in: Fn[Any]) extends Fn[String] {
+case class ToUpperFn(receiver: Fn[Any]) extends Fn[String] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
-    in.resolve(ctx).flatMap { v =>
+    receiver.resolve(ctx).flatMap { v =>
       ZIO.fromEither(toStr(v, "toUpperCase()")).map(_.toUpperCase)
     }
 }
@@ -1030,10 +1047,11 @@ case class ConcatFn(parts: List[Fn[Any]]) extends Fn[String]:
         case s    => s.toString
       }.mkString)
 
-case class InterpolateFn(template: Fn[Any], variables: Map[String, Fn[Any]]) extends Fn[String] {
+case class InterpolateFn(receiver: Fn[Any], variables: Map[String, Fn[Any]]) extends Fn[String] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     for {
-      templStr <- template.resolve(ctx).flatMap { v =>
+      templStr <- receiver.resolve(ctx).flatMap { v =>
         ZIO.fromEither(toStr(v, "interpolate(template)"))
       }
 
@@ -1106,10 +1124,11 @@ object TemplateUtils {
       .toSet
 }
 
-case class SubstringFn(str: Fn[Any], start: Fn[Int], end: Option[Fn[Int]]) extends Fn[String]:
+case class SubstringFn(receiver: Fn[Any], start: Fn[Int], end: Option[Fn[Int]]) extends Fn[String]:
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     for {
-      s <- str.resolve(ctx).map {
+      s <- receiver.resolve(ctx).map {
         case null => ""
         case v    => v.toString
       }
@@ -1122,10 +1141,11 @@ case class SubstringFn(str: Fn[Any], start: Fn[Int], end: Option[Fn[Int]]) exten
       }
     } yield result
 
-case class ReplaceFn(in: Fn[Any], target: Fn[Any], replacement: Fn[Any]) extends Fn[String]:
+case class ReplaceFn(receiver: Fn[Any], target: Fn[Any], replacement: Fn[Any]) extends Fn[String]:
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     for {
-      str <- in.resolve(ctx).map(v => if v == null then "" else v.toString)
+      str <- receiver.resolve(ctx).map(v => if v == null then "" else v.toString)
       t <- target.resolve(ctx).map(v => if v == null then "" else v.toString)
       r <- replacement.resolve(ctx).map(v => if v == null then "" else v.toString)
     } yield str.replace(t, r)
@@ -1147,10 +1167,11 @@ case class ElseFn(primary: Fn[Any], fallback: Fn[Any]) extends Fn[Any] {
 
 // --- Map Functions --- (except ContainsFn, which is multipurpose... given in another section)
 
-case class KeysFn(recv: Fn[Any]) extends Fn[List[Any]]:
+case class KeysFn(receiver: Fn[Any]) extends Fn[List[Any]]:
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, List[Any]] =
     for {
-      mAny <- recv.resolve(ctx)
+      mAny <- receiver.resolve(ctx)
       result <- mAny match {
         case null               => ZIO.succeed(Nil) // safe: no keys
         case m: Map[?, ?]       => ZIO.succeed(m.keys.toList)
@@ -1161,10 +1182,11 @@ case class KeysFn(recv: Fn[Any]) extends Fn[List[Any]]:
       }
     } yield result
 
-case class ValuesFn(recv: Fn[Any]) extends Fn[List[Any]]:
+case class ValuesFn(receiver: Fn[Any]) extends Fn[List[Any]]:
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, List[Any]] =
     for {
-      mAny <- recv.resolve(ctx)
+      mAny <- receiver.resolve(ctx)
       result <- mAny match {
         case null               => ZIO.succeed(Nil)
         case m: Map[?, ?]       => ZIO.succeed(m.values.toList)
@@ -1175,10 +1197,11 @@ case class ValuesFn(recv: Fn[Any]) extends Fn[List[Any]]:
       }
     } yield result
 
-case class MapGetFn(recv: Fn[Any], key: Fn[Any]) extends Fn[Any] {
+case class MapGetFn(receiver: Fn[Any], key: Fn[Any]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext) =
     for {
-      m <- recv.resolve(ctx)
+      m <- receiver.resolve(ctx)
       k <- key.resolve(ctx)
       v <- m match {
         case mm: Map[?, ?] @unchecked =>
@@ -1206,7 +1229,8 @@ case class Tuple2Fn(_1: Fn[Any], _2: Fn[Any]) extends Fn[Any] {
 // --- Collection (Iterable) Functions ----
 
 // Wrap any Fn that produces a collection; pick element at fixed index
-case class IndexFn(recv: Fn[Any], index: Int) extends Fn[Any] {
+case class IndexFn(receiver: Fn[Any], index: Int) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   private def toList(v: Any): Either[DynaLensError, List[Any]] = v match {
     case null                  => Left(DynaLensError(s"Cannot index into null"))
     case None                  => Left(DynaLensError(s"Cannot index into None"))
@@ -1219,7 +1243,7 @@ case class IndexFn(recv: Fn[Any], index: Int) extends Fn[Any] {
 
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       list <- ZIO.fromEither(toList(raw))
       elem <- list.lift(index) match {
         case Some(e) => ZIO.succeed(e)
@@ -1243,10 +1267,11 @@ case class LoopFn(predicate: Fn[Any]) extends Fn[Any] {
     }
 }
 
-case class FilterFn(recv: Fn[Any], predicate: BooleanFn) extends Fn[Any] {
+case class FilterFn(receiver: Fn[Any], predicate: BooleanFn) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       seq <- ZIO.fromEither(asSeq(raw, "filter"))
       kept <- ZIO.foreach(seq) { e =>
         predicate.resolve(withElemCtx(e, ctx)).map {
@@ -1257,8 +1282,17 @@ case class FilterFn(recv: Fn[Any], predicate: BooleanFn) extends Fn[Any] {
     } yield kept.flatten
 }
 
-case class SortFn(recv: Fn[Any], keyPath: Option[String], asc: Boolean = true) extends Fn[Any] {
+case class SortAscFn(receiver: Fn[Any], keyPath: Option[String]) extends SortFn:
+  val asc: Boolean = true
 
+case class SortDescFn(receiver: Fn[Any], keyPath: Option[String]) extends SortFn:
+  val asc: Boolean = false
+
+trait SortFn extends Fn[Any] {
+  val receiver: Fn[Any]
+  val keyPath: Option[String]
+  val asc: Boolean
+  override val recv: Option[Fn[?]] = Some(receiver)
   private inline def opName: String = if asc then "sortAsc" else "sortDesc"
 
   private def asSeq(v: Any): Either[DynaLensError, List[Any]] = v match {
@@ -1281,7 +1315,7 @@ case class SortFn(recv: Fn[Any], keyPath: Option[String], asc: Boolean = true) e
 
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       seq <- ZIO.fromEither(asSeq(raw))
       sorted <- keyPath match {
         case Some(pth) =>
@@ -1315,10 +1349,11 @@ case class SortFn(recv: Fn[Any], keyPath: Option[String], asc: Boolean = true) e
     } yield sorted
 }
 
-case class DistinctFn(recv: Fn[Any], fieldPath: Option[String]) extends Fn[Any] {
+case class DistinctFn(receiver: Fn[Any], fieldPath: Option[String]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       items <- ZIO.fromEither(asSeq(raw, "distinct")) // or asIterable; returns Seq[Any]
 
       pairs <- fieldPath match {
@@ -1350,24 +1385,26 @@ case class DistinctFn(recv: Fn[Any], fieldPath: Option[String]) extends Fn[Any] 
     } yield deduped
 }
 
-case class LimitFn(recv: Fn[Any], count: Int) extends Fn[Any] {
+case class LimitFn(receiver: Fn[Any], count: Int) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       seq <- ZIO.fromEither(asSeq(raw, "limit"))
     } yield seq.take(count)
 }
 
-case class ReverseFn(recv: Fn[Any]) extends Fn[Any] {
+case class ReverseFn(receiver: Fn[Any]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       seq <- ZIO.fromEither(asSeq(raw, "reverse"))
     } yield seq.reverse
 }
 
-case class CleanFn(recv: Fn[Any]) extends Fn[Any] {
-
+case class CleanFn(receiver: Fn[Any]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   private def truthy(v: Any): Boolean = v match {
     case null            => false
     case None            => false
@@ -1379,7 +1416,7 @@ case class CleanFn(recv: Fn[Any]) extends Fn[Any] {
 
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      raw <- recv.resolve(ctx)
+      raw <- receiver.resolve(ctx)
       seq <- ZIO.fromEither(asSeq(raw, "clean"))
     } yield seq.iterator.filter(truthy).toList
 }
@@ -1406,9 +1443,10 @@ case object IdentityFn extends Fn[Any]: // No-op function (for chaining)
       case Some((v, _)) => ZIO.succeed(v)
       case None         => ZIO.fail(DynaLensError("'this' not found in context"))
 
-case class LengthFn(in: Fn[Any]) extends Fn[Int]:
+case class LengthFn(receiver: Fn[Any]) extends Fn[Int]:
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Int] =
-    in.resolve(ctx).map {
+    receiver.resolve(ctx).map {
       case null => 0
       case c if c.isInstanceOf[Seq[?]] =>
         c.asInstanceOf[Seq[?]].length
@@ -1468,10 +1506,11 @@ case class MapRevFn(mapName: String) extends Fn[Any]:
       case None =>
         ZIO.fail(DynaLensError(s"'this' is not defined in context"))
 
-case class FormatDateFn(dateExpr: Fn[Any], pattern: Fn[String]) extends Fn[Any] {
+case class FormatDateFn(receiver: Fn[Any], pattern: Fn[String]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      d <- dateExpr.resolve(ctx)
+      d <- receiver.resolve(ctx)
       p <- pattern.resolve(ctx)
       result <- d match
         case d: java.util.Date =>
@@ -1486,10 +1525,11 @@ case class FormatDateFn(dateExpr: Fn[Any], pattern: Fn[String]) extends Fn[Any] 
     } yield result
 }
 
-case class ParseDateFn(strExpr: Fn[Any], pattern: Fn[String]) extends Fn[Any] {
+case class ParseDateFn(receiver: Fn[Any], pattern: Fn[String]) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      s <- strExpr.resolve(ctx)
+      s <- receiver.resolve(ctx)
       p <- pattern.resolve(ctx)
       result <- s match
         case s: String =>
@@ -1519,14 +1559,15 @@ case class UUIDFn() extends Fn[Any] {
 // --- Case Function ----
 
 case class CaseWhenFn(
-    recv: Fn[Any],
+    receiver: Fn[Any],
     cases: Vector[(Any, Fn[Any])], // pattern literal -> RHS expr
     default: Option[Fn[Any]],
     permissive: Boolean = false
 ) extends Fn[Any] {
+  override val recv: Option[Fn[?]] = Some(receiver)
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      v <- recv.resolve(ctx)
+      v <- receiver.resolve(ctx)
       out <-
         // first match by Scala “==”
         cases

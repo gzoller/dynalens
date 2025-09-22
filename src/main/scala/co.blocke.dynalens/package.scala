@@ -21,7 +21,6 @@
 
 package co.blocke.dynalens
 
-import zio.*
 import scala.quoted.*
 
 final case class DynaLensError(msg: String) extends Exception(msg)
@@ -31,13 +30,13 @@ final case class DynaLensBuildContext(quotes: Quotes)
 //
 // ExprContext used during compilation
 //
-enum SymbolType:
-  case Exempt // eg top
-  case Normal
-  case OptionalScalar
-  case OptionalScalaWithDefault
-  case OptionalList
-  case OptionalMap
+//enum SymbolType:
+//  case Exempt // eg top
+//  case Normal
+//  case OptionalScalar
+//  case OptionalScalaWithDefault
+//  case OptionalList
+//  case OptionalMap
 
 def asSeq(v: Any, where: String): Either[DynaLensError, Seq[Any]] =
   v match {
@@ -47,6 +46,12 @@ def asSeq(v: Any, where: String): Either[DynaLensError, Seq[Any]] =
     case other           => Left(DynaLensError(s"$where expected a collection, got: ${other.getClass.getSimpleName}"))
   }
 
+extension (s: String)
+  def decapitalize: String =
+    if s.isEmpty then s
+    else s.head.toLower + s.tail
+
+
 // Tiny record exposed to scripts when mapping over Map[K, V]
 final case class EntryKV(key: Any, value: Any)
 
@@ -54,25 +59,28 @@ import scala.quoted.*
 
 given ToExpr[ClassType] with
   def apply(ct: ClassType)(using Quotes): Expr[ClassType] =
-    '{ ClassType(${ Expr(ct.name) }, ${ Expr(ct.typeName) }) }
-    
+    '{ ClassType(${ Expr(ct.name) }, ${ Expr(ct.typeName) }, ${ Expr(ct.fields) }) }
+
+given ToExpr[SealedTraitType] with
+  def apply(st: SealedTraitType)(using Quotes): Expr[SealedTraitType] =
+    '{ SealedTraitType(${ Expr(st.name) }, ${ Expr(st.typeName) }, ${ Expr(st.fields) }, ${ Expr(st.subTypes) }) }
+
 given ToExpr[FieldType] with
   def apply(ft: FieldType)(using Quotes): Expr[FieldType] = ft match
     case ScalarType(name, typeName) =>
-      '{ ScalarType(${Expr(name)}, ${Expr(typeName)}) }
-    case OptionType(name, valueType, typeName) =>
-      '{ OptionType(${Expr(name)}, ${Expr(valueType)}, ${Expr(typeName)}) }
-    case ListType(name, elemType, typeName) =>
-      '{ ListType(${Expr(name)}, ${Expr(elemType)}, ${Expr(typeName)}) }
-    case MapType(name, keyType, valueType, typeName) =>
-      '{ MapType(${Expr(name)}, ${Expr(keyType)}, ${Expr(valueType)}, ${Expr(typeName)}) }
-    case ClassType(name, typeName) =>
-      '{ ClassType(${Expr(name)}, ${Expr(typeName)}) }
-    case ParamClassType(name, typeName, schema) =>
-      '{ ParamClassType(${Expr(name)}, ${Expr(typeName)}, ${Expr(schema)}) }
-    case SealedTraitType(name, subTypes, typeName) =>
-      '{ SealedTraitType(${Expr(name)}, ${Expr(subTypes)}, ${Expr(typeName)}) }
+      '{ ScalarType(${ Expr(name) }, ${ Expr(typeName) }) }
 
-given ToExpr[Schema] with
-  def apply(s: Schema)(using Quotes): Expr[Schema] =
-    '{ Schema(${Expr(s.className)}, ${Expr(s.fields)}, ${Expr(s.catalog)}) }
+    case OptionType(name, valueType, typeName) =>
+      '{ OptionType(${ Expr(name) }, ${ Expr(valueType) }, ${ Expr(typeName) }) }
+
+    case ListType(name, elementType, typeName) =>
+      '{ ListType(${ Expr(name) }, ${ Expr(elementType) }, ${ Expr(typeName) }) }
+
+    case MapType(name, keyType, valueType, typeName) =>
+      '{ MapType(${ Expr(name) }, ${ Expr(keyType) }, ${ Expr(valueType) }, ${ Expr(typeName) }) }
+
+    case ct: ClassType =>
+      Expr(ct)
+
+    case st: SealedTraitType =>
+      Expr(st)

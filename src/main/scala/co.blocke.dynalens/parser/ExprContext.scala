@@ -22,79 +22,68 @@
 package co.blocke.dynalens
 package parser
 
-// parser/package.scala (concept sketch)
 case class Receiver(
-    name: String = "this",
-    fields: Map[String, Any], // element schema minus __type, or Map.empty for scalar receiver
-    sym: SymbolType // Scalar, List, Map, Optional*, None
-)
+                     name: String = "this",
+                     fields: Map[String, FieldType], // element schema for the receiver
+                     fieldType: FieldType            // full FieldType for this receiver
+                   )
 
 case class ExprContext(
-    typeInfo: Map[String, Any],
-    sym: Map[String, SymbolType] = Map.empty, // known symbols (vals + 'this')
-    scopes: List[Map[String, Any]] = Nil, // lexical/local frames (top is head)
-    receiver: Option[Receiver] = None // current “this”
-) {
+                        schema: ClassType,
+                        symbols: List[Map[String, FieldType]] = Nil,
+                        receiver: Option[Receiver] = None
+                      ) {
 
-  def resolveSymbol(name: String): Option[SymbolType] =
-    sym.get(name)
+  def pushScope(fields: List[FieldType]): ExprContext =
+    copy(symbols = fields.map(ft => ft.name -> ft).toMap :: symbols)
 
-  // Helpers to derive contexts immutably:
-  def withVals(newSyms: (String, SymbolType)*): ExprContext =
-    copy(sym = sym ++ newSyms)
+  def resolveSymbol(name: String): Option[FieldType] =
+    symbols.collectFirst { case m if m.contains(name) => m(name) }
 
-  def pushScope(m: Map[String, Any]): ExprContext =
-    copy(scopes = m :: scopes)
+  /** Add value bindings immutably. */
+  def withVals(newVals: (String, FieldType)*): ExprContext =
+    val updatedHead = symbols.headOption.getOrElse(Map.empty) ++ newVals
+    copy(symbols = updatedHead :: symbols.drop(1))
 
-  def withReceiverFromPath(path: String): ExprContext = {
-    val targetSym = Utility.getPathType(path)(using this)
-    val elemSchema = Utility.elementSchemaFor(path, typeInfo) // minus __type if element, else Map.empty
-    val recv = Receiver(fields = elemSchema, sym = targetSym)
-    copy(receiver = Some(recv), sym = sym + ("this" -> targetSym))
-  }
+  /** Install a new receiver from a given schema path. */
+  def withReceiverFromPath(path: String): ExprContext =
+    // `getPathType` already returns the exact FieldType, never Option
+    val targetField: FieldType = Utility.getPathType(path)(using this)
 
+    // `elementSchemaFor` already returns a List[FieldType]
+    val elemSchema: List[FieldType] =
+      Utility.elementSchemaFor(path, schema).map {
+        case c: ClassType => c.fields                    // class: list its fields
+        case f           => List(f)                      // scalar or other: wrap in list
+      }.getOrElse(Nil)
+
+    val recv = Receiver(
+      name      = "this",
+      fields    = elemSchema.map(ft => ft.name -> ft).toMap,
+      fieldType = targetField
+    )
+    copy(receiver = Some(recv))
+
+  /** Directly set a receiver object. */
   def withReceiver(recv: Receiver): ExprContext =
-    copy(receiver = Some(recv), sym = sym + ("this" -> recv.sym))
+    copy(receiver = Some(recv))
 
-  /** Merge contexts across sequential statements.
-    * - Keep/union schema and symbols (later wins)
-    * - Do NOT leak transient scopes/receiver across statements
-    */
+  /** Merge contexts across sequential statements without leaking receiver. */
   def merge(that: ExprContext): ExprContext =
-    this.copy(
-      typeInfo = this.typeInfo ++ that.typeInfo, // allow additions like "__val_x"
-      sym = this.sym ++ that.sym,
-      // do not carry over local scopes/receiver from sub-parsers
-      scopes = this.scopes,
+    copy(
+      schema   = this.schema,
+      symbols  = that.symbols ++ this.symbols,
       receiver = this.receiver
     )
 
-  override def toString: String = {
-    def fmtMap(m: Map[?, ?], indent: String = "  "): String =
-      if m.isEmpty then "{}"
-      else {
-        val body = m.iterator
-          .map { case (k, v) => s"$indent$k -> $v" }
-          .mkString("\n")
-        s"{\n$body\n}"
-      }
-
-    def fmtScopes(sc: List[Map[String, Any]]): String =
-      if sc.isEmpty then "[]"
-      else {
-        val body = sc.zipWithIndex
-          .map { case (m, i) => s"  scope[$i] = ${fmtMap(m, "    ")}" }
-          .mkString("\n")
-        s"[\n$body\n]"
-      }
-
-    val recvStr = receiver.map(_.toString).getOrElse("None")
-
+  override def toString: String =
+    val recvStr   = receiver.map(_.toString).getOrElse("None")
+    val schemaStr = Option(schema).map(_.toString).getOrElse("None")
+    val symsStr   = if symbols.isEmpty then "{}"
+    else symbols.map(m => m.map { case (k,v) => s"$k -> $v" }.mkString("{", ", ", "}")).mkString("\n")
     s"""ExprContext(
-       |  typeInfo  = ${fmtMap(typeInfo)}
-       |  sym       = ${fmtMap(sym)}
-       |  scopes    = ${fmtScopes(scopes)}
-       |  receiver  = $recvStr
-       |)\n----------------------""".stripMargin
-  }
+       |  schema   = $schemaStr
+       |  symbols  = $symsStr
+       |  receiver = $recvStr
+       |)""".stripMargin
 }

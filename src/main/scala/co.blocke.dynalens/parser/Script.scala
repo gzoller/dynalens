@@ -28,14 +28,13 @@ import zio.*
 object Script {
 
   def compile(script: String, lens: DynaLens[?]): zio.Task[BlockStmt] =
-    given ExprContext = ExprContext(lens._typeInfo)
-    println("Here: "+lens._typeInfo)
+    given ExprContext = ExprContext(lens._schema)
     zio.ZIO
       .fromEither(parseScript(script))
       .mapError(err => DynaLensError(err.render(script)))
 
   def compileNoZIO(script: String, lens: DynaLens[?]): Either[DynaLensError, BlockStmt] =
-    given ExprContext = ExprContext(lens._typeInfo)
+    given ExprContext = ExprContext(lens._schema)
     parseScript(script).left.map(err => DynaLensError(err.render(script)))
 
   private def parseScript(script: String)(using ExprContext): Either[DLCompileError, BlockStmt] =

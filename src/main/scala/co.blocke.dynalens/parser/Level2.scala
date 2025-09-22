@@ -278,13 +278,26 @@ trait Level2 extends Level1 with ValueExprModule:
   private def valDecl[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P("val" ~/ WS ~ identifier.! ~ WS0 ~ "=" ~ WS0 ~ Index ~ valueExpr).map {
       case (name, offset, Right(vfn)) =>
-        Utility.rhsType(vfn) match
-          case Some(symT) =>
-            // record the symbol in the lexical context; leave typeInfo (schema) untouched
-            val newCtx = ctx.withVals(name -> symT)
+        val maybeFt = Utility.rhsType(vfn)
+        maybeFt match
+          case Some(ft: FieldType) =>
+            val valFt = ValType(name, ft, ft.typeName)
+            val newCtx = ctx.withVals(name -> valFt)
             Right((newCtx, ValStmt(name, vfn)))
           case None =>
-            Left(DLCompileError(offset, s"Unable to infer type for val '$name' from RHS: ${vfn.getClass.getSimpleName}"))
+            // enrich the message with the function name if it's a Fn with methodName
+            val reason = vfn match
+              case g: GetFn =>
+                s"Unknown field path '${g.path}'"
+              case m: Fn[?] =>
+                val recvTypeStr =
+                  m.recv.flatMap(Utility.rhsType)
+                    .map(_.typeName)
+                    .getOrElse("unknown")
+                s"Method '${m.methodName}' cannot be applied to receiver of type $recvTypeStr"
+              case _ =>
+                vfn.getClass.getSimpleName
+            Left(DLCompileError(offset, reason))
 
       case (_, _, Left(err)) =>
         Left(err)
@@ -358,35 +371,63 @@ trait Level2 extends Level1 with ValueExprModule:
         case Left(err) => P(Pass(Left(err)))
 
         case Right(cleanPath) =>
-          val lhsSym: SymbolType = Utility.getPathType(cleanPath)(using ctx)
-          val hasList: Boolean = Utility.hasListSegment(cleanPath)
+          // new API: returns Option[FieldType]
+          val lhsFt: FieldType = Utility.getPathType(cleanPath)(using ctx)
+          val hasList: Boolean         = Utility.hasListSegment(cleanPath)
 
-          // Start from original ctx
-          val baseRhsCtx: ExprContext =
-            lhsSym match {
-              case SymbolType.Map | SymbolType.OptionalMap =>
-                ctx.withReceiver(Utility.mapEntryReceiverFor(cleanPath)(using ctx))
-              case _ if hasList =>
-                // element receiver + loop scopes you already compute
-                val recvCtx = ctx.withReceiverFromPath(cleanPath)
-                val loopMap = Utility.loopScopesFor(cleanPath, ctx.typeInfo) // you already have this
-                recvCtx.pushScope(loopMap)
-              case SymbolType.OptionalScalar =>
-                ctx.withVals("this" -> SymbolType.Scalar)
-              case _ =>
-                ctx
-            }
+          // Start from original ctx and branch on the actual FieldType
+          val baseRhsCtx: ExprContext = lhsFt match
+            case m: MapType =>
+              ctx.withReceiver(Utility.mapEntryReceiverFor(cleanPath)(using ctx))
 
-          // push the nearest container field map so bare names like `shipments` resolve
-          val containerScope = Utility.containerFieldsFor(cleanPath, ctx.typeInfo)
+            case o: OptionType if o.valueType.isInstanceOf[MapType] =>
+              ctx.withReceiver(Utility.mapEntryReceiverFor(cleanPath)(using ctx))
+
+            case l: ListType =>
+              ctx.withReceiverFromPath(cleanPath)
+
+            case o: OptionType if o.valueType.isInstanceOf[ListType] =>
+              ctx.withReceiverFromPath(cleanPath)
+
+            case o: OptionType if o.valueType.isInstanceOf[ScalarType] =>
+              ctx.withVals("this" -> o.valueType)
+
+            case _ =>
+              ctx
+
+          // If you still need container-level fields for completions, implement a new helper
+          // based on ClassType traversal. For now simply:
+          val containerScope: Map[String, FieldType] =
+            Utility.containerFieldsFor(ctx.schema, cleanPath)
+              .map(ft => ft.name -> ft)
+              .toMap
+
           val ctxForRhs =
-            if containerScope.nonEmpty then baseRhsCtx.pushScope(containerScope)
-            else baseRhsCtx
+            if containerScope.nonEmpty then
+              baseRhsCtx.pushScope(containerScope.values.toList)
+            else
+              baseRhsCtx
 
           given ExprContext = ctxForRhs
 
-          lhsSym match
-            case SymbolType.Map | SymbolType.OptionalMap =>
+          lhsFt match
+            // LHS is a Map or an Option[Map]
+            case m: MapType =>
+              val pairAsFn: P[Either[DLCompileError, Fn[Any]]] =
+                P(
+                  blockPairFn |
+                    pairExpr.map {
+                      case Left(e)       => Left(e)
+                      case Right((k, v)) => Right(Tuple2Fn(k, v): Fn[Any])
+                    }
+                )
+
+              P(pairAsFn ~ WS0).map {
+                case Left(e)       => Left(e)
+                case Right(bodyFn) => Right((ctx, MapStmt(cleanPath, bodyFn)))
+              }
+
+            case o: OptionType if o.valueType.isInstanceOf[MapType] =>
               val pairAsFn: P[Either[DLCompileError, Fn[Any]]] =
                 P(
                   blockPairFn |
@@ -405,11 +446,21 @@ trait Level2 extends Level1 with ValueExprModule:
               P(valueExpr ~ WS0).map {
                 case Left(e) => Left(e)
                 case Right(vfn) =>
-                  val isListLike = lhsSym == SymbolType.List || lhsSym == SymbolType.OptionalList
+                  // true if the LHS is a List or an Option of List
+                  val isListLike = lhsFt match {
+                    case _: ListType => true
+                    case OptionType(_, inner: ListType, _) => true
+                    case _ => false
+                  }
+
                   val normalizedLhs =
-                    if isListLike then Utility.addWildcardToListLike(cleanPath) else cleanPath
+                    if isListLike then Utility.addWildcardToListLike(cleanPath)
+                    else cleanPath
+
                   val body: Fn[?] =
-                    if isListLike then LoopFn(vfn) else vfn
+                    if isListLike then LoopFn(vfn)
+                    else vfn
+
                   Right((ctx, MapStmt(normalizedLhs, body)))
               }
     }

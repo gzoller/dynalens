@@ -32,7 +32,6 @@ import CtxStrings.*
 object Parsing extends ZIOSpecDefault:
 
   def spec = suite("Parsing Tests")(
-    /*
     test("Simple val assignment script test") {
       val script =
         """
@@ -899,7 +898,6 @@ object Parsing extends ZIOSpecDefault:
         runRes <- lens.run(compiled, Registry("id", Nil, Nil)).either
       } yield assertTrue(runRes.isLeft)
     },
-    */
     test("update a common field on a sealed trait") {
       val script =
         """
@@ -914,7 +912,6 @@ object Parsing extends ZIOSpecDefault:
 
       val inst  = Zoo(Dog("Rover", 10))
       val lens  = dynalens[Zoo]
-      println(s"[runtime] zoo lens registry keys = ${lens._registry.keySet}")
 
       for {
         compiledScript <- Script.compile(script, lens)

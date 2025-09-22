@@ -96,9 +96,29 @@ trait Level1 extends Level0 {
 
   // 3) Make pathFn propagate domain errors (no parser Fail here)
   private def pathFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    pathEither.map {
-      case Left(err)   => Left(err) // bubble semantic error
-      case Right(path) => Right(GetFn(path))
+    P(
+      Index ~
+        segmentFn ~
+        // IMPORTANT: stop before .method( ... )
+        (!("." ~ identU ~ "(") ~ "." ~ segmentFn).rep
+    ).flatMap { case (offset, head, tail) =>
+      val base: Fn[Any] = tail.foldLeft(head) {
+        case (g1: GetFn, g2: GetFn) =>
+          GetFn(s"${g1.path}.${g2.path}")
+
+        case (idx: IndexFn, g2: GetFn) =>
+          // keep the index, but we still represent the full string path for GetFn
+          GetFn(s"${Utility.pathString(idx)}.${g2.path}")
+
+        case (g1: GetFn, idx: IndexFn) =>
+          IndexFn(g1, idx.index)
+
+        case (idx1: IndexFn, idx2: IndexFn) =>
+          IndexFn(idx1, idx2.index)
+      }
+
+      // Hand off to the method-call parser so .filter(...).distinct.sortDesc.limit(3) gets built
+      methodChain(base)
     }
 
   // Parses: "." ident "(" args ")"
@@ -122,42 +142,118 @@ trait Level1 extends Level0 {
       case None       => fn
     }
 
+  private def segmentFn[$: P](using ctx: ExprContext): P[Fn[Any]] =
+    P(identU.!).flatMap { name => maybeIndex(GetFn(name)) }
+
   // If helpful, define the builder type somewhere central:
   // type MethodBuilder = (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]
 
   def methodChain[$: P](base: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] = {
+    // === 1) Context setup (unchanged) ===
     val argsCtx: ExprContext =
       base match {
         case GetFn(p) =>
-          val elem = Utility.elementSchemaFor(p, ctx.typeInfo)
-          val c0 = ctx.withReceiverFromPath(p)
-          if elem.nonEmpty then c0.pushScope(elem) else c0
+          val maybeField: Option[FieldType] = Utility.elementSchemaFor(p, ctx.schema)
+
+          val childFields: List[FieldType] = maybeField match {
+            case Some(c: ClassType) => c.fields
+            case Some(o: OptionType) => o.valueType match {
+              case c: ClassType => c.fields
+              case _            => Nil
+            }
+            case Some(l: ListType) => l.elementType match {
+              case c: ClassType => c.fields
+              case _            => Nil
+            }
+            case _ => Nil
+          }
+
+          val withRecv0 = ctx.withReceiverFromPath(p)
+
+          // ⭐ make the base path visible to rhsType via symbols
+          val withBaseBound =
+            maybeField.fold(withRecv0)(ft => withRecv0.withVals(p -> ft))
+
+          // keep exposing child fields if the receiver is a class
+          if childFields.nonEmpty
+          then withBaseBound.withVals(childFields.map(ft => ft.name -> ft): _*)
+          else withBaseBound
+
         case _ => ctx
       }
 
     given ExprContext = argsCtx
 
-    P(methodCall.rep).flatMap { calls =>
-      // calls: Seq[Either[DLCompileError, (String, List[Fn[Any]], Int)]]
-      val built: Either[DLCompileError, Fn[Any]] =
-        calls.foldLeft[Either[DLCompileError, Fn[Any]]](Right(base)) {
-          case (Left(e), _)          => Left(e)
-          case (Right(_), Left(err)) => Left(err)
-          case (Right(cur), Right((name, args, off))) =>
-            methodFunctions.get(name) match {
-              case Some(build3 /* (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]] */ ) =>
-                build3(cur, args, off) // <-- return Either directly (no Right(...))
-              case None =>
-                Left(DLCompileError(off, s"Unknown method: $name"))
-            }
-        }
-
-      built match {
+    // === 2) Recursive method-call folding ===
+    def loop(current: Fn[Any]): P[Either[DLCompileError, Fn[Any]]] =
+      P(methodCall).flatMap {
         case Left(err) => P(Pass(Left(err)))
-        case Right(fn) => maybeIndex(fn).map(f => Right(f)) // allow trailing [n] after the whole chain
-      }
+        case Right((name, args, off)) =>
+          methodFunctions.get(name) match {
+            case Some(build) =>
+              build(current, args, off) match {
+                case Left(e) => P(Pass(Left(e)))
+                case Right(n) => loop(n) // <--- keep parsing the next call
+              }
+            case None => P(Pass(Left(DLCompileError(off, s"Unknown method: $name"))))
+          }
+      } | P(Pass(Right(current)))
+
+    // === 3) Optional trailing index (unchanged) ===
+    loop(base).flatMap {
+      case Left(err) => P(Pass(Left(err)))
+      case Right(fn) => maybeIndex(fn).map(Right(_))
     }
   }
+//  def methodChain[$: P](base: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] = {
+//    val argsCtx: ExprContext =
+//      base match {
+//        case GetFn(p) =>
+//          // new API returns Option[FieldType]
+//          val maybeField: Option[FieldType] = Utility.elementSchemaFor(p, ctx.schema)
+//
+//          // if the field is a class, expose its child fields for downstream method calls
+//          val childFields: List[FieldType] = maybeField match {
+//            case Some(c: ClassType) => c.fields
+//            case Some(o: OptionType) =>
+//              o.valueType match {
+//                case c: ClassType => c.fields
+//                case _ => Nil
+//              }
+//            case Some(l: ListType) =>
+//              l.elementType match {
+//                case c: ClassType => c.fields
+//                case _ => Nil
+//              }
+//            case _ => Nil
+//          }
+//
+//          val withRecv = ctx.withReceiverFromPath(p)
+//          if childFields.nonEmpty then withRecv.withVals(childFields.map(ft => ft.name -> ft): _*)
+//          else withRecv
+//
+//        case _ => ctx
+//      }
+//
+//    given ExprContext = argsCtx
+//
+//    P(methodCall.rep).flatMap { calls =>
+//      val built: Either[DLCompileError, Fn[Any]] =
+//        calls.foldLeft[Either[DLCompileError, Fn[Any]]](Right(base)) {
+//          case (Left(e), _) => Left(e)
+//          case (Right(_), Left(err)) => Left(err)
+//          case (Right(cur), Right((name, args, off))) =>
+//            methodFunctions.get(name) match {
+//              case Some(build3) => build3(cur, args, off)
+//              case None => Left(DLCompileError(off, s"Unknown method: $name"))
+//            }
+//        }
+//
+//      built match
+//        case Left(err) => P(Pass(Left(err)))
+//        case Right(fn) => maybeIndex(fn).map(f => Right(f))
+//    }
+//  }
 
   def baseExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P((standaloneFn.map(Right(_)) | constant | pathFn).flatMap {
@@ -317,9 +413,9 @@ trait Level1 extends Level0 {
     M_SORTASC -> { (recv, args, off) =>
       args match {
         case Nil =>
-          Right(SortFn(recv, None, asc = true))
+          Right(SortAscFn(recv, None))
         case a1 :: Nil =>
-          expectGetPath(a1, M_SORTASC, off).map(p => SortFn(recv, Some(p), asc = true))
+          expectGetPath(a1, M_SORTASC, off).map(p => SortAscFn(recv, Some(p)))
         case _ =>
           Left(DLCompileError(off, s"Function sortAsc() expected 0 or 1 argument(s), got ${args.length}"))
       }
@@ -327,9 +423,9 @@ trait Level1 extends Level0 {
     M_SORTDESC -> { (recv, args, off) =>
       args match {
         case Nil =>
-          Right(SortFn(recv, None, asc = false))
+          Right(SortDescFn(recv, None))
         case a1 :: Nil =>
-          expectGetPath(a1, M_SORTDESC, off).map(p => SortFn(recv, Some(p), asc = false))
+          expectGetPath(a1, M_SORTDESC, off).map(p => SortDescFn(recv, Some(p)))
         case _ =>
           Left(DLCompileError(off, s"Function sortDesc() expected 0 or 1 argument(s), got ${args.length}"))
       }
@@ -379,7 +475,7 @@ trait Level1 extends Level0 {
   private def promoteToCollection(recv: Fn[Any])(using ctx: ExprContext): Fn[Any] = recv match
     case g @ GetFn(name) =>
       // If the bare name is in loop scope, prefer its collection binding `name[]`
-      val inLoop = ctx.scopes.headOption.exists(_.contains(name))
+      val inLoop = ctx.symbols.headOption.exists(_.contains(name))
       if inLoop then GetFn(s"$name[]") else g
     case other => other
 
@@ -392,13 +488,13 @@ trait Level1 extends Level0 {
         P(Index ~ pathBase.?).map {
           case (_, None) =>
             // sortAsc() — natural ordering on the collection itself
-            Right(SortFn(inner, None, asc = true))
+            Right(SortAscFn(inner, None))
 
           case (offset, Some(rawKey)) =>
             // sortAsc(field) — rewrite/validate (possibly relative) key
             CorrectPath.rewritePath(rawKey, offset) match {
               case Left(err)       => Left(err)
-              case Right(cleanKey) => Right(SortFn(inner, Some(cleanKey), asc = true))
+              case Right(cleanKey) => Right(SortAscFn(inner, Some(cleanKey)))
             }
         }
     }
@@ -409,12 +505,12 @@ trait Level1 extends Level0 {
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
         P(Index ~ pathBase.?).map {
           case (_, None) =>
-            Right(SortFn(inner, None, asc = false))
+            Right(SortDescFn(inner, None))
 
           case (offset, Some(rawKey)) =>
             CorrectPath.rewritePath(rawKey, offset) match {
               case Left(err)       => Left(err)
-              case Right(cleanKey) => Right(SortFn(inner, Some(cleanKey), asc = false))
+              case Right(cleanKey) => Right(SortDescFn(inner, Some(cleanKey)))
             }
         }
     }
@@ -534,10 +630,28 @@ trait Level1 extends Level0 {
       // 1) Add a correctly-typed 'this' based on the base path (sets receiver + 'this' symbol)
       val ctxWithThis = Utility.addThisType(basePath, ctx)
 
-      // 2) If basePath is a list of objects, push its element fields into a lexical scope
-      val elemSchema = Utility.elementSchemaFor(basePath, ctxWithThis.typeInfo)
+      // 2) elemSchema is now the single FieldType (if any) at basePath
+      val maybeField: Option[FieldType] = Utility.elementSchemaFor(basePath, ctxWithThis.schema)
+
+      // Extract the actual child fields if the field is a class or wraps a class
+      val childFields: List[FieldType] = maybeField match {
+        case Some(c: ClassType) => c.fields
+        case Some(o: OptionType) =>
+          o.valueType match {
+            case c: ClassType => c.fields
+            case _ => Nil
+          }
+        case Some(l: ListType) =>
+          l.elementType match {
+            case c: ClassType => c.fields
+            case _ => Nil
+          }
+        case _ => Nil
+      }
+
+      // Only push a new scope if there are nested fields to expose
       val ctxForArgs =
-        if elemSchema.nonEmpty then ctxWithThis.pushScope(elemSchema)
+        if childFields.nonEmpty then ctxWithThis.pushScope(childFields)
         else ctxWithThis
 
       given ExprContext = ctxForArgs

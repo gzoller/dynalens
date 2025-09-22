@@ -24,129 +24,250 @@ package parser
 
 object MethodSig:
 
+  def lookup(name: String): Option[MethodSig] = methodSigs.get(name)
+
   trait MethodSig:
-    /** Accepted receiver kinds (coarse). E.g., Set(List) for filter/sort. */
-    def upon: Set[SymbolType]
+    /** Accepted receiver kinds */
+    def accepts(receiver: FieldType): Boolean
 
-    /** Result kind given the receiver kind (coarse). */
-    def out(receiver: SymbolType): SymbolType
-
-  /** (Optional) validate args against receiver kind; return message when invalid. */
-  //    def validateArgs(receiver: SymbolType, args: List[Fn[?]]): Option[String] = None
-
-//  private object GetSig extends MethodSig:
-//    def upon: Set[SymbolType] = Set(SymbolType.Map)
-//    def out(r: SymbolType): SymbolType = SymbolType.Map
+    /** Result kind given the receiver kind */
+    def result(receiver: FieldType): FieldType
 
   private object StartsWithSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Boolean
+    def accepts(receiver: FieldType): Boolean = receiver match
+      case ScalarType(_, "java.lang.String") => true
+      case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType(name = "<anon>", typeName = "scala.Boolean")
 
   private object EndsWithSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Boolean
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ScalarType(_, "java.lang.String") => true
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType("", "scala.Boolean")
 
   private object ContainsSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar, SymbolType.List, SymbolType.OptionalList, SymbolType.None, SymbolType.Map, SymbolType.OptionalMap)
-    def out(r: SymbolType): SymbolType = SymbolType.Boolean
+    def accepts(receiver: FieldType): Boolean = receiver match
+      // String.contains(...)
+      case ScalarType(_, "java.lang.String") => true
+      // Collections: List or Map (including Option[List] / Option[Map])
+      case ListType(_, _, _) => true
+      case MapType(_, _, _, _) => true
+      case OptionType(_, inner, _) => accepts(inner) // unwrap Option and retry
+      case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType("", "scala.Boolean")
 
   private object EqualsIgnoreCaseSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Boolean
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ScalarType(_, "java.lang.String") => true
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType("", "scala.Boolean")
 
+  // String.matches(<regex>)
   private object MatchesRegexSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Boolean
+    def accepts(receiver: FieldType): Boolean = receiver match
+      case ScalarType(_, "java.lang.String") => true
+      case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType("", "scala.Boolean")
 
+  // OptionalValue.else(<default>)
   private object ElseSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.OptionalScalar, SymbolType.None)
-    def out(r: SymbolType): SymbolType = SymbolType.Scalar
+    def accepts(receiver: FieldType): Boolean = receiver match
+      case OptionType(_, valueType, _) => valueType.isInstanceOf[ScalarType]
+      // conceptually covers "None" as an empty Option
+      case _ => false
+    def result(receiver: FieldType): FieldType = receiver match
+      // unwrap and return the underlying scalar type
+      case OptionType(_, valueType: ScalarType, _) => valueType
+      case _ => ScalarType("", "scala.Any")
 
   private object IsDefinedSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.OptionalScalar, SymbolType.OptionalList, SymbolType.OptionalMap, SymbolType.None)
-    def out(r: SymbolType): SymbolType = SymbolType.Boolean
+    def accepts(receiver: FieldType): Boolean = receiver match
+      case _: OptionType => true
+      // historically `None` (missing value) also passed; treat empty Option the same
+      case ScalarType(_, "scala.None.type") => true
+      case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType("", "scala.Boolean")
 
   private object LenSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.List, SymbolType.OptionalList, SymbolType.OptionalMap, SymbolType.None, SymbolType.Scalar, SymbolType.Map)
-    def out(r: SymbolType): SymbolType = SymbolType.Boolean
+    def accepts(receiver: FieldType): Boolean = receiver match
+      case _: ListType => true
+      case _: MapType => true
+      case OptionType(_, v, _) if v.isInstanceOf[ListType] || v.isInstanceOf[MapType] => true
+      case ScalarType(_, t) if t == "java.lang.String" => true
+      case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType("", "scala.Int")
 
   private object ToUpperCaseSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Scalar
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ScalarType(_, typeName) if typeName == "java.lang.String" => true
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType(receiver.name, "java.lang.String")
 
   private object ToLowerCaseSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Scalar
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ScalarType(_, typeName) if typeName == "java.lang.String" => true
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType(receiver.name, "java.lang.String")
 
   private object TrimSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Scalar
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ScalarType(_, typeName) if typeName == "java.lang.String" => true
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType(receiver.name, "java.lang.String")
 
   private object TemplateSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Scalar
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ScalarType(_, typeName) if typeName == "java.lang.String" => true
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType(receiver.name, "java.lang.String")
 
   private object SubstrSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Scalar
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ScalarType(_, typeName) if typeName == "java.lang.String" => true
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType(receiver.name, "java.lang.String")
 
   private object ReplaceSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Scalar
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ScalarType(_, typeName) if typeName == "java.lang.String" => true
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType(receiver.name, "java.lang.String")
 
   private object DateFmtSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Scalar
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ScalarType(_, typeName) if typeName == "java.util.Date" => true
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType(receiver.name, "java.lang.String")
 
   private object ToDateSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Scalar)
-    def out(r: SymbolType): SymbolType = SymbolType.Scalar
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ScalarType(_, typeName) if typeName == "java.lang.String" => true
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      ScalarType(receiver.name, "java.util.Date")
 
   private object NowSig extends MethodSig:
-    def upon: Set[SymbolType] = Set.empty[SymbolType]
-    def out(r: SymbolType): SymbolType = SymbolType.Scalar
+    def accepts(receiver: FieldType): Boolean =
+      true // or: receiver.isInstanceOf[ScalarType] etc.
+    def result(receiver: FieldType): FieldType =
+      ScalarType(receiver.name, "java.util.Date")
 
   private object UuidSig extends MethodSig:
-    def upon: Set[SymbolType] = Set.empty[SymbolType]
-    def out(r: SymbolType): SymbolType = SymbolType.Scalar
+    def accepts(receiver: FieldType): Boolean =
+      true // or: receiver.isInstanceOf[ScalarType] etc.
+    def result(receiver: FieldType): FieldType =
+      ScalarType(receiver.name, "java.util.UUID")
 
   private object SortAscSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.List, SymbolType.OptionalList)
-    def out(r: SymbolType): SymbolType = r
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, _, _) => true
+        case OptionType(_, ListType(_, _, _), "scala.Option") => true
+        case _ => false
+    def result(receiver: FieldType): FieldType = receiver
 
   private object SortDescSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.List, SymbolType.OptionalList)
-    def out(r: SymbolType): SymbolType = r
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, _, _) => true
+        case OptionType(_, ListType(_, _, _), "scala.Option") => true
+        case _ => false
+    def result(receiver: FieldType): FieldType = receiver
 
   private object FilterSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.List, SymbolType.OptionalList)
-    def out(r: SymbolType): SymbolType = r
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, _, _) => true
+        case OptionType(_, ListType(_, _, _), "scala.Option") => true
+        case _ => false
+    def result(receiver: FieldType): FieldType = receiver
 
   private object DistinctSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.List, SymbolType.OptionalList)
-    def out(r: SymbolType): SymbolType = r
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, _, _) => true
+        case OptionType(_, ListType(_, _, _), "scala.Option") => true
+        case _ => false
+    def result(receiver: FieldType): FieldType = receiver
 
   private object LimitSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.List, SymbolType.OptionalList)
-    def out(r: SymbolType): SymbolType = r
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, _, _) => true
+        case OptionType(_, ListType(_, _, _), "scala.Option") => true
+        case _ => false
+    def result(receiver: FieldType): FieldType = receiver
 
   private object ReverseAscSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.List, SymbolType.OptionalList)
-    def out(r: SymbolType): SymbolType = r
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, _, _) => true
+        case OptionType(_, ListType(_, _, _), "scala.Option") => true
+        case _ => false
+    def result(receiver: FieldType): FieldType = receiver
 
   private object CleanSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.List, SymbolType.OptionalList)
-    def out(r: SymbolType): SymbolType = r
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, _, _) => true
+        case OptionType(_, ListType(_, _, _), "scala.Option") => true
+        case _ => false
+    def result(receiver: FieldType): FieldType = receiver
 
   private object KeysSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Map, SymbolType.OptionalMap)
-    def out(r: SymbolType): SymbolType = SymbolType.List
+    def accepts(receiver: FieldType): Boolean = receiver match
+      case MapType(_, keyT: ScalarType, _, tn) if tn.startsWith("scala.collection.immutable.Map") => true
+      case OptionType(_, MapType(_, keyT: ScalarType, _, tn), "scala.Option") if tn.startsWith("scala.collection.immutable.Map") => true
+      case _ => false
+    def result(receiver: FieldType): FieldType = receiver match
+      case m: MapType =>
+        ListType("", m.keyType, s"scala.collection.immutable.List[${m.keyType.typeName}]")
+      case o: OptionType if o.valueType.isInstanceOf[MapType] =>
+        val m = o.valueType.asInstanceOf[MapType]
+        OptionType("", ListType("", m.keyType, s"scala.collection.immutable.List[${m.keyType.typeName}]"), "scala.Option")
+      case _ =>
+        ListType("", ScalarType("", "scala.Any"), "scala.collection.immutable.List[scala.Any]")
+
 
   private object ValuesSig extends MethodSig:
-    def upon: Set[SymbolType] = Set(SymbolType.Map, SymbolType.OptionalMap)
-    def out(r: SymbolType): SymbolType = SymbolType.List
+    def accepts(receiver: FieldType): Boolean = receiver match
+      case MapType(_, keyT: ScalarType, _, tn) if tn.startsWith("scala.collection.immutable.Map") => true
+      case OptionType(_, MapType(_, keyT: ScalarType, _, tn), "scala.Option") if tn.startsWith("scala.collection.immutable.Map") => true
+      case _ => false
+    def result(receiver: FieldType): FieldType = receiver match
+      case m: MapType =>
+        ListType("", m.valueType, s"scala.collection.immutable.List[${m.valueType.typeName}]")
+      case o: OptionType if o.valueType.isInstanceOf[MapType] =>
+        val m = o.valueType.asInstanceOf[MapType]
+        OptionType("", ListType("", m.valueType, s"scala.collection.immutable.List[${m.valueType.typeName}]"), "scala.Option")
+      case _ =>
+        ListType("", ScalarType("", "scala.Any"), "scala.collection.immutable.List[scala.Any]")
 
-  val methodSigs: Map[String, MethodSig] = Map(
+  private val methodSigs: Map[String, MethodSig] = Map(
     // scalar/string ops
     M_STARTSWITH -> StartsWithSig,
     M_ENDSWITH -> EndsWithSig,
@@ -179,7 +300,7 @@ object MethodSig:
     // collection (Seq) methods
     M_SORTASC -> SortAscSig,
     M_SORTDESC -> SortDescSig,
-    M_FILTER -> FilterSig, // parser-side “filter(...)”
+    M_FILTER -> FilterSig,
     M_DISTINCT -> DistinctSig,
     M_LIMIT -> LimitSig,
     M_REVERSE -> ReverseAscSig,

@@ -41,34 +41,6 @@ case class DLCompileError(offset: Int, msg: String):
     val col = lines.lastOption.map(_.length).getOrElse(0) + 1
     (line, col)
 
-//extension [A](parser: P[Either[DLCompileError, A]])
-//  def withExprCtx(using ExprContext): P[Either[DLCompileError, A]] = parser
-
-//
-// ExprContext used during compilation
-//
-enum SymbolType:
-  case Scalar // Fn[Any]
-  case Boolean // BooleanFn
-  case Map
-  case List
-  case OptionalScalar
-  case OptionalList
-  case OptionalMap
-  case None
-
-private def pretty(sym: SymbolType): String =
-  sym match {
-    case SymbolType.Scalar         => "scalar"
-    case SymbolType.Boolean        => "boolean"
-    case SymbolType.Map            => "map"
-    case SymbolType.List           => "list"
-    case SymbolType.OptionalScalar => "optional scalar"
-    case SymbolType.OptionalList   => "optional list"
-    case SymbolType.OptionalMap    => "optional map"
-    case SymbolType.None           => "none"
-  }
-
 // Math functions
 val M_MIN = "min"
 val M_MAX = "max"

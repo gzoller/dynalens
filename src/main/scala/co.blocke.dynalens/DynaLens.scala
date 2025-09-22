@@ -36,7 +36,7 @@ case class DynaLens[T](
     _registry: Map[String, DynaLens[?]],
     _typeName: String,
     _typeInfo: Map[String, Any],
-    _schema: Schema,
+    _schema: ClassType,
     _elemIsOptional: Map[String, Boolean] // per-field: Seq element is Option[_]?
 ):
   type ThisT = T
@@ -181,7 +181,6 @@ case class DynaLens[T](
   }
 
   def update(path: String, value: Any, obj: T): ZIO[_BiMapRegistry, DynaLensError, T] =
-    println("HEY: "+parsePath(path))
     _updateValue(parsePath(path), value, obj)
 
   private def _updateValue(pathElements: List[PathElement], value: Any, obj: T): ZIO[_BiMapRegistry, DynaLensError, T] = {
@@ -217,21 +216,14 @@ case class DynaLens[T](
 
       // Field descent: foo.bar = ...
       case Field(f, isOptional) :: rest =>
-        println("f: "+f+ " -- current "+current)
-        println("rest: "+rest)
         for {
           nested <- currentLens._get(f, current.asInstanceOf[currentLens.ThisT])
-          _ <- ZIO.succeed(println("--1-- "+nested))
           nextLens <- currentLens._registry.get(f) match
             case Some(a) => ZIO.succeed(a)
             case None    => ZIO.fail(DynaLensError(s"No nested lens for field '$f'"))
-          _ <- ZIO.succeed(println("--2-- "+nextLens))
           updatedNested <- step(nested, nextLens, rest, mode, rhsValue, baseCtx)
-          _ <- ZIO.succeed(println("--3-- "+updatedNested))
           wrapped = wrapIfNeeded(isOptional, updatedNested)
-          _ <- ZIO.succeed(println("--4-- "+wrapped))
           updated <- currentLens._update(f, wrapped, current.asInstanceOf[currentLens.ThisT])
-          _ <- ZIO.succeed(println("--5-- "+updated))
         } yield updated
 
       // Indexed (list) … (your normalized, MapOver/Assign split, with per-element ctx)
@@ -762,8 +754,6 @@ object DynaLens:
             case _ => None
           }
         }
-        println(s"[dynalens] registry pairs (macro): ${pairs.size}")
-        pairs.foreach(p => println(s"[dynalens]  pair key: ${p.show}"))
         val registryExpr: Expr[Map[String, DynaLens[?]]] = {
           val listExpr: Expr[List[(String, DynaLens[?])]] = Expr.ofList(pairs)
           '{ Map.from[String, DynaLens[?]]($listExpr) }
@@ -778,12 +768,9 @@ object DynaLens:
           }
         val elemIsOptionalExpr: Expr[Map[String, Boolean]] =
           liftMapBoolean(ctx, elemOptPairs.toMap)
-
         val typeNameExpr = Expr(s.typedName.toString)
         val typeInfoExpr = liftTypeInfo(ctx, buildPathTree(s))
-
-        val schemaExpr = Expr(Schema.buildSchema(s))
-        println(s"[macro] registry size for ${s.typedName} = ${pairs.size}")
+        val schemaExpr = Expr(Schema.build(s))
 
         '{ DynaLens[T]($updateLambdaExpr, $getLambdaExpr, $registryExpr, $typeNameExpr, $typeInfoExpr, $schemaExpr, $elemIsOptionalExpr) }
 
@@ -791,7 +778,6 @@ object DynaLens:
     }
 
   private def buildTraitLens[T: Type](ctx: DynaLensBuildContext, tr: TraitRef[?]): Expr[DynaLens[T]] = {
-    import ctx.quotes.reflect.*
     given Quotes = ctx.quotes
 
     val get = generateTraitGetLambda[T](ctx, tr.fields, tr)
@@ -842,7 +828,7 @@ object DynaLens:
       '{ Map.from[String, DynaLens[?]]($listExpr) }
     }
     val typeInfoExpr: Expr[Map[String, Any]] = liftTypeInfo(ctx, buildPathTree(tr))
-    val schemaExpr = Expr(Schema(tr.name, Nil, Map.empty)) // TODO
+    val schemaExpr = Expr(Schema.build(tr))
     val elemOptPairs =
       tr.fields.map { f =>
         val isElemOpt = f.fieldRef match
@@ -872,7 +858,7 @@ object DynaLens:
       _ => TypeRepr.of[zio.ZIO[Any, DynaLensError, T]]
     )
 
-    val x = Lambda(owner, mt, { (_, args) =>
+    Lambda(owner, mt, { (_, args) =>
       val fieldParam = args(0).asInstanceOf[Term]
       val valueParam = args(1).asInstanceOf[Term]
       val targetParam = args(2).asInstanceOf[Term]
@@ -898,6 +884,9 @@ object DynaLens:
                     None,
                     Apply(Select.unique(Ref(childSym), "copy"), copyArgs)
                   )
+                case _ =>
+                  // should never happen at runtime, but makes match exhaustive
+                  throw new MatchError((c.refType, tf.fieldRef.refType))
           }.toList
 
         val trNameExpr = Expr(tr.typedName.toString)
@@ -928,11 +917,7 @@ object DynaLens:
         )
 
       Match(fieldParam, cases :+ fallback)
-    })
-    println("===== (Trait) Generated Update =====")
-    println(x.show(using Printer.TreeCode))
-    println("===== End Generated Update =====")
-    x.asExprOf[(String, Any, T) => zio.ZIO[Any, DynaLensError, T]]
+    }).asExprOf[(String, Any, T) => zio.ZIO[Any, DynaLensError, T]]
   }
 
   private def generateTraitGetLambda[T: Type](
@@ -1052,7 +1037,7 @@ object DynaLens:
 
     val methodType = MethodType(paramNames)(_ => paramTypes, _ => TypeRepr.of[ZIO[Any, DynaLensError, T]])
 
-    val x = Lambda(
+    Lambda(
       methodSym,
       methodType,
       (_, params) => {
@@ -1072,7 +1057,6 @@ object DynaLens:
                 case _ => None
 
             case opt: ScalaOptionRef[?] =>
-              val name = field.name
               val innerRTypeRef = opt.optionParamType
               innerRTypeRef.refType match
                 case '[innerT] =>
@@ -1089,7 +1073,6 @@ object DynaLens:
                   Some(standardCaseDef[T](ctx)(field, updatedValue, targetParam, fields))
 
             case _ =>
-              val name = field.name
               val fieldType = field.fieldRef.refType
               val updatedValue = TypeApply(
                 Select.unique(valueParam, "asInstanceOf"),
@@ -1102,20 +1085,12 @@ object DynaLens:
           Wildcard(),
           None,
           '{
-            // print whatever value was being matched
-            println("DEBUG fallback — fieldParam = " + ${ fieldParam.asExprOf[Any] })
             ZIO.fail[DynaLensError](DynaLensError("Field not found (4): " + ${ fieldParam.asExprOf[String] }))
           }.asTerm
         )
         Match(fieldParam, cases :+ fallback)
       }
-    )
-
-    println("===== (Class) Generated Update =====")
-    println(x.show(using Printer.TreeCode))
-    println("===== End Generated Update =====")
-    x.asExprOf[(String, Any, T) => zio.ZIO[Any, DynaLensError, T]]
-
+    ).asExprOf[(String, Any, T) => zio.ZIO[Any, DynaLensError, T]]
 
 
   private def standardCaseDef[T: scala.quoted.Type](
@@ -1147,193 +1122,6 @@ object DynaLens:
     )
   }
 
-  // nested: outerField is a sealed-trait field; innerField is the name you’re updating in the child
-  private def buildNestedTraitFieldCase[T: Type](ctx: DynaLensBuildContext)
-                                                (outerField: FieldInfoRef,
-                                                 innerField: FieldInfoRef,
-                                                 tr: TraitRef[?],
-                                                 valueParam: ctx.quotes.reflect.Term,
-                                                 targetParam: ctx.quotes.reflect.Term,
-                                                 parentFields: List[ctx.quotes.reflect.Symbol])
-  : ctx.quotes.reflect.CaseDef = {
-    import ctx.quotes.reflect.*
-    given Quotes = ctx.quotes
-
-    val outerName = outerField.name // "animal"
-    val innerName = innerField.name // "name"
-
-    // We only generate a case for the trait-declared field type
-    innerField.fieldRef.refType match
-      case '[innerT] =>
-        // Build one case per sealed child: child.copy(name = value.asInstanceOf[innerT], …)
-        val childCases: List[CaseDef] =
-          tr.sealedChildren.collect {
-            case c: ScalaClassRef[?] if c.isCaseClass =>
-              c.refType match
-                case '[childT] =>
-                  val updatedInner: Term =
-                    TypeApply(
-                      Select.unique(valueParam, "asInstanceOf"),
-                      List(TypeTree.of[innerT])
-                    ).asExpr.asTerm
-
-                  val childSym =
-                    Symbol.newVal(Symbol.spliceOwner, "child", TypeRepr.of[childT], Flags.EmptyFlags, Symbol.noSymbol)
-
-                  // copy all child fields, overriding the trait field we're updating
-                  val copyArgs =
-                    c.fields.map { f =>
-                      if f.name == innerName then NamedArg(f.name, updatedInner)
-                      else NamedArg(f.name, Select.unique(Ref(childSym), f.name))
-                    }
-
-                  CaseDef(
-                    // case child: childT =>
-                    Typed(Bind(childSym, Wildcard()).asInstanceOf[Term], TypeTree.of[childT]),
-                    None,
-                    // child.copy(...): this has type childT, which is a subtype of the trait
-                    Apply(Select.unique(Ref(childSym), "copy"), copyArgs)
-                  )
-          }
-
-        val trNameExpr = Expr(tr.typedName.toString)
-        val innerNameExpr = Expr(innerName)
-
-        // If no child matches (shouldn’t happen with sealed sets)
-        val fallback: Term =
-          '{ throw DynaLensError(
-            "No subtype of " + $trNameExpr + " defines field '" + $innerNameExpr + "'"
-          ) }.asTerm
-
-        // innerMatch has the trait type (e.g., Animal)
-        val innerMatch: Term =
-          Match(
-            Select.unique(targetParam, outerName), // target.animal
-            childCases :+ CaseDef(Wildcard(), None, fallback)
-          )
-
-        // Now build the parent copy, plugging the computed trait value into the outer slot
-        val topCopyArgs =
-          parentFields.map { f =>
-            if f.name == outerName then NamedArg(f.name, innerMatch)
-            else NamedArg(f.name, Select.unique(targetParam, f.name))
-          }
-
-        // IMPORTANT: this CaseDef must match the requested field name ("name"), not "animal"
-        CaseDef(
-          Literal(StringConstant(innerName)),
-          None,
-          '{ ZIO.succeed(${ Apply(Select.unique(targetParam, "copy"), topCopyArgs).asExprOf[T] }) }.asTerm
-        )
-  }
-
-  // IMPORTANT: polymorphic in Q so Term/Symbol types match the caller's quotes
-  // Put this next to your macro helpers
-  // Handles updates for a field whose declared type is a sealed trait
-  // Handles updates for a field whose declared type is a sealed trait
-  // top-level: field itself is a sealed-trait-typed field
-  private def buildSealedTraitUpdateCase[T: Type](ctx: DynaLensBuildContext)
-                                                 (field: FieldInfoRef,
-                                                  tr: TraitRef[?],
-                                                  valueParam: ctx.quotes.reflect.Term,
-                                                  targetParam: ctx.quotes.reflect.Term,
-                                                  parentFields: List[ctx.quotes.reflect.Symbol])
-  : ctx.quotes.reflect.CaseDef = {
-    import ctx.quotes.reflect.*
-    given Quotes = ctx.quotes
-
-    val fieldName  = field.name
-    val trNameExpr = Expr(tr.typedName.toString)
-
-    field.fieldRef.refType match
-      case '[traitT] =>
-        // ---- DEBUG START ----
-        println(s"[macro] building sealed trait update for field '$fieldName' in trait '${tr.typedName}'")
-        // ---- DEBUG END ----
-
-        val childCases: List[CaseDef] =
-          tr.sealedChildren.collect {
-            case c: ScalaClassRef[?] if c.isCaseClass =>
-              c.fields.find(_.name == fieldName).flatMap { cf =>
-                cf.fieldRef.refType match
-                  case '[childFieldT] =>
-                    c.refType match
-                      case '[childT] =>
-                        val updatedChildValue: Term =
-                          TypeApply(Select.unique(valueParam, "asInstanceOf"), List(TypeTree.of[childFieldT])).asExpr.asTerm
-
-                        // create a symbol to bind the matched child
-                        val childSym = Symbol.newVal(Symbol.spliceOwner, "child", TypeRepr.of[Any], Flags.EmptyFlags, Symbol.noSymbol)
-
-                        // typed reference to the child in the body
-                        val childRefT: Term =
-                          TypeApply(Select.unique(Ref(childSym), "asInstanceOf"), List(TypeTree.of[childT]))
-
-                        // updatedChildValue is your casted RHS: valueParam.asInstanceOf[childFieldT]
-                        val copyArgs: List[Term | NamedArg] =
-                          c.fields.map { f =>
-                            if f.name == fieldName then NamedArg(f.name, updatedChildValue) // updated field
-                            else NamedArg(f.name, Select.unique(childRefT, f.name)) // keep other fields
-                          }
-
-                        // body: child.copy(...), upcast to traitT
-                        val body: Term =
-                          Apply(Select.unique(childRefT, "copy"), copyArgs)
-                            .asExprOf[traitT]
-                            .asTerm
-
-                        // guard: child.isInstanceOf[childT]
-                        val guard: Term =
-                          TypeApply(Select.unique(Ref(childSym), "isInstanceOf"), List(TypeTree.of[childT]))
-
-                        // FINAL child CaseDef: case child if child.isInstanceOf[childT] => body
-                        val childCase: CaseDef =
-                          CaseDef(
-                            Bind(childSym, Wildcard()), // pattern: just a bind (no Typed)
-                            Some(guard), // guard checks the subtype
-                            body // uses casted childRefT
-                          )
-                        Some(childCase)
-                  case _ => None
-              }
-          }.flatten
-
-        val innerMatch: Term =
-          Match(
-            Select.unique(targetParam, fieldName),
-            childCases :+
-              CaseDef(
-                Wildcard(),
-                None,
-                '{ throw DynaLensError(
-                  "No subtype of " + $trNameExpr + " defines field '" + ${ Expr(fieldName) } + "'"
-                )
-                }.asTerm
-              )
-          )
-
-        // ---- DEBUG innerMatch ----
-        println(s"[macro]   innerMatch for '$fieldName': " + innerMatch.show)
-        // --------------------------
-
-        val copyArgs =
-          parentFields.map { f =>
-            if f.name == fieldName then NamedArg(f.name, innerMatch)
-            else NamedArg(f.name, Select.unique(targetParam, f.name))
-          }
-
-        val finalCase = CaseDef(
-          Literal(StringConstant(fieldName)),
-          None,
-          '{ ZIO.succeed(${ Apply(Select.unique(targetParam, "copy"), copyArgs).asExprOf[T] }) }.asTerm
-        )
-
-        // ---- DEBUG finalCase ----
-        println(s"[macro]   final case for '$fieldName': " + finalCase.show)
-        // -------------------------
-
-        finalCase
-  }
 
   /** Build the schema tree used for path rewriting/type checks. */
   // Build the schema tree used as typeInfo for the compiler/rewrite
@@ -1418,7 +1206,7 @@ object DynaLens:
     '{ Map[String, Any]().++($liftedListExpr) }
   }
 
-  private def liftMapBoolean(ctx: DynaLensBuildContext, map: Map[String, Boolean])(using Quotes): Expr[Map[String, Boolean]] =
+  private def liftMapBoolean(ctx: DynaLensBuildContext, map: Map[String, Boolean]): Expr[Map[String, Boolean]] =
     given Quotes = ctx.quotes
     val pairs: List[Expr[(String, Boolean)]] =
       map.toList.map { case (k, v) => '{ (${ Expr(k) }, ${ Expr(v) }) } }

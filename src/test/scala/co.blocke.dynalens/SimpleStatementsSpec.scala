@@ -19,10 +19,10 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+import co.blocke.dynalens.DynaLens.dynalens
+import co.blocke.dynalens.*
 import zio.*
 import zio.test.*
-
-import DynaLens.*
 
 object SimpleStatementsSpec extends ZIOSpecDefault:
 

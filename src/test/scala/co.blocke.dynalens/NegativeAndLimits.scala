@@ -19,13 +19,12 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+import co.blocke.dynalens.CtxStrings.toStringCtx
+import co.blocke.dynalens.DynaLens.dynalens
+import co.blocke.dynalens.parser.Script
+import co.blocke.dynalens.*
 import zio.*
 import zio.test.*
-
-import DynaLens.*
-import parser.Script
-
-import CtxStrings.*
 
 object NegativeAndLimits extends ZIOSpecDefault:
 
