@@ -41,6 +41,9 @@ object NumPromote {
 
   final case class Box(ints: Vector[Int] = Vector.empty, longs: Vector[Long] = Vector.empty, doubles: Vector[Double] = Vector.empty, kind: Kind = KInt)
 
+  /** Box used when an optional list is None: acts like an empty Vector for folding. */
+  val emptyBox: Box = Box()
+
   /** Collect an Iterable[Any] into typed buckets + overall promoted kind. */
   @tailrec
   def collect(raw: Any, op: String): Either[DynaLensError, Box] = raw match {

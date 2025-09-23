@@ -796,7 +796,7 @@ object Parsing extends ZIOSpecDefault:
           |  val y = x[2].sortAsc()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,DistinctFn(GetFn(l2[]),None)), ValStmt(y,SortFn(GetFn(x[2]),None,true))))"""
+        """BlockStmt(List(ValStmt(x,DistinctFn(GetFn(l2[]),None)), ValStmt(y,SortAscFn(GetFn(x[2]),None))))"""
       val expectedResult =
         """top -> ComplexLists(1,List(),List(List(1, 2, 3), List(5, 8, 3), List(1, 2, 3), List(0, 99, -2)))
           |x -> List(List(1, 2, 3), List(5, 8, 3), List(0, 99, -2))

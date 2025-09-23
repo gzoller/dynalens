@@ -8,8 +8,14 @@ import co.blocke.scala_reflection.RTypeRef
 sealed trait FieldType {
   def name: String
   def typeName: String
+  def isNumeric: Boolean = false
 }
-case class ScalarType(name: String, typeName: String) extends FieldType
+case class ScalarType(name: String, typeName: String) extends FieldType:
+  override def isNumeric: Boolean =
+    this match
+      case ScalarType(_, t) if Set("scala.Int", "scala.Long", "scala.Float", "scala.Double").contains(t) => true
+      case _ => false
+
 case class OptionType(name: String, valueType: FieldType, typeName: String) extends FieldType
 case class ListType(name: String, elementType: FieldType, typeName: String) extends FieldType
 case class MapType(name: String, keyType: FieldType, valueType: FieldType, typeName: String) extends FieldType
@@ -107,8 +113,15 @@ object Schema:
   // --- helper resolvers, each working with inlined fields ---
   private def resolveOption(o: OptionType, tail: List[String], optDepth: Int): Option[ResolvedType] =
     o.valueType match
-      case c: ClassType => resolvePath(c, tail, optDepth + 1)
-      case other        => if tail.isEmpty then Some(ResolvedType(other, optDepth + 1)) else None
+      case c: ClassType =>
+        // preserve the Option wrapper, but still walk inside
+        resolvePath(c, tail, optDepth + 1)
+          .map(r => r.copy(fieldType = OptionType(o.name, r.fieldType, o.typeName)))
+      case other =>
+        if tail.isEmpty then
+          // keep the OptionType itself (not just inner type)
+          Some(ResolvedType(o, optDepth + 1))
+        else None
 
   private def resolveTrait(s: SealedTraitType, tail: List[String], optDepth: Int): Option[ResolvedType] =
     tail match

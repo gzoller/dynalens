@@ -45,7 +45,7 @@ object ComplexSpec extends ZIOSpecDefault:
       val script = BlockStmt(
         List(
           ValStmt("v1", ConstantFn(42)),
-          MapStmt("pack.shipments[].items[].qty", GetFn("v1"))
+          MapStmt("pack.shipments[].items[].qty", GetFn("v1",false))
         )
       )
       for {
@@ -58,7 +58,7 @@ object ComplexSpec extends ZIOSpecDefault:
         List(
           ValStmt("v1", ConstantFn(15)),
           IfStmt(
-            GreaterThanFn(GetFn("v1"), ConstantFn(5)),
+            GreaterThanFn(GetFn("v1",false), ConstantFn(5)),
             MapStmt("pack.shipments[].items[].qty", ConstantFn(99)),
             Some(MapStmt("pack.shipments[].items[].qty", ConstantFn(1)))
           )
@@ -71,7 +71,7 @@ object ComplexSpec extends ZIOSpecDefault:
     },
     test("Failing GetFn should error") {
       for {
-        result <- GetFn("notThere").resolve(DynaContext.empty).either
+        result <- GetFn("notThere",false).resolve(DynaContext.empty).either
       } yield assertTrue(result.isLeft)
     }
   ).provide(BiMapRegistry.layer(EmptyBiMapRegistry))

@@ -104,11 +104,13 @@ trait Level1 extends Level0 {
     ).flatMap { case (offset, head, tail) =>
       val base: Fn[Any] = tail.foldLeft(head) {
         case (g1: GetFn, g2: GetFn) =>
-          GetFn(s"${g1.path}.${g2.path}")
+          val combinedPath = s"${g1.path}.${g2.path}"
+          GetFn(combinedPath, isOptional = Utility.isPathOptional(combinedPath, ctx))
 
         case (idx: IndexFn, g2: GetFn) =>
           // keep the index, but we still represent the full string path for GetFn
-          GetFn(s"${Utility.pathString(idx)}.${g2.path}")
+          val combinedPath = s"${Utility.pathString(idx)}.${g2.path}"
+          GetFn(combinedPath, isOptional = Utility.isPathOptional(combinedPath, ctx))
 
         case (g1: GetFn, idx: IndexFn) =>
           IndexFn(g1, idx.index)
@@ -143,7 +145,10 @@ trait Level1 extends Level0 {
     }
 
   private def segmentFn[$: P](using ctx: ExprContext): P[Fn[Any]] =
-    P(identU.!).flatMap { name => maybeIndex(GetFn(name)) }
+    P(identU.!).flatMap { name =>
+      val isOpt = Utility.isPathOptional(name, ctx)
+      maybeIndex(GetFn(name, isOptional = isOpt))
+    }
 
   // If helpful, define the builder type somewhere central:
   // type MethodBuilder = (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]
@@ -152,7 +157,7 @@ trait Level1 extends Level0 {
     // === 1) Context setup (unchanged) ===
     val argsCtx: ExprContext =
       base match {
-        case GetFn(p) =>
+        case GetFn(p, _) =>
           val maybeField: Option[FieldType] = Utility.elementSchemaFor(p, ctx.schema)
 
           val childFields: List[FieldType] = maybeField match {
@@ -205,55 +210,6 @@ trait Level1 extends Level0 {
       case Right(fn) => maybeIndex(fn).map(Right(_))
     }
   }
-//  def methodChain[$: P](base: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] = {
-//    val argsCtx: ExprContext =
-//      base match {
-//        case GetFn(p) =>
-//          // new API returns Option[FieldType]
-//          val maybeField: Option[FieldType] = Utility.elementSchemaFor(p, ctx.schema)
-//
-//          // if the field is a class, expose its child fields for downstream method calls
-//          val childFields: List[FieldType] = maybeField match {
-//            case Some(c: ClassType) => c.fields
-//            case Some(o: OptionType) =>
-//              o.valueType match {
-//                case c: ClassType => c.fields
-//                case _ => Nil
-//              }
-//            case Some(l: ListType) =>
-//              l.elementType match {
-//                case c: ClassType => c.fields
-//                case _ => Nil
-//              }
-//            case _ => Nil
-//          }
-//
-//          val withRecv = ctx.withReceiverFromPath(p)
-//          if childFields.nonEmpty then withRecv.withVals(childFields.map(ft => ft.name -> ft): _*)
-//          else withRecv
-//
-//        case _ => ctx
-//      }
-//
-//    given ExprContext = argsCtx
-//
-//    P(methodCall.rep).flatMap { calls =>
-//      val built: Either[DLCompileError, Fn[Any]] =
-//        calls.foldLeft[Either[DLCompileError, Fn[Any]]](Right(base)) {
-//          case (Left(e), _) => Left(e)
-//          case (Right(_), Left(err)) => Left(err)
-//          case (Right(cur), Right((name, args, off))) =>
-//            methodFunctions.get(name) match {
-//              case Some(build3) => build3(cur, args, off)
-//              case None => Left(DLCompileError(off, s"Unknown method: $name"))
-//            }
-//        }
-//
-//      built match
-//        case Left(err) => P(Pass(Left(err)))
-//        case Right(fn) => maybeIndex(fn).map(f => Right(f))
-//    }
-//  }
 
   def baseExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P((standaloneFn.map(Right(_)) | constant | pathFn).flatMap {
@@ -382,7 +338,7 @@ trait Level1 extends Level0 {
       } yield {
         val varMap = recv match
           case ConstantFn(s: String) =>
-            TemplateUtils.extractVariables(s).map(v => v -> GetFn(v)).toMap
+            TemplateUtils.extractVariables(s).map(v => v -> GetFn(v, isOptional = false)).toMap
           case _ =>
             Map.empty[String, Fn[Any]] // template is not a constant, so defer resolution
         InterpolateFn(recv, varMap)
@@ -473,10 +429,10 @@ trait Level1 extends Level0 {
   }
 
   private def promoteToCollection(recv: Fn[Any])(using ctx: ExprContext): Fn[Any] = recv match
-    case g @ GetFn(name) =>
+    case g @ GetFn(name,_) =>
       // If the bare name is in loop scope, prefer its collection binding `name[]`
       val inLoop = ctx.symbols.headOption.exists(_.contains(name))
-      if inLoop then GetFn(s"$name[]") else g
+      if inLoop then GetFn(s"$name[]", g.isOptional) else g
     case other => other
 
   def collectionStmt[$: P](booleanExpr: ExprContext ?=> P[ParseBoolResult])(using ctx: ExprContext): P[ParseStmtResult] = {

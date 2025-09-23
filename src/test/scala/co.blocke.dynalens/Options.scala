@@ -127,7 +127,7 @@ object Options extends ZIOSpecDefault:
           |  interest.sortDesc(number)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,LengthFn(GetFn(interest[]?))), MapStmt(interest[]?.qty,MultiplyFn(GetFn(x),ConstantFn(5))), MapStmt(interest[]?,SortFn(IdentityFn,Some(this.number),false))))"""
+        """BlockStmt(List(ValStmt(x,LengthFn(GetFn(interest[]?))), MapStmt(interest[]?.qty,MultiplyFn(GetFn(x),ConstantFn(5))), MapStmt(interest[]?,SortDescFn(IdentityFn,Some(this.number)))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),Some(List(Item(xyz,10,7), Item(abc,10,5))))
           |x -> 2

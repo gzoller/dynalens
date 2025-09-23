@@ -281,11 +281,15 @@ trait Level2 extends Level1 with ValueExprModule:
         val maybeFt = Utility.rhsType(vfn)
         maybeFt match
           case Some(ft: FieldType) =>
-            val valFt = ValType(name, ft, ft.typeName)
+            // ensure ScalarType carries the val name, so later assignments match cleanly
+            val ftNamed = ft match
+              case s: ScalarType if s.name.isEmpty => s.copy(name = name)
+              case other                           => other
+            val valFt = ValType(name, ftNamed, ftNamed.typeName)
             val newCtx = ctx.withVals(name -> valFt)
             Right((newCtx, ValStmt(name, vfn)))
+
           case None =>
-            // enrich the message with the function name if it's a Fn with methodName
             val reason = vfn match
               case g: GetFn =>
                 s"Unknown field path '${g.path}'"
@@ -322,8 +326,20 @@ trait Level2 extends Level1 with ValueExprModule:
                 case None =>
                   Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${vfn.getClass.getSimpleName}"))
                 case Some(rhsSym) =>
-                  if Utility.areTypesCompatible(effLhs, rhsSym) then Right((ctx, UpdateStmt(cleanPath, vfn)))
-                  else Left(DLCompileError(rhsOff, s"Type mismatch: cannot assign $rhsSym to $lhsSym at $cleanPath"))
+                  // unwrap ValType so that we compare the underlying type to the field's type
+                  val effRhs = rhsSym match
+                    case v: ValType => v.valueType
+                    case other      => other
+
+                  if Utility.areTypesCompatible(effLhs, effRhs) then
+                    Right((ctx, UpdateStmt(cleanPath, vfn)))
+                  else
+                    Left(
+                      DLCompileError(
+                        rhsOff,
+                        s"Type mismatch: cannot assign $rhsSym to $lhsSym at $cleanPath"
+                      )
+                    )
               }
           }
       }

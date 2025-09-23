@@ -238,6 +238,100 @@ object MethodSig:
         case _ => false
     def result(receiver: FieldType): FieldType = receiver
 
+  // Min: smallest numeric element
+  private object MinSig extends MethodSig:
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, elem, _) => elem.isNumeric
+        case OptionType(_, ListType(_, elem, _), "scala.Option") => elem.isNumeric
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      receiver match
+        case ListType(_, elem, _) =>
+          ScalarType("", elem.typeName)
+        case OptionType(_, ListType(_, elem, _), "scala.Option") =>
+          OptionType("", ScalarType("", elem.typeName), "scala.Option")
+        case _ =>
+          ScalarType("", "scala.Any")
+
+  // Max: largest numeric element
+  private object MaxSig extends MethodSig:
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, elem, _) => elem.isNumeric
+        case OptionType(_, ListType(_, elem, _), "scala.Option") => elem.isNumeric
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      receiver match
+        case ListType(_, elem, _) =>
+          ScalarType("", elem.typeName)
+        case OptionType(_, ListType(_, elem, _), "scala.Option") =>
+          OptionType("", ScalarType("", elem.typeName), "scala.Option")
+        case _ =>
+          ScalarType("", "scala.Any")
+
+  // Avg: arithmetic mean of numeric elements
+  private object AvgSig extends MethodSig:
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, elem, _) => elem.isNumeric
+        case OptionType(_, ListType(_, elem, _), "scala.Option") => elem.isNumeric
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      receiver match
+        case ListType(_, elem, _) =>
+          ScalarType("", elem.typeName)
+        case OptionType(_, ListType(_, elem, _), "scala.Option") =>
+          OptionType("", ScalarType("", elem.typeName), "scala.Option")
+        case _ =>
+          ScalarType("", "scala.Any")
+
+  // Median: middle value of numeric elements
+  private object MedianSig extends MethodSig:
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, elem, _) => elem.isNumeric
+        case OptionType(_, ListType(_, elem, _), "scala.Option") => elem.isNumeric
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      receiver match
+        case ListType(_, elem, _) =>
+          ScalarType("", elem.typeName)
+        case OptionType(_, ListType(_, elem, _), "scala.Option") =>
+          OptionType("", ScalarType("", elem.typeName), "scala.Option")
+        case _ =>
+          ScalarType("", "scala.Any")
+
+  private object SumSig extends MethodSig:
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ListType(_, elem, _) => elem.isNumeric
+        case OptionType(_, ListType(_, elem, _), "scala.Option") => elem.isNumeric
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      receiver match
+        case ListType(_, elem, _) =>
+          ScalarType("", elem.typeName) // <-- important: blank name
+        case OptionType(_, ListType(_, elem, _), "scala.Option") =>
+          OptionType("", ScalarType("", elem.typeName), "scala.Option")
+        case _ =>
+          ScalarType("", "scala.Any")
+
+  private object AbsSig extends MethodSig:
+    def accepts(receiver: FieldType): Boolean =
+      receiver match
+        case ScalarType(_, t) if Set("scala.Int", "scala.Long", "scala.Float", "scala.Double").contains(t) => true
+        case OptionType(_, ScalarType(_, t), "scala.Option") if Set("scala.Int", "scala.Long", "scala.Float", "scala.Double").contains(t) => true
+        case _ => false
+    def result(receiver: FieldType): FieldType =
+      receiver match
+        case ScalarType(_, t) =>
+          ScalarType("", t) // blank name for clean assignment
+        case OptionType(_, ScalarType(_, t), "scala.Option") =>
+          OptionType("", ScalarType("", t), "scala.Option")
+        case _ =>
+          ScalarType("", "scala.Any")
+
   private object KeysSig extends MethodSig:
     def accepts(receiver: FieldType): Boolean = receiver match
       case MapType(_, keyT: ScalarType, _, tn) if tn.startsWith("scala.collection.immutable.Map") => true
@@ -284,6 +378,14 @@ object MethodSig:
     M_TODATE -> ToDateSig,
     "now" -> NowSig, // no M_NOW provided
     "uuid" -> UuidSig, // no M_UUID provided
+
+    // math functions
+    M_MIN -> MinSig,
+    M_MAX -> MaxSig,
+    M_SUM -> SumSig,
+    M_AVG -> AvgSig,
+    M_MEDIAN -> MedianSig,
+    M_ABS -> AbsSig,
 
     // option/none helpers
     M_ELSE -> ElseSig,

@@ -39,42 +39,42 @@ object SimpleFnsSpec extends ZIOSpecDefault:
     },
     test("GetFn should return context value") {
       for {
-        result <- GetFn("s1").resolve(testCtx)
+        result <- GetFn("s1",false).resolve(testCtx)
       } yield assertTrue(result == "world")
     },
     test("AddFn should sum two numbers") {
-      val fn = AddFn(GetFn("x"), GetFn("y"))
+      val fn = AddFn(GetFn("x",false), GetFn("y",false))
       for {
         result <- fn.resolve(testCtx)
       } yield assertTrue(result == 13)
     },
     test("SubFn should subtract two numbers") {
-      val fn = SubtractFn(GetFn("x"), GetFn("y"))
+      val fn = SubtractFn(GetFn("x",false), GetFn("y",false))
       for {
         result <- fn.resolve(testCtx)
       } yield assertTrue(result == 7)
     },
     test("ConcatFn should concatenate strings") {
-      val fn = ConcatFn(List(GetFn("top"), GetFn("s1")))
+      val fn = ConcatFn(List(GetFn("top",false), GetFn("s1",false)))
       for {
         result <- fn.resolve(testCtx)
       } yield assertTrue(result == "helloworld")
     },
     test("ToUpperFn should convert string to upper case") {
-      val fn = ToUpperFn(GetFn("s1"))
+      val fn = ToUpperFn(GetFn("s1",false))
       for {
         result <- fn.resolve(testCtx)
       } yield assertTrue(result == "WORLD")
     },
     test("SubstringFn should extract substring") {
-      val fn = SubstringFn(GetFn("top"), ConstantFn(1), Some(ConstantFn(4)))
+      val fn = SubstringFn(GetFn("top",false), ConstantFn(1), Some(ConstantFn(4)))
       for {
         result <- fn.resolve(testCtx)
       } yield assertTrue(result == "ell")
     },
     test("Bad cast in Fn should fail") {
       val badCtx = testCtx.clone().addOne("x", ("oops", None))
-      val fn = AddFn(GetFn("x"), ConstantFn(5))
+      val fn = AddFn(GetFn("x",false), ConstantFn(5))
       for {
         result <- fn.resolve(badCtx).either
       } yield assertTrue(result.isLeft)

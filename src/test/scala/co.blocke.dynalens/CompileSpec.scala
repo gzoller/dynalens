@@ -1,3 +1,24 @@
+/*
+ * Copyright (c) 2025 Greg Zoller
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 package co.blocke.dynalens
 
 import zio._
@@ -17,7 +38,7 @@ object CompileSpec extends ZIOSpecDefault {
     // ------------------------------------------------------------------
     // Positive tests – must compile and match the expected AST
     // ------------------------------------------------------------------
-    
+
     test("arithmetic precedence with indexed list element") {
       val script =
         """val x = 3 + items[1].num * 2
@@ -26,8 +47,8 @@ object CompileSpec extends ZIOSpecDefault {
 
       val expected =
         """BlockStmt(List(
-          |  ValStmt(x,AddFn(ConstantFn(3),MultiplyFn(GetFn(items[1].num),ConstantFn(2)))),
-          |  ValStmt(y,MultiplyFn(AddFn(ConstantFn(3),GetFn(items[1].num)),ConstantFn(2)))
+          |  ValStmt(x,AddFn(ConstantFn(3),MultiplyFn(GetFn(items[1].num,false),ConstantFn(2)))),
+          |  ValStmt(y,MultiplyFn(AddFn(ConstantFn(3),GetFn(items[1].num,false)),ConstantFn(2)))
           |))""".stripMargin
 
       val lens = dynalens[Shipment]
@@ -47,8 +68,8 @@ object CompileSpec extends ZIOSpecDefault {
           |     SortDescFn(
           |       DistinctFn(
           |         FilterFn(
-          |           GetFn(items),
-          |           GreaterThanFn(GetFn(_.qty), ConstantFn(5))
+          |           GetFn(items,false),
+          |           GreaterThanFn(GetFn(_.qty,false), ConstantFn(5))
           |         ),
           |         None
           |       ),
@@ -75,13 +96,13 @@ object CompileSpec extends ZIOSpecDefault {
         """BlockStmt(List(
           |  ValStmt(ks,
           |    DistinctFn(
-          |      KeysFn(GetFn(m)),
+          |      KeysFn(GetFn(m,false)),
           |      None
           |    )
           |  ),
           |  ValStmt(vs,
           |    LimitFn(
-          |      ValuesFn(GetFn(m)),
+          |      ValuesFn(GetFn(m,false)),
           |      2
           |    )
           |  )
@@ -100,8 +121,8 @@ object CompileSpec extends ZIOSpecDefault {
           |    CleanFn(
           |      ReverseFn(
           |        FilterFn(
-          |          GetFn(interest),
-          |          GreaterThanFn(GetFn(_.qty), ConstantFn(5))
+          |          GetFn(interest,true),
+          |          GreaterThanFn(GetFn(_.qty,false), ConstantFn(5))
           |        )
           |      )
           |    )

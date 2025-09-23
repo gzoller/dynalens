@@ -431,7 +431,7 @@ object Collections extends ZIOSpecDefault:
           |  val x = giftNums.sortAsc()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,SortFn(GetFn(giftNums[]),None,true))))"""
+        """BlockStmt(List(ValStmt(x,SortAscFn(GetFn(giftNums[]),None))))"""
       val expectedResult =
         """top -> Registry(abc,List(2, 5, 7, 5, 2, 9),List())
           |x -> List(2, 2, 5, 5, 7, 9)""".stripMargin + "\n"
@@ -454,7 +454,7 @@ object Collections extends ZIOSpecDefault:
           |  giftNums[].sortAsc()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(giftNums[],SortFn(IdentityFn,None,true))))"""
+        """BlockStmt(List(MapStmt(giftNums[],SortAscFn(IdentityFn,None))))"""
       val expectedResult =
         """top -> Registry(abc,List(2, 2, 5, 5, 7, 9),List())""" + "\n"
 
@@ -476,7 +476,7 @@ object Collections extends ZIOSpecDefault:
           |  val x = items.sortAsc(num)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,SortFn(GetFn(items[]),Some(this.num),true))))"""
+        """BlockStmt(List(ValStmt(x,SortAscFn(GetFn(items[]),Some(this.num)))))"""
 
       // Distinct 'num' values for deterministic ordering
       val items0 = List(
@@ -516,7 +516,7 @@ object Collections extends ZIOSpecDefault:
           |  items.sortAsc(num)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(items[],SortFn(IdentityFn,Some(this.num),true))))"""
+        """BlockStmt(List(MapStmt(items[],SortAscFn(IdentityFn,Some(this.num)))))"""
 
       val items0 = List(
         Item("e", 9, 9),
@@ -558,7 +558,7 @@ object Collections extends ZIOSpecDefault:
           |  val x = giftNums.sortDesc()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,SortFn(GetFn(giftNums[]),None,false))))"""
+        """BlockStmt(List(ValStmt(x,SortDescFn(GetFn(giftNums[]),None))))"""
       val expectedResult =
         """top -> Registry(abc,List(2, 5, 7, 5, 2, 9),List())
           |x -> List(9, 7, 5, 5, 2, 2)""".stripMargin + "\n"
@@ -581,7 +581,7 @@ object Collections extends ZIOSpecDefault:
           |  giftNums[].sortDesc()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(giftNums[],SortFn(IdentityFn,None,false))))"""
+        """BlockStmt(List(MapStmt(giftNums[],SortDescFn(IdentityFn,None))))"""
       val expectedResult =
         """top -> Registry(abc,List(9, 7, 5, 5, 2, 2),List())""" + "\n"
 
@@ -603,7 +603,7 @@ object Collections extends ZIOSpecDefault:
           |  val x = items.sortDesc(num)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,SortFn(GetFn(items[]),Some(this.num),false))))"""
+        """BlockStmt(List(ValStmt(x,SortDescFn(GetFn(items[]),Some(this.num)))))"""
 
       val items0 = List(
         Item("e", 9, 9),
@@ -642,7 +642,7 @@ object Collections extends ZIOSpecDefault:
           |  items.sortDesc(num)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(items[],SortFn(IdentityFn,Some(this.num),false))))"""
+        """BlockStmt(List(MapStmt(items[],SortDescFn(IdentityFn,Some(this.num)))))"""
 
       val items0 = List(
         Item("e", 9, 9),

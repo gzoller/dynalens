@@ -122,7 +122,7 @@ object Utility:
       case f: BlockFn[?] => rhsType(f.finalFn)
 
       case MapGetFn(recv, _) => recv match
-        case GetFn(p) => Utility.mapGetValueType(p)
+        case GetFn(p, _) => Utility.mapGetValueType(p)
         case _ => None
 
       case IndexFn(inner, _) =>
@@ -370,7 +370,7 @@ object Utility:
    */
   private def indexResultType(inner: Fn[Any])(using ctx: ExprContext): Option[FieldType] =
     inner match
-      case GetFn(path) =>
+      case GetFn(path, _) =>
         Schema.resolvePath(ctx.schema, path).map(_.fieldType) match
           case Some(ListType(_, elemType, _)) =>
             // e.g. List[T] → T
@@ -401,6 +401,12 @@ object Utility:
     case OptionType(_, inner, _) => inner
     case other => other
 
+  def isPathOptional(path: String, ctx: ExprContext): Boolean =
+    // simple first cut: look for an OptionType in the schema
+    Schema.resolvePath(ctx.schema, path).exists {
+      case ResolvedType(ft, _) =>
+        ft.isInstanceOf[OptionType]
+    }
 
   /** Find the FieldType node at the end of the given path, if any. */
   private def findNodeAtEnd(path: String)(using ctx: ExprContext): Option[FieldType] =
