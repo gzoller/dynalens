@@ -47,8 +47,8 @@ object CompileSpec extends ZIOSpecDefault {
 
       val expected =
         """BlockStmt(List(
-          |  ValStmt(x,AddFn(ConstantFn(3),MultiplyFn(GetFn(items[1].num,false),ConstantFn(2)))),
-          |  ValStmt(y,MultiplyFn(AddFn(ConstantFn(3),GetFn(items[1].num,false)),ConstantFn(2)))
+          |  ValStmt(x,AddFn(ConstantFn(3),MultiplyFn(GetFn(items[1].num,false,None),ConstantFn(2)))),
+          |  ValStmt(y,MultiplyFn(AddFn(ConstantFn(3),GetFn(items[1].num,false,None)),ConstantFn(2)))
           |))""".stripMargin
 
       val lens = dynalens[Shipment]
@@ -59,30 +59,37 @@ object CompileSpec extends ZIOSpecDefault {
 
     test("complex list chain compiles to correct AST") {
       val script =
-        """val xs = items.filter(_.qty > 5).distinct().sortDesc().limit(3)"""
+        """val xs = items.filter(this.qty > 5).distinct().sortDesc().limit(3)"""
 
       val expected =
-        """BlockStmt(List(
-          |  ValStmt(xs,
-          |    LimitFn(
-          |     SortDescFn(
-          |       DistinctFn(
-          |         FilterFn(
-          |           GetFn(items,false),
-          |           GreaterThanFn(GetFn(_.qty,false), ConstantFn(5))
-          |         ),
-          |         None
-          |       ),
-          |       None
-          |     ),
-          |     3
+        """BlockStmt(
+          |  List(
+          |    ValStmt(
+          |      xs,
+          |      LimitFn(
+          |        SortDescFn(
+          |          DistinctFn(
+          |            FilterFn(
+          |              GetFn(items,false,None),
+          |              GreaterThanFn(
+          |                GetFn(this.qty,false,Some(GetFn(items,false,None))),
+          |                ConstantFn(5)
+          |              )
+          |            ),
+          |            None
+          |          ),
+          |          None
+          |        ),
+          |        3
+          |      )
           |    )
           |  )
-          |))""".stripMargin
+          |)""".stripMargin
 
       val lens = dynalens[Shipment]
       for {
         compiled <- Script.compile(script, lens)
+        _ <- ZIO.succeed(println(">>>> "+compiled))
       } yield assertTrue(normalize(compiled.toString) == normalize(expected))
     },
 
@@ -96,13 +103,13 @@ object CompileSpec extends ZIOSpecDefault {
         """BlockStmt(List(
           |  ValStmt(ks,
           |    DistinctFn(
-          |      KeysFn(GetFn(m,false)),
+          |      KeysFn(GetFn(m,false,None)),
           |      None
           |    )
           |  ),
           |  ValStmt(vs,
           |    LimitFn(
-          |      ValuesFn(GetFn(m,false)),
+          |      ValuesFn(GetFn(m,false,None)),
           |      2
           |    )
           |  )
@@ -121,8 +128,8 @@ object CompileSpec extends ZIOSpecDefault {
           |    CleanFn(
           |      ReverseFn(
           |        FilterFn(
-          |          GetFn(interest,true),
-          |          GreaterThanFn(GetFn(_.qty,false), ConstantFn(5))
+          |          GetFn(interest,true,None),
+          |          GreaterThanFn(GetFn(_.qty,false,None), ConstantFn(5))
           |        )
           |      )
           |    )
@@ -142,6 +149,28 @@ object CompileSpec extends ZIOSpecDefault {
         compiled <- Script.compile(script, lens)
       } yield assertTrue(expectedSubtrees.forall(normalize(compiled.toString).contains))
     },
+//
+//    test("propagate Option through filter+sum on Option[List[Int]]") {
+//      val script = """val s = l2.filter(this > 3).sum()"""
+//      val lens   = dynalens[Sample]
+//      for {
+//        compiled <- Script.compile(script, lens)
+//      } yield assertTrue(
+//        normalize(compiled.toString).contains("FilterFn") &&
+//          normalize(compiled.toString).contains("SumFn")
+//      )
+//    },
+//
+//    test("propagate Option through distinct+sortAsc+max on Option[List[Int]]") {
+//      val script = """val s = l2.distinct().sortAsc().max()"""
+//      val lens   = dynalens[Sample]
+//      for {
+//        compiled <- Script.compile(script, lens)
+//      } yield assertTrue(
+//        Seq("DistinctFn", "SortAscFn", "MaxFn")
+//          .forall(normalize(compiled.toString).contains)
+//      )
+//    },
 
     // ------------------------------------------------------------------
     // Negative tests – must fail and give a meaningful error
@@ -160,7 +189,7 @@ object CompileSpec extends ZIOSpecDefault {
       val lens   = dynalens[Shipment]
       for {
         r <- Script.compile(script, lens).either
-      } yield assertTrue(r.left.exists(_.getMessage.contains("Method 'keys' cannot be applied to receiver of type scala.collection.immutable.List[co.blocke.dynalens.Item]")))
+      } yield assertTrue(r.left.exists(_.getMessage.contains("Error: Method 'keys' cannot be applied to receiver of type scala.collection.immutable.List[co.blocke.dynalens.Item]")))
     },
 
     test("reject filter on result of now() (String)") {
@@ -185,6 +214,43 @@ object CompileSpec extends ZIOSpecDefault {
       for {
         r <- Script.compile(script, lens).either
       } yield assertTrue(r.left.exists(_.getMessage.contains("Method 'keys' cannot be applied to receiver of type scala.collection.immutable.List[java.lang.String]")))
+    },
+
+    test("reject comparing Option[Int] directly inside filter") {
+      val script = """val s = nums.filter(this > maybeInt)"""
+      val lens   = dynalens[OptTest]
+      for {
+        r <- Script.compile(script, lens).either
+      } yield assertTrue(
+        r.left.exists(_.getMessage.contains("Error: > cannot be applied to Option types (use .else() to handle missing values"))
+      )
+    },
+
+    test("reject using non-numeric value with arithmetic function") {
+      val script = """val s = nums.filter(this > true)"""
+      val lens   = dynalens[OptTest]
+      for {
+        r <- Script.compile(script, lens).either
+      } yield assertTrue(
+        r.left.exists(_.getMessage.contains("Error: > requires numeric operands, found scala.Int and scala.Boolean"))
+      )
+    },
+
+    test("reject arithmetic on Option[Int] without else()") {
+      val script = """val s = maybeInt + 5"""
+      val lens   = dynalens[OptTest]
+      for {
+        r <- Script.compile(script, lens).either
+      } yield assertTrue(
+        r.left.exists(_.getMessage.contains("Error: + cannot be applied to Option types (use .else() to handle missing values)"))
+      )
     }
   )
 }
+
+//_ <- ZIO.succeed(println(">>>> "+r))
+// TODO: val x = "foo" + "bar", then val s = nums.filter(this > x) --> ensure type of x is correctly resolved
+// TODO: Fix recevier for other Fns: min, max, etc.
+// TODO: When 'this' is an Option[]
+// TODO: test map-like filter to ensure recevier for this/GetFn is set properly
+// TODO: Consider if we want :: to work for Lists/Maps too, or a different operator/fn

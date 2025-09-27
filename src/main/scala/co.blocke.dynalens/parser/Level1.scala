@@ -118,7 +118,11 @@ trait Level1 extends Level0 {
         case (idx1: IndexFn, idx2: IndexFn) =>
           IndexFn(idx1, idx2.index)
       }
-
+      println(s"[pathFn] offset=$offset")
+      println(s"[pathFn] head=$head")
+      println(s"[pathFn] tail=$tail")
+      println(s"[pathFn] base=$base")
+      println(s"[pathFn] ctx.schema.fields=${ctx.schema.fields.map(_.name)}")
       // Hand off to the method-call parser so .filter(...).distinct.sortDesc.limit(3) gets built
       methodChain(base)
     }
@@ -134,7 +138,9 @@ trait Level1 extends Level0 {
     ).map { case (off, name, argsRaw) =>
       val (errs, oks) = argsRaw.partitionMap(identity)
       if errs.nonEmpty then Left(errs.head)
-      else Right((name, oks.toList, off))
+      else
+        println(s"[methodCall] matched .$name(...) with ${argsRaw.size} args at offset $off")
+        Right((name, oks.toList, off))
     }
 
   // parse optional fixed index and wrap.
@@ -157,33 +163,33 @@ trait Level1 extends Level0 {
     // === 1) Context setup (unchanged) ===
     val argsCtx: ExprContext =
       base match {
-        case GetFn(p, _) =>
+        // only for top-level schema paths, NOT for "this" or "this.*"
+        case GetFn(p, _, _) if !p.startsWith("this") =>
           val maybeField: Option[FieldType] = Utility.elementSchemaFor(p, ctx.schema)
 
           val childFields: List[FieldType] = maybeField match {
             case Some(c: ClassType) => c.fields
             case Some(o: OptionType) => o.valueType match {
               case c: ClassType => c.fields
-              case _            => Nil
+              case _ => Nil
             }
             case Some(l: ListType) => l.elementType match {
               case c: ClassType => c.fields
-              case _            => Nil
+              case _ => Nil
             }
             case _ => Nil
           }
 
           val withRecv0 = ctx.withReceiverFromPath(p)
 
-          // ⭐ make the base path visible to rhsType via symbols
           val withBaseBound =
             maybeField.fold(withRecv0)(ft => withRecv0.withVals(p -> ft))
 
-          // keep exposing child fields if the receiver is a class
           if childFields.nonEmpty
-          then withBaseBound.withVals(childFields.map(ft => ft.name -> ft): _*)
+          then withBaseBound.withVals(childFields.map(ft => ft.name -> ft) *)
           else withBaseBound
 
+        // already in element scope or non-path
         case _ => ctx
       }
 
@@ -192,15 +198,25 @@ trait Level1 extends Level0 {
     // === 2) Recursive method-call folding ===
     def loop(current: Fn[Any]): P[Either[DLCompileError, Fn[Any]]] =
       P(methodCall).flatMap {
-        case Left(err) => P(Pass(Left(err)))
+        case Left(err) =>
+          println(s"[loop] methodCall error: $err")
+          P(Pass(Left(err)))
         case Right((name, args, off)) =>
+          println(s"[loop] got method name: $name, args: $args, off: $off")
           methodFunctions.get(name) match {
             case Some(build) =>
-              build(current, args, off) match {
-                case Left(e) => P(Pass(Left(e)))
-                case Right(n) => loop(n) // <--- keep parsing the next call
+              println(s"[loop] found builder for $name")
+              build(current, args, off, argsCtx) match {
+                case Left(e) =>
+                  println(s"[loop] builder for $name failed: $e")
+                  P(Pass(Left(e)))
+                case Right(n) =>
+                  println(s"[loop] builder for $name succeeded: $n")
+                  loop(n)
               }
-            case None => P(Pass(Left(DLCompileError(off, s"Unknown method: $name"))))
+            case None =>
+              println(s"[loop] no builder for $name")
+              P(Pass(Left(DLCompileError(off, s"Unknown method: $name"))))
           }
       } | P(Pass(Right(current)))
 
@@ -233,11 +249,24 @@ trait Level1 extends Level0 {
       case other    => Left(DLCompileError(off, s"$name(...) expects a field path argument, got ${other.getClass.getSimpleName}"))
     }
 
-  private def expectBoolean(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, BooleanFn] =
+  private def expectBoolean(arg: Fn[Any], name: String, off: Int)
+                           (using ctx: ExprContext): Either[DLCompileError, BooleanFn] = {
+    println(s"[expectBoolean] incoming Fn = $arg, recv? ${
+      arg match
+        case g: GetFn => g.recv
+        case _ => "n/a"
+    }")
     arg match {
       case b: BooleanFn => Right(b)
-      case other        => Left(DLCompileError(off, s"$name(...) requires a boolean expression, got ${other.getClass.getSimpleName}"))
+      case other => Left(DLCompileError(off,
+        s"$name(...) requires a boolean expression, got ${other.getClass.getSimpleName}"))
     }
+  }
+//  private def expectBoolean(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, BooleanFn] =
+//    arg match {
+//      case b: BooleanFn => Right(b)
+//      case other        => Left(DLCompileError(off, s"$name(...) requires a boolean expression, got ${other.getClass.getSimpleName}"))
+//    }
 
   private def expectConstInt(arg: Fn[Any], name: String, off: Int): Either[DLCompileError, Int] =
     arg match {
@@ -255,84 +284,84 @@ trait Level1 extends Level0 {
     if args.length != required then Left(DLCompileError(offset, s"Function $fnName() expected $required argument(s), got ${args.length}"))
     else Right(())
 
-  private val methodFunctions: Map[String, (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]] = Map(
-    M_MIN -> { (recv, _, _) => Right(MinFn(recv)) },
-    M_MAX -> { (recv, _, _) => Right(MaxFn(recv)) },
-    M_SUM -> { (recv, _, _) => Right(SumFn(recv)) },
-    M_AVG -> { (recv, _, _) => Right(AvgFn(recv)) },
-    M_MEDIAN -> { (recv, _, _) => Right(MedianFn(recv)) },
-    M_ABS -> { (recv, _, _) => Right(AbsFn(recv)) },
-    M_STARTSWITH -> { (recv, args, off) =>
+  private val methodFunctions: Map[String, (Fn[Any], List[Fn[Any]], Int, ExprContext) => Either[DLCompileError, Fn[Any]]] = Map(
+    M_MIN -> { (recv, _, _, _) => Right(MinFn(recv)) },
+    M_MAX -> { (recv, _, _, _) => Right(MaxFn(recv)) },
+    M_SUM -> { (recv, _, _, _) => Right(SumFn(recv)) },
+    M_AVG -> { (recv, _, _, _) => Right(AvgFn(recv)) },
+    M_MEDIAN -> { (recv, _, _, _) => Right(MedianFn(recv)) },
+    M_ABS -> { (recv, _, _, _) => Right(AbsFn(recv)) },
+    M_STARTSWITH -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_STARTSWITH, args, 1, off)
       } yield StartsWithFn(recv, args.head)
     },
-    M_ENDSWITH -> { (recv, args, off) =>
+    M_ENDSWITH -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_ENDSWITH, args, 1, off)
       } yield EndsWithFn(recv, args.head)
     },
-    M_CONTAINS -> { (recv, args, off) =>
+    M_CONTAINS -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_CONTAINS, args, 1, off)
       } yield ContainsFn(recv, args.head)
     },
-    M_KEYS -> { (recv, args, off) =>
+    M_KEYS -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_KEYS, args, 0, off)
       } yield KeysFn(recv)
     },
-    M_VALUES -> { (recv, args, off) =>
+    M_VALUES -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_VALUES, args, 0, off)
       } yield ValuesFn(recv)
     },
-    M_GET -> { (recv, args, off) =>
+    M_GET -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_GET, args, 1, off)
       } yield MapGetFn(recv, args.head)
     },
-    M_EQUALSIGNORECASE -> { (recv, args, off) =>
+    M_EQUALSIGNORECASE -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_EQUALSIGNORECASE, args, 1, off)
       } yield EqualsIgnoreCaseFn(recv, args.head)
     },
-    M_MATCHESREGEX -> { (recv, args, off) =>
+    M_MATCHESREGEX -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_MATCHESREGEX, args, 1, off)
       } yield MatchesRegexFn(recv, args.head)
     },
-    M_ELSE -> { (recv, args, off) =>
+    M_ELSE -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_ELSE, args, 1, off)
       } yield ElseFn(recv, args.head)
     },
-    M_ISDEFINED -> { (recv, args, off) =>
+    M_ISDEFINED -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_ISDEFINED, args, 0, off)
       } yield IsDefinedFn(recv)
     },
-    M_LEN -> { (recv, args, off) =>
+    M_LEN -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_LEN, args, 0, off)
       } yield LengthFn(recv)
     },
-    M_TOUPPERCASE -> { (recv, args, off) =>
+    M_TOUPPERCASE -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_TOUPPERCASE, args, 0, off)
       } yield ToUpperFn(recv)
     },
-    M_TOLOWERCASE -> { (recv, args, off) =>
+    M_TOLOWERCASE -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_TOLOWERCASE, args, 0, off)
       } yield ToLowerFn(recv)
     },
-    M_TRIM -> { (recv, args, off) =>
+    M_TRIM -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_TRIM, args, 0, off)
       } yield TrimFn(recv)
     },
-    M_TEMPLATE -> { (recv, args, off) =>
+    M_TEMPLATE -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_TEMPLATE, args, 0, off)
       } yield {
@@ -344,29 +373,29 @@ trait Level1 extends Level0 {
         InterpolateFn(recv, varMap)
       }
     },
-    M_SUBSTR -> { (recv, args, off) =>
+    M_SUBSTR -> { (recv, args, off, _) =>
       if args.isEmpty then Left(DLCompileError(off, s"Function substr() expected at least 1 argument, but found none"))
       else
         val start = args.head.as[Int]
         val endOpt = args.lift(1).map(_.as[Int])
         Right(SubstringFn(recv, start, endOpt))
     },
-    M_REPLACE -> { (recv, args, off) =>
+    M_REPLACE -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_REPLACE, args, 2, off)
       } yield ReplaceFn(recv, args.head, args(1))
     },
-    M_DATEFMT -> { (recv, args, off) =>
+    M_DATEFMT -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_DATEFMT, args, 1, off)
       } yield FormatDateFn(recv, args.head.as[String])
     },
-    M_TODATE -> { (recv, args, off) =>
+    M_TODATE -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_TODATE, args, 1, off)
       } yield ParseDateFn(recv, args.head.as[String])
     },
-    M_SORTASC -> { (recv, args, off) =>
+    M_SORTASC -> { (recv, args, off, _) =>
       args match {
         case Nil =>
           Right(SortAscFn(recv, None))
@@ -376,7 +405,7 @@ trait Level1 extends Level0 {
           Left(DLCompileError(off, s"Function sortAsc() expected 0 or 1 argument(s), got ${args.length}"))
       }
     },
-    M_SORTDESC -> { (recv, args, off) =>
+    M_SORTDESC -> { (recv, args, off, _) =>
       args match {
         case Nil =>
           Right(SortDescFn(recv, None))
@@ -386,13 +415,67 @@ trait Level1 extends Level0 {
           Left(DLCompileError(off, s"Function sortDesc() expected 0 or 1 argument(s), got ${args.length}"))
       }
     },
-    M_FILTER -> { (recv, args, off) =>
+    M_FILTER -> { (recv: Fn[Any], args: List[Fn[Any]], off: Int, ctx: ExprContext) =>
       for {
         _ <- checkArgs(M_FILTER, args, 1, off)
-        pred <- expectBoolean(args.head, M_FILTER, off)
-      } yield FilterFn(recv, pred)
+
+        // determine per-item type
+        elemType   = Utility.elementTypeOf(recv)(using ctx)
+        elemFields = elemType match
+          case c: ClassType => c.fields.map(ft => ft.name -> ft).toMap
+          case o: OptionType if o.valueType.isInstanceOf[ClassType] =>
+            o.valueType.asInstanceOf[ClassType].fields.map(ft => ft.name -> ft).toMap
+          case _ => Map.empty
+
+        // enrich context with receiver
+        given ExprContext = ctx.withReceiver(Receiver("this", elemFields, elemType))
+
+        // ask the deferred node to compile itself
+        compiled <- args.head match
+          case d: DeferredCompare => d.compile()
+          case b: BooleanFn       => Right(b)    // allow plain booleans too
+          case other              => Left(DLCompileError(off,
+            s"filter(...) requires a boolean expression, got ${other.getClass.getSimpleName}"))
+
+        // attach the collection-level receiver
+        predWithRecv = compiled.withReceiver(recv)
+      } yield FilterFn(recv, predWithRecv)
     },
-    M_DISTINCT -> { (recv, args, off) =>
+    //    M_FILTER -> { (recv: Fn[Any], args: List[Fn[Any]], off: Int, ctx: ExprContext) =>
+//      println(s"[M_FILTER] raw args.head = ${args.head}")
+//      for {
+//        _ <- checkArgs(M_FILTER, args, 1, off)
+//
+//        // 1. Determine the element (per-item) type of the collection
+//        elemType   = Utility.elementTypeOf(recv)(using ctx)
+//        elemFields = elemType match
+//          case c: ClassType => c.fields.map(ft => ft.name -> ft).toMap
+//          case o: OptionType if o.valueType.isInstanceOf[ClassType] =>
+//            o.valueType.asInstanceOf[ClassType].fields.map(ft => ft.name -> ft).toMap
+//          case _ => Map.empty[String, FieldType]
+//
+//        // 2. Build a Receiver representing a single element
+//        receiver = Receiver("this", elemFields, elemType)
+//        _ = println(s"[M_FILTER] created receiver = $receiver")
+//
+//        // 3. Extend compile-time context with that receiver
+//        given ExprContext = ctx.withReceiver(receiver)
+//
+//        // 4. Parse and type-check the predicate in this enriched context
+//        // inside M_FILTER
+//        pred <- args.head match
+//          case c: ComparePlaceholder =>
+//            c.compile()(using ctx)  // dispatch to CGreaterThanFn, etc.
+//          case other =>
+//            Left(DLCompileError(off,
+//              s"filter(...) requires a boolean comparison, got ${other.getClass.getSimpleName}"))
+//        _    = println(s"[M_FILTER] parsed predicate with receiver = $pred")
+//
+//        // 5. Also attach the collection-level Fn so 'this' inside pred is bound
+//        predWithReceiver = pred.withReceiver(recv)
+//      } yield FilterFn(recv, predWithReceiver)
+//    },
+    M_DISTINCT -> { (recv, args, off, _) =>
       args match {
         case Nil =>
           Right(DistinctFn(recv, None))
@@ -402,18 +485,18 @@ trait Level1 extends Level0 {
           Left(DLCompileError(off, s"Function distinct() expected 0 or 1 argument(s), got ${args.length}"))
       }
     },
-    M_LIMIT -> { (recv, args, off) =>
+    M_LIMIT -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_LIMIT, args, 1, off)
         n <- expectConstInt(args.head, M_LIMIT, off) // must be an int literal
       } yield LimitFn(recv, n)
     },
-    M_REVERSE -> { (recv, args, off) =>
+    M_REVERSE -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_REVERSE, args, 0, off)
       } yield ReverseFn(recv)
     },
-    M_CLEAN -> { (recv, args, off) =>
+    M_CLEAN -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_CLEAN, args, 0, off)
       } yield CleanFn(recv)
@@ -429,7 +512,7 @@ trait Level1 extends Level0 {
   }
 
   private def promoteToCollection(recv: Fn[Any])(using ctx: ExprContext): Fn[Any] = recv match
-    case g @ GetFn(name,_) =>
+    case g @ GetFn(name,_,_) =>
       // If the bare name is in loop scope, prefer its collection binding `name[]`
       val inLoop = ctx.symbols.headOption.exists(_.contains(name))
       if inLoop then GetFn(s"$name[]", g.isOptional) else g
@@ -474,12 +557,35 @@ trait Level1 extends Level0 {
     case object FilterMethod extends CollectionMethodParser {
       val name: String = M_FILTER
 
-      def parseFn[$: P](inner: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] =
-        // Receiver (`this`) and bare field names are provided by the surrounding ctx
+      def parseFn[$: P](inner: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] = {
+        // 1) Figure out element type of the collection (List[T] or Option[List[T]])
+        val elemType: FieldType = Utility.elementTypeOf(inner)(using ctx)
+        val elemFields: Map[String, FieldType] = elemType match
+          case c: ClassType => c.fields.map(ft => ft.name -> ft).toMap
+          case o: OptionType if o.valueType.isInstanceOf[ClassType] =>
+            o.valueType.asInstanceOf[ClassType].fields.map(ft => ft.name -> ft).toMap
+          case _ => Map.empty
+
+        val receiver = Receiver("this", elemFields, elemType)
+        println(s"[FilterMethod] elemType=$elemType")
+        println(s"[FilterMethod] receiver=$receiver")
+
+        // 2) Parse a *boolean* expression inside a context that carries the receiver
+        given ExprContext = ctx.withReceiver(receiver)
+
+        // booleanExpr must be your boolean parser (comparisonExpr / and/or, etc.)
         booleanExpr.map {
-          case Right(pred: BooleanFn) => Right(FilterFn(inner, pred): Fn[Any])
-          case Left(err)              => Left(err)
+          case Right(pred: BooleanFn) =>
+            val predWithRcvr = pred.withReceiver(inner) // also attach the actual collection Fn
+            println(s"[FilterMethod] predWithRcvr=$predWithRcvr")
+            Right(FilterFn(inner, predWithRcvr): Fn[Any])
+
+          case Right(other) =>
+            Left(DLCompileError(0, s"filter(...) requires a boolean expression, got ${other.getClass.getSimpleName}"))
+
+          case Left(err) => Left(err)
         }
+      }
     }
 
     case object DistinctMethod extends CollectionMethodParser {
@@ -542,7 +648,7 @@ trait Level1 extends Level0 {
         P(Index ~ stringLiteral).map { case (idx, strRes) =>
           strRes match {
             case Right(ConstantFn(mapName: String)) =>
-              Right(MapFwdFn(mapName)) // success: build the function
+              Right(MapFwdFn(mapName, inner)) // success: build the function
 
             case Right(_) =>
               Left(DLCompileError(idx, """mapTo(...) requires a string literal, e.g. mapTo("target")"""))
@@ -559,7 +665,7 @@ trait Level1 extends Level0 {
       def parseFn[$: P](inner: Fn[Any])(using ExprContext): P[ParseFnResult] =
         P(Index ~ stringLiteral).map {
           case (offset, Right(ConstantFn(mapName: String))) =>
-            Right(MapRevFn(mapName))
+            Right(MapRevFn(mapName, inner))
           case (offset, Right(_)) =>
             Left(DLCompileError(offset, "mapFrom(...) requires a string literal argument"))
           case (_, Left(err)) =>

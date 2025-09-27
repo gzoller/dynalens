@@ -74,55 +74,137 @@ object Utility:
 
       case f: GetFn =>
         val cleanPath =
-          f.path
-            .replaceAll("\\[\\d+\\]", "")
-            .replaceFirst("^_\\.", "")
+          f.path.replaceFirst("^_\\.", "")   // keep indices
 
-        // 1) local bindings (vals/loop)
-        ctx.symbols.headOption
-          .flatMap(_.get(cleanPath))
-          // 2) element-scoped access: this.*
-          .orElse {
-            if cleanPath.startsWith("this.") then
-              ctx.receiver.flatMap { r =>
-                val fieldName = cleanPath.stripPrefix("this.")
-                // receiver already carries the element’s field map
-                r.fields.get(fieldName)
-              }
-            else None
-          }
-          // 3) walk the schema for top-level and nested paths
-          .orElse {
-            val segments = cleanPath.split("\\.").toList
+        println(s"[DEBUG rhsType] cleanPath=$cleanPath, f.recv=${f.recv}")
 
-            def descend(ft: FieldType, tail: List[String]): Option[FieldType] =
-              tail match
-                case Nil => Some(ft)
-                case h :: t => ft match
-                  case c: ClassType =>
-                    c.fields.find(_.name == h).flatMap(descend(_, t))
-                  case o: OptionType =>
-                    descend(o.valueType, tail)
-                  case l: ListType if l.elementType.isInstanceOf[ClassType] =>
-                    descend(l.elementType.asInstanceOf[ClassType], tail)
-                  case _ => None
+//        def descend(ft: FieldType, segments: List[String]): Option[FieldType] =
+//          segments match
+//            case Nil => Some(ft)
+//            case h :: t =>
+//              val name = h.replaceAll("\\[\\d+\\]$", "")
+//              println(s"h: $h (normalized: $name)")
+//              ft match
+//                case l: ListType if l.name == name =>
+//                  descend(l.elementType, t)
+//
+//                case c: ClassType if c.name == name || name.isEmpty =>
+//                  c.fields.find(_.name == name).flatMap(descend(_, t))
+//
+//                case o: OptionType if o.name == name =>
+//                  // Unwrap Option regardless of inner type
+//                  descend(o.valueType, t)
+//
+//                case x =>
+//                  println("Boom: " + x)
+//                  None
 
-            segments.headOption.flatMap { h =>
-              ctx.schema.fields.find(_.name == h).flatMap(descend(_, segments.tail))
+        /**
+         * Recursively resolve a dot path into its FieldType.
+         * Normalizes indexed segments like "items[3]" → "items".
+         * Prints detailed debug at every step.
+         */
+        // Put this once (top-level in Utility or wherever you keep helpers)
+        def descend(ft: FieldType, rest: List[String]): Option[FieldType] =
+          rest match
+            case Nil =>
+              // done: return whatever type we've landed on
+              Some(ft)
+
+            case seg :: tail =>
+              // strip any [123] index sugar off this segment
+              val norm = seg.replaceAll("\\[\\d+\\]", "")
+
+              ft match
+                case c: ClassType =>
+                  // consume this segment by finding the matching field on the class
+                  c.fields.find(_.name == norm).flatMap(descend(_, tail))
+
+                case o: OptionType =>
+                  // unwrap Option to continue, but DO NOT consume the segment here
+                  descend(o.valueType, rest)
+
+                case l: ListType =>
+                  // step into element type, but DO NOT consume the segment here.
+                  // We still need to match `norm` against the element’s fields next.
+                  descend(l.elementType, rest)
+
+                case _ =>
+                  None
+
+//        def descend(ft: FieldType, tail: List[String]): Option[FieldType] =
+//          tail match
+//            case Nil => Some(ft)
+//            case h :: t =>
+//              val name = h.replaceAll("\\[\\d+\\]$", "")
+//              println(s"h: $h (normalized: $name)")
+//              ft match
+//                // e.g. items[1] → descend into element type
+//                case l: ListType if l.name == name =>
+//                  descend(l.elementType, t)
+//                case c: ClassType =>
+//                  c.fields.find(_.name == name).flatMap(descend(_, t))
+//                case OptionType(_, inner: ClassType, _) =>
+//                  inner.fields.find(_.name == name).flatMap(descend(_, t))
+//                case ListType(_, inner: ClassType, _) =>
+//                  descend(inner, t)
+//                case x =>
+//                  println("Boom: " + x)
+//                  None
+
+        // --- plain `this` -------------------------------------------------------
+        if cleanPath == "this" || cleanPath.startsWith("this.") then
+          val base: Option[FieldType] =
+            ctx.receiver.map(_.fieldType)
+              .orElse(f.recv.flatMap(Utility.rhsType)) //   then any attached recv
+
+          if cleanPath == "this" then
+            base.flatMap {
+              case ListType(_, elem, _) => Some(elem)
+              case OptionType(_, ListType(_, elem, _), _) => Some(elem)
+              case other => Some(other)
             }
+          else {
+            val segs = cleanPath.stripPrefix("this.").split("\\.").toList
+            base.flatMap(descend(_, segs))
           }
-          // 4) last conservative fallback
-          .orElse {
-            val ft = getPathType(cleanPath)
-            if ft.typeName == "scala.Any" then None else Some(ft)
-          }
+        else {
+          // --- non-`this` paths ---
+          // normalize array indices like "items[1].num" -> "items.num"
+          val normPath = cleanPath.replaceAll("\\[\\d+\\]", "")
+          val segments = normPath.split("\\.").toList
+          println(s"[rhsType] schema walk for $segments")
 
+          // --- non-`this` paths ---
+          ctx.symbols.headOption
+            .flatMap(_.get(cleanPath))
+            .orElse {
+              val segments = cleanPath.split("\\.").toList
+              // e.g. "items[1].num" -> List("items[1]","num"); our descend handles indexes
+              segments.headOption.flatMap { h =>
+                ctx.schema.fields.find(_.name == h.replaceAll("\\[\\d+\\]", "")) // normalize head too
+                  .flatMap(descend(_, segments.tail))
+              }
+            }
+        }
+
+      //        if cleanPath == "this" then
+      //          // If we have a receiver in context (e.g. inside filter/map),
+      //          // return its element type (unwrap Option[List] as needed).
+      //          ctx.receiver.flatMap { r =>
+      //            r.fieldType match {                           // or r.ft, whatever the accessor is
+      //              case ListType(_, elem, _)                   => Some(elem)
+      //              case OptionType(_, ListType(_, elem, _), _) => Some(elem)
+      //              case other                                  => Some(other)
+      //            }
+      //          }
+      //        else
       case f: ElseFn => rhsType(f.fallback)
       case f: IfFn[?] => rhsType(f.thenFn)
       case f: BlockFn[?] => rhsType(f.finalFn)
 
       case MapGetFn(recv, _) => recv match
-        case GetFn(p, _) => Utility.mapGetValueType(p)
+        case GetFn(p, _, _) => Utility.mapGetValueType(p)
         case _ => None
 
       case IndexFn(inner, _) =>
@@ -141,14 +223,13 @@ object Utility:
           case single :: Nil => Some(single)
           case _             => None
 
+      case b: BooleanConstantFn =>
+        Some(ScalarType("", "scala.Boolean"))
+
       case c: ConstantFn[?] =>
         // If ConstantFn already carries a FieldType, prefer it; otherwise derive from value
         c match
-          case cf: ConstantFn[?] if (/* has a fieldType */ false) =>
-            // replace with your real accessor if present: Some(cf.fieldType)
-            None
           case _ =>
-            // replace `c.value` with your real accessor
             c.out match
               case _: Int     => Some(ScalarType("", "scala.Int"))
               case _: Long    => Some(ScalarType("", "scala.Long"))
@@ -195,6 +276,13 @@ object Utility:
       case Some(ct: ClassType)                        => Some(ct)          // whole class itself
       case Some(OptionType(_, inner: ClassType, _))   => Some(inner)
       case _                                          => None
+
+  def elementTypeOf(coll: Fn[?])(using ctx: ExprContext): FieldType =
+    rhsType(coll).flatMap {
+      case ListType(_, elem, _) => Some(elem)
+      case OptionType(_, ListType(_, elem, _), _) => Some(elem)
+      case other => Some(other)
+    }.getOrElse(ScalarType("", "scala.Any"))
 
   def addThisType(cleanPath: String, ctx: ExprContext): ExprContext = {
     val parts = Path.parsePath(cleanPath)
@@ -370,7 +458,7 @@ object Utility:
    */
   private def indexResultType(inner: Fn[Any])(using ctx: ExprContext): Option[FieldType] =
     inner match
-      case GetFn(path, _) =>
+      case GetFn(path, _, _) =>
         Schema.resolvePath(ctx.schema, path).map(_.fieldType) match
           case Some(ListType(_, elemType, _)) =>
             // e.g. List[T] → T

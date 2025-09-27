@@ -61,41 +61,63 @@ trait Level2 extends Level1 with ValueExprModule:
 
   /** booleanExpr := booleanAnd ('||' booleanAnd)* */
   def booleanExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
-    P(booleanAnd ~ (WS0 ~ "||" ~ WS0 ~ booleanAnd).rep).map { (first, rest) =>
-      rest.foldLeft(first)(orCombine)
+    P(booleanAnd ~ (WS0 ~ "||" ~ WS0 ~ booleanAnd).rep).map {
+      case (first, rest) =>
+        rest.foldLeft(first) {
+          case (Left(e), _) => Left(e)
+          case (Right(acc), Right(rhs)) => COrFn.build(List(acc, rhs))
+          case (Right(_), Left(e)) => Left(e)
+          case (Left(e), Right(_)) => Left(e)
+        }
     }
 
   /** booleanAnd := booleanNot ('&&' booleanNot)* */
   private def booleanAnd[$: P](using ctx: ExprContext): P[ParseBoolResult] =
-    P(booleanNot ~ (WS0 ~ "&&" ~ WS0 ~ booleanNot).rep).map { (first, rest) =>
-      rest.foldLeft(first)(andCombine)
+    P(booleanNot ~ (WS0 ~ "&&" ~ WS0 ~ booleanNot).rep).map {
+      case (first, rest) =>
+        rest.foldLeft(first) {
+          case (Left(e), _) => Left(e)
+          case (Right(acc), Right(rhs)) => CAndFn.build(List(acc, rhs))
+          case (Right(_), Left(e)) => Left(e)
+          case (Left(e), Right(_)) => Left(e)
+        }
     }
 
   /** booleanNot := '!' booleanNot | atom */
   private def booleanNot[$: P](using ctx: ExprContext): P[ParseBoolResult] =
     P(("!" ~ WS0 ~ booleanNot).map {
-      case Right(b) => Right(NotFn(b)): ParseBoolResult
-      case Left(e)  => Left(e)
+      case Right(b) => CNotFn.build(List(b))
+      case Left(e) => Left(e)
     } | booleanAtom)
 
   /** comparisonExpr := arithmeticExpr (==|!=|>=|<=|>|<) arithmeticExpr */
   private def comparisonExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
-    P(
-      arithmeticExpr ~ WS0 ~
-        StringIn("==", "!=", ">=", "<=", ">", "<").! ~
-        WS0 ~ arithmeticExpr
-    ).map { case (lE, op, rE) =>
-      for {
-        left <- lE
-        right <- rE
-      } yield op match
-        case "==" => EqualFn(left, right)
-        case "!=" => NotEqualFn(left, right)
-        case ">=" => GreaterThanOrEqualFn(left, right)
-        case "<=" => LessThanOrEqualFn(left, right)
-        case ">"  => GreaterThanFn(left, right)
-        case "<"  => LessThanFn(left, right)
-    }
+    P(arithmeticExpr ~ WS0 ~ StringIn("==", "!=", ">=", "<=", ">", "<").! ~ WS0 ~ arithmeticExpr)
+      .map { case (lE, op, rE) =>
+        for {
+          left  <- lE
+          right <- rE
+        } yield DeferredCompare(op, left, right)
+      }
+//  private def comparisonExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
+//    P(
+//      arithmeticExpr ~ WS0 ~
+//        StringIn("==", "!=", ">=", "<=", ">", "<").! ~
+//        WS0 ~ arithmeticExpr
+//    ).flatMap { case (lE, op, rE) =>
+//      (lE, rE) match
+//        case (Right(left), Right(right)) =>
+//          op match
+//            case "==" => P(Pass(Right(EqualFn(left, right): BooleanFn)))
+//            case "!=" => P(Pass(Right(NotEqualFn(left, right): BooleanFn)))
+//            case ">=" => P(Pass(Right(GreaterThanOrEqualFn(left, right): BooleanFn)))
+//            case "<=" => P(Pass(Right(LessThanOrEqualFn(left, right): BooleanFn)))
+//            case ">"  => P(Pass(CGreaterThanFn.build(List(left, right))))
+//            case "<"  => P(Pass(Right(LessThanFn(left, right): BooleanFn)))
+//
+//        case (Left(e), _) => P(Pass(Left(e)))
+//        case (_, Left(e)) => P(Pass(Left(e)))
+//    }
 
   // ---- Arithmetic ----
 
@@ -103,38 +125,32 @@ trait Level2 extends Level1 with ValueExprModule:
     arithmeticTerm
 
   private def arithmeticTerm[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(Index ~ arithmeticFactor ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticFactor).rep).map { case (off, first, rest) =>
-      rest.foldLeft(first) {
-        case (Left(e), _) => Left(e) // short-circuit error
-        case (Right(acc), (op, right)) =>
-          right match {
-            case Left(e) => Left(e)
-            case Right(r) =>
+    P(Index ~ arithmeticFactor ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticFactor).rep).map {
+      case (off, first, rest) =>
+        rest.foldLeft(first) {
+          case (Left(e), _) => Left(e) // stop on earlier error
+          case (Right(acc), (op, rightE)) =>
+            rightE.flatMap { r =>
               op match
-                case "+" => Right(AddFn(acc, r))
-                case "-" => Right(SubtractFn(acc, r))
-                case _ =>
-                  Left(DLCompileError(off, s"Unsupported arithmetic operator: $op"))
-          }
-      }
+                case "+" => CAddFn.build(List(acc, r))
+                case "-" => CSubtractFn.build(List(acc, r))
+            }
+        }
     }
 
   private def arithmeticFactor[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(Index ~ unaryMinus ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ unaryMinus).rep).map { case (off, first, rest) =>
-      rest.foldLeft(first) {
-        case (Left(e), _) => Left(e) // propagate first error
-        case (Right(acc), (op, right)) =>
-          right match {
-            case Left(e) => Left(e)
-            case Right(r) =>
+    P(Index ~ unaryMinus ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ unaryMinus).rep).map {
+      case (off, first, rest) =>
+        rest.foldLeft(first) {
+          case (Left(e), _) => Left(e)
+          case (Right(acc), (op, rightE)) =>
+            rightE.flatMap { r =>
               op match
-                case "*" => Right(MultiplyFn(acc, r))
-                case "/" => Right(DivideFn(acc, r))
-                case "%" => Right(ModuloFn(acc, r))
-                case _ =>
-                  Left(DLCompileError(off, s"Unsupported arithmetic operator: $op"))
-          }
-      }
+                case "*" => CMultiplyFn.build(List(acc, r))
+                case "/" => CDivideFn.build(List(acc, r))
+                case "%" => CModuloFn.build(List(acc, r))
+            }
+        }
     }
 
   private def arithmeticAtom[$: P](using ctx: ExprContext): P[ParseFnResult] =
@@ -150,9 +166,9 @@ trait Level2 extends Level1 with ValueExprModule:
 
   // support unary minus: -x
   private def unaryMinus[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P("-" ~/ WS0 ~ arithmeticAtom).map {
-      case Right(fn) => Right(NegateFn(fn))
-      case Left(err) => Left(err)
+    P("-" ~/ WS0 ~ arithmeticAtom).flatMap {
+      case Right(fn)  => P(Pass(CNegateFn.build(List(fn))))
+      case Left(err)  => P(Pass(Left(err)))
     } | arithmeticAtom
 
   // ---- String Concat ----

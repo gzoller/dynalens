@@ -62,3 +62,9 @@ case class Dog(name: String, barkVolume: Int) extends Animal
 case class Cat(name: String, lives: Int)      extends Animal
 
 case class Zoo(animal: Animal)
+
+case class OptTest(
+                   l2: Option[List[Int]],
+                   maybeInt: Option[Int],
+                   nums: List[Int]
+                 )
