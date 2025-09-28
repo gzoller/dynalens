@@ -369,7 +369,7 @@ object Parsing extends ZIOSpecDefault:
           |  val x = items[].len()
           |  val y = "Foobar".len()
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(ValStmt(x,LengthFn(GetFn(items[]))), ValStmt(y,LengthFn(ConstantFn(Foobar)))))"""
+      val expectedCompiled = """BlockStmt(List(ValStmt(x,LenFn(GetFn(items[]))), ValStmt(y,LengthFn(ConstantFn(Foobar)))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,2,5), Item(xyz,1,7)),1)
                              |x -> 2
                              |y -> 6""".stripMargin + "\n"
@@ -575,7 +575,7 @@ object Parsing extends ZIOSpecDefault:
         """
           |  items[].qty => items.len() * 2
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(items[].qty,MultiplyFn(LengthFn(GetFn(items[])),ConstantFn(2)))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(items[].qty,MultiplyFn(LenFn(GetFn(items[])),ConstantFn(2)))))"""
       val expectedResult = """top -> Shipment(aaa,List(Item(abc,10,5), Item(abc,10,44), Item(xyz,10,7), Item(foo,10,7), Item(bar,10,7)),1)""".stripMargin + "\n"
       val inst = Shipment("aaa", List(Item("abc", 2, 5), Item("abc", 3, 44), Item("xyz", 1, 7), Item("foo", 1, 7), Item("bar", 1, 7)), 1)
       val a = dynalens[Shipment]

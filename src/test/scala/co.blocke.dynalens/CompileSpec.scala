@@ -129,7 +129,7 @@ object CompileSpec extends ZIOSpecDefault {
           |      ReverseFn(
           |        FilterFn(
           |          GetFn(interest,true,None),
-          |          GreaterThanFn(GetFn(_.qty,false,None), ConstantFn(5))
+          |          GreaterThanFn(GetFn(_.qty,false,Some(GetFn(interest,true,None))), ConstantFn(5))
           |        )
           |      )
           |    )

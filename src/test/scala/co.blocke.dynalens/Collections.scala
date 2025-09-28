@@ -35,7 +35,7 @@ object Collections extends ZIOSpecDefault:
           |  val x = giftNums.filter(this < 6)
           |  giftNums = x
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(ValStmt(x,FilterFn(GetFn(giftNums,false,None),LessThanFn(GetFn(this,false,None),ConstantFn(6)))), UpdateStmt(giftNums,GetFn(x,false,None))))"""
+      val expectedCompiled = """BlockStmt(List(ValStmt(x,FilterFn(GetFn(giftNums,false,None),LessThanFn(GetFn(this,false,Some(GetFn(giftNums,false,None))),ConstantFn(6)))), UpdateStmt(giftNums,GetFn(x,false,None))))"""
       val expectedResult =
         """top -> Registry(abc,List(2, 5, 5, 2),List())
           |x -> List(2, 5, 5, 2)""".stripMargin + "\n"
@@ -47,13 +47,12 @@ object Collections extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Registry("abc", List(2, 5, 5, 2), List()) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
-    /*
     test("filter (map--simple)") {
       val script =
         """
           |  giftNums.filter(this<6)
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,FilterFn(IdentityFn,LessThanFn(GetFn(this,false,None),ConstantFn(6))))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,FilterFn(IdentityFn(GetFn(giftNums,false,None)),LessThanFn(GetFn(this,false,Some(IdentityFn(GetFn(giftNums,false,None)))),ConstantFn(6))))))"""
       val expectedResult =
         """top -> Registry(abc,List(2, 5, 5, 2),List())""".stripMargin + "\n"
       val inst = Registry("abc", List(2, 5, 7, 5, 2, 9), Nil)
@@ -71,7 +70,7 @@ object Collections extends ZIOSpecDefault:
           |  val y = items.filter(qty < 0)
           |  items = x
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(ValStmt(x,FilterFn(GetFn(items,false,None),GreaterThanOrEqualFn(GetFn(qty,false,None),ConstantFn(100)))), ValStmt(y,FilterFn(GetFn(items,false,None),LessThanFn(GetFn(qty,false,None),ConstantFn(0)))), UpdateStmt(items,GetFn(x,false,None))))"""
+      val expectedCompiled = """BlockStmt(List(ValStmt(x,FilterFn(GetFn(items,false,None),GreaterThanOrEqualFn(GetFn(qty,false,Some(GetFn(items,false,None))),ConstantFn(100)))), ValStmt(y,FilterFn(GetFn(items,false,None),LessThanFn(GetFn(qty,false,Some(GetFn(items,false,None))),ConstantFn(0)))), UpdateStmt(items,GetFn(x,false,None))))"""
       val expectedResult =
         """top -> Shipment(aaa,List(Item(abc,100,5), Item(xyz,101,7)),1)
           |x -> List(Item(abc,100,5), Item(xyz,101,7))
@@ -89,7 +88,7 @@ object Collections extends ZIOSpecDefault:
         """
           |  items.filter(qty >= 100)
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(items,FilterFn(IdentityFn,GreaterThanOrEqualFn(GetFn(qty,false,None),ConstantFn(100))))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(items,FilterFn(IdentityFn(GetFn(items,false,None)),GreaterThanOrEqualFn(GetFn(qty,false,Some(IdentityFn(GetFn(items,false,None)))),ConstantFn(100))))))"""
       val expectedResult =
         """top -> Shipment(aaa,List(Item(abc,100,5), Item(xyz,101,7)),1)""".stripMargin + "\n"
       val inst = Shipment("aaa", List(Item("abc", 100, 5), Item("qrs", 2, 5), Item("xyz", 101, 7)), 1)
@@ -105,7 +104,7 @@ object Collections extends ZIOSpecDefault:
         """
           |  val x = giftNums.distinct()
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(ValStmt(x,DistinctFn(GetFn(giftNums),None))))"""
+      val expectedCompiled = """BlockStmt(List(ValStmt(x,DistinctFn(GetFn(giftNums,false,None),None))))"""
       val expectedResult =
         """top -> Registry(abc,List(2, 5, 7, 5, 2, 9),List())
           |x -> List(2, 5, 7, 9)""".stripMargin + "\n"
@@ -126,7 +125,7 @@ object Collections extends ZIOSpecDefault:
         """
           |  giftNums[].distinct()
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,DistinctFn(IdentityFn,None))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,DistinctFn(IdentityFn(GetFn(giftNums,false,None)),None))))"""
       val expectedResult = """top -> Registry(abc,List(2, 5, 7, 9),List())""" + "\n"
       val inst = Registry("abc", List(2, 5, 7, 5, 2, 9), Nil)
       val a = dynalens[Registry]
@@ -167,7 +166,7 @@ object Collections extends ZIOSpecDefault:
           |  items.distinct(num)
           |  val z = items.distinct(number) # bonus
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(items,DistinctFn(IdentityFn,Some(this.num))), ValStmt(z,DistinctFn(GetFn(items,false,None),Some(number)))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(items,DistinctFn(IdentityFn(GetFn(items,false,None)),Some(num))), ValStmt(z,DistinctFn(GetFn(items,false,None),Some(number)))))"""
       val expectedResult =
         """top -> Shipment(aaa,List(Item(abc,2,5), Item(abc,3,44), Item(xyz,1,7)),1)
           |z -> List(Item(abc,2,5), Item(xyz,1,7))""".stripMargin + "\n"
@@ -209,7 +208,7 @@ object Collections extends ZIOSpecDefault:
         """
           |  giftNums[].clean()
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,CleanFn(IdentityFn))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,CleanFn(IdentityFn(GetFn(giftNums,false,None))))))"""
       val expectedResult = """top -> Registry(abc,List(2, 5, 7, 5, 2, 9),List())""" + "\n"
       val inst = Registry("abc", List(2, 5, 7, 5, 2, 9), Nil)
       val a = dynalens[Registry]
@@ -249,7 +248,7 @@ object Collections extends ZIOSpecDefault:
         """
           |  items.clean()
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(items,CleanFn(IdentityFn))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(items,CleanFn(IdentityFn(GetFn(items,false,None))))))"""
       val expectedResult =
         """top -> Shipment(aaa,List(Item(abc,2,5), Item(xyz,1,7), Item(foo,1,7)),1)""".stripMargin + "\n"
       val inst = Shipment("aaa", List(Item("abc", 2, 5), null, Item("xyz", 1, 7), Item("foo", 1, 7), null), 1)
@@ -290,7 +289,7 @@ object Collections extends ZIOSpecDefault:
         """
           |  giftNums[].reverse()
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,ReverseFn(IdentityFn))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,ReverseFn(IdentityFn(GetFn(giftNums,false,None))))))"""
       val expectedResult = """top -> Registry(abc,List(9, 2, 5, 7, 5, 2),List())""" + "\n"
       val inst = Registry("abc", List(2, 5, 7, 5, 2, 9), Nil)
       val a = dynalens[Registry]
@@ -330,7 +329,7 @@ object Collections extends ZIOSpecDefault:
         """
           |  items.reverse()
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(items,ReverseFn(IdentityFn))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(items,ReverseFn(IdentityFn(GetFn(items,false,None))))))"""
       val expectedResult =
         """top -> Shipment(aaa,List(null, Item(foo,1,7), Item(xyz,1,7), null, Item(abc,2,5)),1)""".stripMargin + "\n"
       val inst = Shipment("aaa", List(Item("abc", 2, 5), null, Item("xyz", 1, 7), Item("foo", 1, 7), null), 1)
@@ -371,7 +370,7 @@ object Collections extends ZIOSpecDefault:
         """
           |  giftNums[].limit(3)
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,LimitFn(IdentityFn,3))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,LimitFn(IdentityFn(GetFn(giftNums,false,None)),3))))"""
       val expectedResult = """top -> Registry(abc,List(2, 5, 7),List())""" + "\n"
       val inst = Registry("abc", List(2, 5, 7, 5, 2, 9), Nil)
       val a = dynalens[Registry]
@@ -411,7 +410,7 @@ object Collections extends ZIOSpecDefault:
         """
           |  items.limit(3)
           |""".stripMargin
-      val expectedCompiled = """BlockStmt(List(MapStmt(items[],LimitFn(IdentityFn,3))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(items,LimitFn(IdentityFn(GetFn(items,false,None)),3))))"""
       val expectedResult =
         """top -> Shipment(aaa,List(Item(abc,2,5), null, Item(xyz,1,7)),1)""".stripMargin + "\n"
       val inst = Shipment("aaa", List(Item("abc", 2, 5), null, Item("xyz", 1, 7), Item("foo", 1, 7), null), 1)
@@ -455,7 +454,7 @@ object Collections extends ZIOSpecDefault:
           |  giftNums[].sortAsc()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(giftNums,SortAscFn(IdentityFn,None))))"""
+        """BlockStmt(List(MapStmt(giftNums,SortAscFn(IdentityFn(GetFn(giftNums,false,None)),None))))"""
       val expectedResult =
         """top -> Registry(abc,List(2, 2, 5, 5, 7, 9),List())""" + "\n"
 
@@ -477,7 +476,7 @@ object Collections extends ZIOSpecDefault:
           |  val x = items.sortAsc(num)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,SortAscFn(GetFn(items,false,None),Some(this.num)))))"""
+        """BlockStmt(List(ValStmt(x,SortAscFn(GetFn(items,false,None),Some(num)))))"""
 
       // Distinct 'num' values for deterministic ordering
       val items0 = List(
@@ -517,7 +516,7 @@ object Collections extends ZIOSpecDefault:
           |  items.sortAsc(num)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(items,SortAscFn(IdentityFn,Some(num)))))"""
+        """BlockStmt(List(MapStmt(items,SortAscFn(IdentityFn(GetFn(items,false,None)),Some(num)))))"""
 
       val items0 = List(
         Item("e", 9, 9),
@@ -582,7 +581,7 @@ object Collections extends ZIOSpecDefault:
           |  giftNums[].sortDesc()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(giftNums,SortDescFn(IdentityFn,None))))"""
+        """BlockStmt(List(MapStmt(giftNums,SortDescFn(IdentityFn(GetFn(giftNums,false,None)),None))))"""
       val expectedResult =
         """top -> Registry(abc,List(9, 7, 5, 5, 2, 2),List())""" + "\n"
 
@@ -643,7 +642,7 @@ object Collections extends ZIOSpecDefault:
           |  items.sortDesc(num)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(items[],SortDescFn(IdentityFn,Some(this.num)))))"""
+        """BlockStmt(List(MapStmt(items,SortDescFn(IdentityFn(GetFn(items,false,None)),Some(num)))))"""
 
       val items0 = List(
         Item("e", 9, 9),
@@ -740,7 +739,7 @@ object Collections extends ZIOSpecDefault:
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,LengthFn(MapGetFn(GetFn(cplx),ConstantFn(a))))))"""
+        """BlockStmt(List(ValStmt(x,LenFn(MapGetFn(GetFn(cplx,false,None),ConstantFn(a))))))"""
 
       val expectedResult =
         """top -> Mapped(1,Map(a -> 10, b -> 20),Some(Map(a -> 5)),Map(a -> List(Person(p,1))))
@@ -826,7 +825,7 @@ object Collections extends ZIOSpecDefault:
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(m,BlockFn(List(ValStmt(x,MultiplyFn(GetFn(this.value,false,None),ConstantFn(3)))),Tuple2Fn(GetFn(this.key,false,None),GetFn(x,false,None))))))"""
+        """BlockStmt(List(MapStmt(m,BlockFn(List(ValStmt(x,MultiplyFn(GetFn(this.value,false,None),ConstantFn(3)))),Tuple2Fn(GetFn(this.key,false,None),GetFn(x,false,Some(GetFn(m,false,None))))))))"""
 
       val expectedResult =
         """top -> Mapped(1,Map(a -> 30, b -> 60),None,Map())""".stripMargin + "\n"
@@ -849,7 +848,6 @@ object Collections extends ZIOSpecDefault:
         resultStr == expectedResult
       )
     }
-    */
   )
 
 //  _ <- ZIO.succeed(println("&&& " + compiledScript))

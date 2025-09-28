@@ -153,8 +153,15 @@ trait Level1 extends Level0 {
   private def segmentFn[$: P](using ctx: ExprContext): P[Fn[Any]] =
     P(identU.!).flatMap { name =>
       val isOpt = Utility.isPathOptional(name, ctx)
-      maybeIndex(GetFn(name, isOptional = isOpt))
+      // attach current collection parent (if any) as the receiver
+      val recv: Option[Fn[Any]] = ctx.receiver.flatMap(_.parentFn)
+      maybeIndex(GetFn(name, isOptional = isOpt, recv))
     }
+//  private def segmentFn[$: P](using ctx: ExprContext): P[Fn[Any]] =
+//    P(identU.!).flatMap { name =>
+//      val isOpt = Utility.isPathOptional(name, ctx)
+//      maybeIndex(GetFn(name, isOptional = isOpt))
+//    }
 
   // If helpful, define the builder type somewhere central:
   // type MethodBuilder = (Fn[Any], List[Fn[Any]], Int) => Either[DLCompileError, Fn[Any]]
@@ -344,7 +351,7 @@ trait Level1 extends Level0 {
     M_LEN -> { (recv, args, off, _) =>
       for {
         _ <- checkArgs(M_LEN, args, 0, off)
-      } yield LengthFn(recv)
+      } yield LenFn(recv)
     },
     M_TOUPPERCASE -> { (recv, args, off, _) =>
       for {
@@ -416,6 +423,8 @@ trait Level1 extends Level0 {
       }
     },
     M_FILTER -> { (recv: Fn[Any], args: List[Fn[Any]], off: Int, ctx: ExprContext) =>
+      println(s"[M_FILTER] incoming recv = $recv")
+
       for {
         _ <- checkArgs(M_FILTER, args, 1, off)
 
@@ -427,19 +436,37 @@ trait Level1 extends Level0 {
             o.valueType.asInstanceOf[ClassType].fields.map(ft => ft.name -> ft).toMap
           case _ => Map.empty
 
-        // enrich context with receiver
-        given ExprContext = ctx.withReceiver(Receiver("this", elemFields, elemType))
+        // --- NEW: build the receiver with parentFn AND push a scope for bare names like "qty"
+        rcvr = Receiver("this", elemFields, elemType, parentFn = Some(recv))
+        ctxWithRecvAndScope = {
+          val childFields: List[FieldType] = elemType match
+            case c: ClassType                               => c.fields
+            case o: OptionType if o.valueType.isInstanceOf[ClassType] =>
+              o.valueType.asInstanceOf[ClassType].fields
+            case _                                          => Nil
 
-        // ask the deferred node to compile itself
-        compiled <- args.head match
-          case d: DeferredCompare => d.compile()
-          case b: BooleanFn       => Right(b)    // allow plain booleans too
+          // expose element field names in the top scope
+          (ctx.withReceiver(rcvr)).pushScope(childFields)
+        }
+
+        // just to verify:
+        _ = println(s"[M_FILTER] top-scope symbols = ${ctxWithRecvAndScope.symbols.headOption.map(_.keys.toList)}")
+
+          // ask the deferred node to compile itself *under the enriched ctx*
+          compiled <- (args.head match
+          case d: DeferredCompare => d.compile()(using ctxWithRecvAndScope)
+          case b: BooleanFn       => Right(b)
           case other              => Left(DLCompileError(off,
             s"filter(...) requires a boolean expression, got ${other.getClass.getSimpleName}"))
+          )
 
-        // attach the collection-level receiver
+        // attach the collection-level receiver to the compiled predicate
         predWithRecv = compiled.withReceiver(recv)
-      } yield FilterFn(recv, predWithRecv)
+
+      } yield {
+        println(s"[M_FILTER] compiled predicate = $predWithRecv")
+        FilterFn(recv, predWithRecv)
+      }
     },
     //    M_FILTER -> { (recv: Fn[Any], args: List[Fn[Any]], off: Int, ctx: ExprContext) =>
 //      println(s"[M_FILTER] raw args.head = ${args.head}")
@@ -557,33 +584,61 @@ trait Level1 extends Level0 {
     case object FilterMethod extends CollectionMethodParser {
       val name: String = M_FILTER
 
+      private def baseReceiver(fn: Fn[Any]): Fn[Any] =
+        fn match
+          case IdentityFn if fn.recv.nonEmpty => fn.recv.get.asInstanceOf[Fn[Any]]
+          case _ => fn
+
       def parseFn[$: P](inner: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] = {
-        // 1) Figure out element type of the collection (List[T] or Option[List[T]])
-        val elemType: FieldType = Utility.elementTypeOf(inner)(using ctx)
-        val elemFields: Map[String, FieldType] = elemType match
+        println(s"[FilterMethod] inner received = $inner, inner.recv = ${inner.recv}")
+
+        // 1. Resolve the actual source (unwrap IdentityFn if present)
+        val trueSource = baseReceiver(inner)
+        println(s"[FilterMethod] trueSource = $trueSource, recv = ${trueSource.recv}")
+
+        // 2. Determine element type using the original ctx, not the yet-to-be-enriched one
+        val elemType = Utility.elementTypeOf(trueSource)(using ctx)
+        println(s"[FilterMethod] elemType = $elemType")
+
+        // 3. Collect element fields (for ClassType, Option[ClassType], etc.)
+        val elemFields = elemType match
           case c: ClassType => c.fields.map(ft => ft.name -> ft).toMap
           case o: OptionType if o.valueType.isInstanceOf[ClassType] =>
             o.valueType.asInstanceOf[ClassType].fields.map(ft => ft.name -> ft).toMap
           case _ => Map.empty
 
-        val receiver = Receiver("this", elemFields, elemType)
-        println(s"[FilterMethod] elemType=$elemType")
-        println(s"[FilterMethod] receiver=$receiver")
+        // 4. Build the per-element receiver with parentFn
+        val receiver = Receiver("this", elemFields, elemType, parentFn = Some(inner))
+        println(s"[FilterMethod] receiver = $receiver")
 
-        // 2) Parse a *boolean* expression inside a context that carries the receiver
+        // 5. Enrich the compile-time context with that receiver
         given ExprContext = ctx.withReceiver(receiver)
 
-        // booleanExpr must be your boolean parser (comparisonExpr / and/or, etc.)
+        // 6. Parse the predicate as a boolean expression
         booleanExpr.map {
           case Right(pred: BooleanFn) =>
-            val predWithRcvr = pred.withReceiver(inner) // also attach the actual collection Fn
-            println(s"[FilterMethod] predWithRcvr=$predWithRcvr")
-            Right(FilterFn(inner, predWithRcvr): Fn[Any])
+            println(s"[FilterMethod] booleanExpr returned pred = $pred")
+            // Attach collection receiver first
+            val withRcvr = pred.withReceiver(inner)
 
-          case Right(other) =>
-            Left(DLCompileError(0, s"filter(...) requires a boolean expression, got ${other.getClass.getSimpleName}"))
+            // If predicate is DeferredCompare, compile it to a concrete BooleanFn
+            val finalPred: Either[DLCompileError, BooleanFn] =
+              withRcvr match
+                case dc: DeferredCompare =>
+                  println(s"[FilterMethod] compiling DeferredCompare = $dc")
+                  dc.compile()
+                case b =>
+                  println(s"[FilterMethod] predicate is already BooleanFn = $b")
+                  Right(b)
 
-          case Left(err) => Left(err)
+            finalPred.map { compiled =>
+              println(s"[FilterMethod] compiled predicate = $compiled")
+              FilterFn(inner, compiled): Fn[Any]
+            }
+
+          case Left(err) =>
+            println(s"[FilterMethod] booleanExpr error = $err")
+            Left(err)
         }
       }
     }
@@ -678,8 +733,11 @@ trait Level1 extends Level0 {
         .map(m => m.name -> m)
         .toMap
 
-    def parseMethodArgs[$: P](parser: CollectionMethodParser)(using ExprContext): P[ParseFnResult] =
-      P("(" ~/ WS0 ~ parser.parseFn(IdentityFn) ~ WS0 ~ ")")
+    def parseMethodArgs[$: P](parser: CollectionMethodParser, recv: Fn[?])(using ExprContext): P[ParseFnResult] =
+      P("(" ~/ WS0 ~ {
+        println(s"[parseMethodArgs] passing recv into ${parser.name}: $recv")
+        parser.parseFn(IdentityFn(recv))
+      } ~ WS0 ~ ")")
 
     def lookupMethod[$: P](name: String): P[Either[DLCompileError, CollectionMethodParser]] =
       P(Index).map { off =>
@@ -716,15 +774,18 @@ trait Level1 extends Level0 {
         if childFields.nonEmpty then ctxWithThis.pushScope(childFields)
         else ctxWithThis
 
+      // Build the actual collection receiver Fn for this basePath
+      val baseFn: Fn[?] = GetFn(basePath, isOptional = Utility.isPathOptional(basePath, ctxWithThis))
+
       given ExprContext = ctxForArgs
 
       // resolve + parse a single method’s args into a Fn
-      def parseOneMethod(name: String): P[ParseFnResult] =
+      def parseOneMethod(name: String, recv: Fn[?]): P[ParseFnResult] =
         for {
           resolved <- lookupMethod(name)
           fnRes <- resolved match {
             case Left(err)  => P(Pass(Left(err)))
-            case Right(par) => parseMethodArgs(par)
+            case Right(par) => parseMethodArgs(par, recv)
           }
         } yield fnRes
 
@@ -736,7 +797,7 @@ trait Level1 extends Level0 {
 
       firstMethodNameP.flatMap { firstMethodName =>
         for {
-          firstResult <- parseOneMethod(firstMethodName)
+          firstResult <- parseOneMethod(firstMethodName, baseFn)
 
           // zero+ additional methods, each must also be followed by '('
           moreNames <- P((WS0 ~ "." ~ identifier.!).flatMap { n =>
@@ -747,7 +808,7 @@ trait Level1 extends Level0 {
             accP.flatMap {
               case left @ Left(_) => P(Pass(left)) // keep first error
               case Right(accum) =>
-                parseOneMethod(methodName).map {
+                parseOneMethod(methodName, baseFn).map {
                   case Left(err) => Left(err)
                   case Right(fn) => Right(accum :+ fn)
                 }

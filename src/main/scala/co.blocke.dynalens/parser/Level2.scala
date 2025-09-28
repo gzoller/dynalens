@@ -97,6 +97,12 @@ trait Level2 extends Level1 with ValueExprModule:
         for {
           left  <- lE
           right <- rE
+          _ = {
+            println(s"[comparisonExpr] building DeferredCompare op=$op")
+            println(s"[comparisonExpr] left=$left, left.recv=${left.recv}")
+            println(s"[comparisonExpr] right=$right, right.recv=${right.recv}")
+            println(s"[comparisonExpr] ctx.receiver=${ctx.receiver}")
+          }
         } yield DeferredCompare(op, left, right)
       }
 //  private def comparisonExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
@@ -330,32 +336,41 @@ trait Level2 extends Level1 with ValueExprModule:
         case Left(err) => P(Pass(Left(err)))
         case Right(cleanPath) =>
           val ctxForRhs = Utility.addThisType(cleanPath, ctx)
-
           given ExprContext = ctxForRhs
 
           P(valueExpr ~ WS0).map {
             case Left(e) => Left(e)
             case Right(vfn) =>
               val lhsSym = Utility.getPathType(cleanPath)
-              val effLhs = Utility.effectiveLhsForAssignment(lhsSym, cleanPath) // <-- relax here
+              println(s"[updateStmt] lhsSym for $cleanPath = $lhsSym")
+
+              val effLhs = Utility.effectiveLhsForAssignment(lhsSym, cleanPath)
+
               Utility.rhsType(vfn) match {
                 case None =>
                   Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${vfn.getClass.getSimpleName}"))
-                case Some(rhsSym) =>
-                  // unwrap ValType so that we compare the underlying type to the field's type
-                  val effRhs = rhsSym match
-                    case v: ValType => v.valueType
-                    case other      => other
 
-                  if Utility.areTypesCompatible(effLhs, effRhs) then
-                    Right((ctx, UpdateStmt(cleanPath, vfn)))
-                  else
-                    Left(
-                      DLCompileError(
-                        rhsOff,
-                        s"Type mismatch: cannot assign $rhsSym to $lhsSym at $cleanPath"
-                      )
-                    )
+                case Some(rhsSym0) =>
+                  // --- unwrap ValType on RHS for assignment comparison ---
+                  val effRhs: FieldType = rhsSym0 match {
+                    case v: ValType =>
+                      println(s"[updateStmt] RHS is ValType -> unwrapping to ${v.valueType}")
+                      v.valueType
+                    case other => other
+                  }
+
+                  println(s"[updateStmt] effLhs = $effLhs")
+                  println(s"[updateStmt] effRhs = $effRhs")
+
+                  val ok = Utility.areTypesCompatible(effLhs, effRhs)
+                  println(s"[updateStmt] areTypesCompatible? $ok")
+
+                  if ok then Right((ctx, UpdateStmt(cleanPath, vfn)))
+                  else {
+                    val lStr = Utility.prettyFieldType(effLhs)
+                    val rStr = Utility.prettyFieldType(effRhs)
+                    Left(DLCompileError(rhsOff, s"Type mismatch: cannot assign $rStr to $lStr at $cleanPath"))
+                  }
               }
           }
       }

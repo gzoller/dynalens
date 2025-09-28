@@ -105,7 +105,7 @@ object Options extends ZIOSpecDefault:
           |  val y = interest[]?.len()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,IsDefinedFn(GetFn(interest[]?))), ValStmt(y,LengthFn(GetFn(interest[]?)))))"""
+        """BlockStmt(List(ValStmt(x,IsDefinedFn(GetFn(interest[]?))), ValStmt(y,LenFn(GetFn(interest[]?)))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),Some(List(Item(abc,2,5))))
           |x -> true
@@ -127,7 +127,7 @@ object Options extends ZIOSpecDefault:
           |  interest.sortDesc(number)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,LengthFn(GetFn(interest[]?))), MapStmt(interest[]?.qty,MultiplyFn(GetFn(x),ConstantFn(5))), MapStmt(interest[]?,SortDescFn(IdentityFn,Some(this.number)))))"""
+        """BlockStmt(List(ValStmt(x,LenFn(GetFn(interest[]?))), MapStmt(interest[]?.qty,MultiplyFn(GetFn(x),ConstantFn(5))), MapStmt(interest[]?,SortDescFn(IdentityFn,Some(this.number)))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),Some(List(Item(xyz,10,7), Item(abc,10,5))))
           |x -> 2

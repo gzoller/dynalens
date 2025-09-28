@@ -25,8 +25,10 @@ package parser
 case class Receiver(
                      name: String = "this",
                      fields: Map[String, FieldType], // element schema for the receiver
-                     fieldType: FieldType            // full FieldType for this receiver
-                   )
+                     fieldType: FieldType,           // full FieldType for this receiver
+                     parentFn: Option[Fn[Any]] = None
+                   ):
+  def asFn: Option[Fn[Any]] = parentFn
 
 case class ExprContext(
                         schema: ClassType,
