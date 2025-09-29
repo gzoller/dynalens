@@ -162,7 +162,7 @@ object Utility:
             base.flatMap(descend(_, segs))
           }
 
-        // --- NEW: path without "this" but a receiver is attached -> resolve inside receiver ---
+        // ---path without "this" but a receiver is attached -> resolve inside receiver ---
         else if f.recv.nonEmpty then
           // Prefer compile-time receiver from context (set by Filter/collection scope),
           // otherwise try to infer from the attached recv fn.
@@ -200,13 +200,18 @@ object Utility:
 
             case None =>
               println(s"[rhsType] no symbol hit, falling back to schema walk for $cleanPath")
-              rhsTypeFromSchemaPath(cleanPath, ctx.schema)
+              val firstSeg = cleanPath.split("\\.").head
+              val (baseHead, _) = Path.segmentAndIndex(firstSeg)
+              if !ctx.schema.fields.exists(_.name == baseHead) then
+                None
+              else
+                rhsTypeFromSchemaPath(cleanPath, ctx.schema)
         }
 
       case f: ElseFn => rhsType(f.fallback)
       case f: IfFn[?] => rhsType(f.thenFn)
       case f: BlockFn[?] => rhsType(f.finalFn)
-
+      case c: ConcatFn => Some(ScalarType("", "java.lang.String"))
       case MapGetFn(recv, _) => recv match
         case GetFn(p, _, _) => Utility.mapGetValueType(p)
         case _ => None

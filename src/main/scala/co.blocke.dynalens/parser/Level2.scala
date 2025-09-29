@@ -105,25 +105,6 @@ trait Level2 extends Level1 with ValueExprModule:
           }
         } yield DeferredCompare(op, left, right)
       }
-//  private def comparisonExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
-//    P(
-//      arithmeticExpr ~ WS0 ~
-//        StringIn("==", "!=", ">=", "<=", ">", "<").! ~
-//        WS0 ~ arithmeticExpr
-//    ).flatMap { case (lE, op, rE) =>
-//      (lE, rE) match
-//        case (Right(left), Right(right)) =>
-//          op match
-//            case "==" => P(Pass(Right(EqualFn(left, right): BooleanFn)))
-//            case "!=" => P(Pass(Right(NotEqualFn(left, right): BooleanFn)))
-//            case ">=" => P(Pass(Right(GreaterThanOrEqualFn(left, right): BooleanFn)))
-//            case "<=" => P(Pass(Right(LessThanOrEqualFn(left, right): BooleanFn)))
-//            case ">"  => P(Pass(CGreaterThanFn.build(List(left, right))))
-//            case "<"  => P(Pass(Right(LessThanFn(left, right): BooleanFn)))
-//
-//        case (Left(e), _) => P(Pass(Left(e)))
-//        case (_, Left(e)) => P(Pass(Left(e)))
-//    }
 
   // ---- Arithmetic ----
 

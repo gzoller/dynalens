@@ -45,6 +45,11 @@ object Path:
       else Field(clean, isOptional)
     }
 
+  private val re = """^([^\[]+)(?:\[(\d+)\])?$""".r
+  def segmentAndIndex(seg: String): (String, Option[Int]) = seg match
+    case re(name, idx) => (name, Option(idx).map(_.toInt))
+    case _             => (seg, None)
+
   // Strip all "noise" out of path--just raw path--for DynaLens low-level operations
   def partialPath(pathParts: List[PathElement]): String =
     pathParts

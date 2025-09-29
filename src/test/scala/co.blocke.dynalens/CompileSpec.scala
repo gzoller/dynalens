@@ -23,7 +23,6 @@ package co.blocke.dynalens
 
 import zio._
 import zio.test._
-import zio.test.Assertion._
 
 import DynaLens.*
 import parser.Script
@@ -89,7 +88,6 @@ object CompileSpec extends ZIOSpecDefault {
       val lens = dynalens[Shipment]
       for {
         compiled <- Script.compile(script, lens)
-        _ <- ZIO.succeed(println(">>>> "+compiled))
       } yield assertTrue(normalize(compiled.toString) == normalize(expected))
     },
 
@@ -143,34 +141,55 @@ object CompileSpec extends ZIOSpecDefault {
 
     test("map with option values supports keys.distinct.sortAsc") {
       val script = """val ps = props.keys().distinct().sortAsc()"""
-      val expectedSubtrees = Seq("KeysFn", "DistinctFn", "SortAscFn")
+      val expected = """BlockStmt(List(ValStmt(ps,SortAscFn(DistinctFn(KeysFn(GetFn(props,false,None)),None),None))))"""
       val lens = dynalens[Combo]
       for {
         compiled <- Script.compile(script, lens)
-      } yield assertTrue(expectedSubtrees.forall(normalize(compiled.toString).contains))
+      } yield assertTrue(normalize(compiled.toString) == normalize(expected))
     },
-//
-//    test("propagate Option through filter+sum on Option[List[Int]]") {
-//      val script = """val s = l2.filter(this > 3).sum()"""
-//      val lens   = dynalens[Sample]
-//      for {
-//        compiled <- Script.compile(script, lens)
-//      } yield assertTrue(
-//        normalize(compiled.toString).contains("FilterFn") &&
-//          normalize(compiled.toString).contains("SumFn")
-//      )
-//    },
-//
-//    test("propagate Option through distinct+sortAsc+max on Option[List[Int]]") {
-//      val script = """val s = l2.distinct().sortAsc().max()"""
-//      val lens   = dynalens[Sample]
-//      for {
-//        compiled <- Script.compile(script, lens)
-//      } yield assertTrue(
-//        Seq("DistinctFn", "SortAscFn", "MaxFn")
-//          .forall(normalize(compiled.toString).contains)
-//      )
-//    },
+
+    test("propagate Option through filter+sum on Option[List[Int]]") {
+      val script = """val s = l2.filter(this > 3).sum()"""
+      val expected = """BlockStmt(List(ValStmt(s,SumFn(FilterFn(GetFn(l2,true,None),GreaterThanFn(GetFn(this,false,Some(GetFn(l2,true,None))),ConstantFn(3)))))))"""
+      val lens   = dynalens[OptTest]
+      for {
+        compiled <- Script.compile(script, lens)
+      } yield assertTrue(normalize(compiled.toString) == normalize(expected))
+    },
+
+    test("propagate Option through distinct+sortAsc+max on Option[List[Int]]") {
+      val script = """val s = l2.distinct().sortAsc().max()"""
+      val expected = """BlockStmt(List(ValStmt(s,MaxFn(SortAscFn(DistinctFn(GetFn(l2,true,None),None),None)))))"""
+      val lens   = dynalens[OptTest]
+      for {
+        compiled <- Script.compile(script, lens)
+      } yield assertTrue(normalize(compiled.toString) == normalize(expected))
+    },
+
+    test("propagate Option through filter on Option[List[Int]] with this inside predicate") {
+      val script =
+        """val x = l2.filter(this % 2 == 0)"""
+      val expected =
+        """BlockStmt(List(ValStmt(x,FilterFn(GetFn(l2,true,None),EqualFn(ModuloFn(GetFn(this,false,Some(GetFn(l2,true,None))),ConstantFn(2)),ConstantFn(0))))))"""
+      val lens = dynalens[OptTest]
+      for {
+        compiled <- Script.compile(script, lens)
+      } yield assertTrue(normalize(compiled.toString) == normalize(expected))
+    },
+
+    test("map-like statement with this inside predicate on Option[List[Int]]") {
+      val script =
+        """l2.filter(this < 2)"""
+      val expected =
+        """BlockStmt(List(MapStmt(l2,FilterFn(IdentityFn(GetFn(l2,true,None)),LessThanFn(GetFn(this,false,Some(IdentityFn(GetFn(l2,true,None)))),ConstantFn(2))))))"""
+      val lens = dynalens[OptTest]
+      for {
+        compiled <- Script.compile(script, lens)
+        _ <- ZIO.succeed(println(">>> "+compiled))
+      } yield assertTrue(
+        normalize(compiled.toString) == normalize(expected)
+      )
+    },
 
     // ------------------------------------------------------------------
     // Negative tests – must fail and give a meaningful error
@@ -226,6 +245,19 @@ object CompileSpec extends ZIOSpecDefault {
       )
     },
 
+    test("string val inferred and used inside numeric filter") {
+      val script =
+        """val x = "foo" :: "bar"
+          |val s = nums.filter(this > x)
+          |""".stripMargin
+      val lens = dynalens[OptTest]   // adjust type param to match your schema that defines `nums: List[Int]`
+      for {
+        r <- Script.compile(script, lens).either
+      } yield assertTrue(
+        r.left.exists(_.getMessage.contains("Error: > requires numeric operands, found scala.Int and java.lang.String"))
+      )
+    },
+
     test("reject using non-numeric value with arithmetic function") {
       val script = """val s = nums.filter(this > true)"""
       val lens   = dynalens[OptTest]
@@ -244,13 +276,20 @@ object CompileSpec extends ZIOSpecDefault {
       } yield assertTrue(
         r.left.exists(_.getMessage.contains("Error: + cannot be applied to Option types (use .else() to handle missing values)"))
       )
+    },
+
+    test("rejected statement should resolve predicate types") {
+      val script =
+        """l2.filter(this < true)"""
+      val lens   = dynalens[OptTest]
+      for {
+        r <- Script.compile(script, lens).either
+      } yield assertTrue(
+        r.left.exists(_.getMessage.contains("Error: < requires numeric operands, found scala.Int and scala.Boolean"))
+      )
     }
   )
 }
 
 //_ <- ZIO.succeed(println(">>>> "+r))
-// TODO: val x = "foo" + "bar", then val s = nums.filter(this > x) --> ensure type of x is correctly resolved
-// TODO: Fix recevier for other Fns: min, max, etc.
-// TODO: When 'this' is an Option[]
-// TODO: test map-like filter to ensure recevier for this/GetFn is set properly
 // TODO: Consider if we want :: to work for Lists/Maps too, or a different operator/fn
