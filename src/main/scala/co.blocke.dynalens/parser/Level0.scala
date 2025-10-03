@@ -48,7 +48,7 @@ trait Level0:
       .map(s => Right(ConstantFn(s)))
 
   private def noneLiteral[$: P]: P[ParseFnResult] =
-    P("None").map(_ => Right(NoneFn()))
+    P("None").map(_ => Right(NoneFn))
 
   def numberLiteral[$: P]: P[ParseFnResult] =
     P(Index ~ (CharIn("+\\-").? ~ CharsWhileIn("0-9") ~ ("." ~ CharsWhileIn("0-9")).?).!).map { case (offset, raw) =>
@@ -80,7 +80,7 @@ trait Level0:
       stringLiteral |
         numberLiteral |
         noneLiteral |
-        booleanLiteral.map(b => Right(b: Fn[Any])) // Upcast BooleanFn to Fn[Any]
+        booleanLiteral.map(b => Right(b.asInstanceOf[Fn[Any]]))
     )
 
   // Just like constant but not wrapped
@@ -92,7 +92,7 @@ trait Level0:
         numberLiteral.map(_.map { case ConstantFn(n) =>
           n
         }) |
-        noneLiteral.map(_.map { case NoneFn() =>
+        noneLiteral.map(_.map { case NoneFn =>
           None
         }) |
         booleanLiteral.map { case BooleanConstantFn(value) =>

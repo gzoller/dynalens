@@ -45,10 +45,7 @@ object CompileSpec extends ZIOSpecDefault {
           |""".stripMargin
 
       val expected =
-        """BlockStmt(List(
-          |  ValStmt(x,AddFn(ConstantFn(3),MultiplyFn(GetFn(items[1].num,false,None),ConstantFn(2)))),
-          |  ValStmt(y,MultiplyFn(AddFn(ConstantFn(3),GetFn(items[1].num,false,None)),ConstantFn(2)))
-          |))""".stripMargin
+        """BlockStmt(List(ValStmt(x,AddFn(ConstantFn(3),MultiplyFn(GetFn(num,false,Some(IndexFn(GetFn(items,false,None),1))),ConstantFn(2)))), ValStmt(y,MultiplyFn(AddFn(ConstantFn(3),GetFn(num,false,Some(IndexFn(GetFn(items,false,None),1)))),ConstantFn(2)))))""".stripMargin
 
       val lens = dynalens[Shipment]
       for {
@@ -71,7 +68,7 @@ object CompileSpec extends ZIOSpecDefault {
           |            FilterFn(
           |              GetFn(items,false,None),
           |              GreaterThanFn(
-          |                GetFn(this.qty,false,Some(GetFn(items,false,None))),
+          |                GetFn(qty,false,Some(GetFn(items,false,None))),
           |                ConstantFn(5)
           |              )
           |            ),
@@ -127,7 +124,7 @@ object CompileSpec extends ZIOSpecDefault {
           |      ReverseFn(
           |        FilterFn(
           |          GetFn(interest,true,None),
-          |          GreaterThanFn(GetFn(_.qty,false,Some(GetFn(interest,true,None))), ConstantFn(5))
+          |          GreaterThanFn(GetFn(qty,false,Some(GetFn(interest,true,None))), ConstantFn(5))
           |        )
           |      )
           |    )
@@ -181,11 +178,10 @@ object CompileSpec extends ZIOSpecDefault {
       val script =
         """l2.filter(this < 2)"""
       val expected =
-        """BlockStmt(List(MapStmt(l2,FilterFn(IdentityFn(GetFn(l2,true,None)),LessThanFn(GetFn(this,false,Some(IdentityFn(GetFn(l2,true,None)))),ConstantFn(2))))))"""
+           """BlockStmt(List(MapStmt(l2,FilterFn(GetFn(l2,true,None),LessThanFn(GetFn(this,false,Some(GetFn(l2,true,None))),ConstantFn(2))))))"""
       val lens = dynalens[OptTest]
       for {
         compiled <- Script.compile(script, lens)
-        _ <- ZIO.succeed(println(">>> "+compiled))
       } yield assertTrue(
         normalize(compiled.toString) == normalize(expected)
       )
@@ -216,7 +212,8 @@ object CompileSpec extends ZIOSpecDefault {
       val lens   = dynalens[Shipment]
       for {
         r <- Script.compile(script, lens).either
-      } yield assertTrue(r.left.exists(_.getMessage.contains("Method 'filter' cannot be applied to receiver of type java.util.Date")))
+        _ <- ZIO.succeed(println(">>> "+r))
+      } yield assertTrue(r.left.exists(_.getMessage.contains("Error: Method 'filter' cannot be applied to receiver of type java.time.LocalDateTime")))
     },
 
     test("reject limit on a scalar Int") {
@@ -247,7 +244,7 @@ object CompileSpec extends ZIOSpecDefault {
 
     test("string val inferred and used inside numeric filter") {
       val script =
-        """val x = "foo" :: "bar"
+        """val x = "foo" + "bar"
           |val s = nums.filter(this > x)
           |""".stripMargin
       val lens = dynalens[OptTest]   // adjust type param to match your schema that defines `nums: List[Int]`
@@ -274,7 +271,7 @@ object CompileSpec extends ZIOSpecDefault {
       for {
         r <- Script.compile(script, lens).either
       } yield assertTrue(
-        r.left.exists(_.getMessage.contains("Error: + cannot be applied to Option types (use .else() to handle missing values)"))
+        r.left.exists(_.getMessage.contains("Error: + requires numeric operands, found scala.Option and scala.Int"))
       )
     },
 
@@ -291,5 +288,3 @@ object CompileSpec extends ZIOSpecDefault {
   )
 }
 
-//_ <- ZIO.succeed(println(">>>> "+r))
-// TODO: Consider if we want :: to work for Lists/Maps too, or a different operator/fn

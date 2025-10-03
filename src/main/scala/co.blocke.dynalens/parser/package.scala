@@ -22,6 +22,8 @@
 package co.blocke.dynalens
 package parser
 
+import zio.*
+
 // one generic error-or wrapper
 type ParseResult[A] = Either[DLCompileError, A]
 
@@ -41,53 +43,17 @@ case class DLCompileError(offset: Int, msg: String):
     val col = lines.lastOption.map(_.length).getOrElse(0) + 1
     (line, col)
 
-// Math functions
-val M_MIN = "min"
-val M_MAX = "max"
-val M_SUM = "sum"
-val M_AVG = "avg"
-val M_MEDIAN = "median"
-val M_ABS = "abs"
+case object NoOpFn extends Fn[Any]:
+  override val methodName: String = "<noop>"
+  override val recv: Option[Fn[?]] = None
+  override val args: List[Fn[Any]] = Nil
 
-// Boolean functions (strings)
-val M_STARTSWITH = "startsWith"
-val M_ENDSWITH = "endsWith"
-val M_CONTAINS = "contains"
-val M_EQUALSIGNORECASE = "equalsIgnoreCase"
-val M_MATCHESREGEX = "matchesRegex"
+  // no children
+  override def children: List[Fn[?]] = Nil
 
-val M_ELSE = "else"
+  // doesn't rebuild — always itself
+  override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
 
-// Option functions
-val M_ISDEFINED = "isDefined"
-
-// String functions
-val M_LEN = "len"
-val M_TOUPPERCASE = "toUpperCase"
-val M_TOLOWERCASE = "toLowerCase"
-val M_TRIM = "trim"
-val M_TEMPLATE = "template"
-val M_SUBSTR = "substr"
-val M_REPLACE = "replace"
-val M_DATEFMT = "dateFmt"
-val M_TODATE = "toDate"
-
-// Seq functions (+ len, which is both)
-val M_SORTASC = "sortAsc"
-val M_SORTDESC = "sortDesc"
-val M_FILTER = "filter"
-val M_DISTINCT = "distinct"
-val M_LIMIT = "limit"
-val M_REVERSE = "reverse"
-val M_CLEAN = "clean"
-
-// Map functions
-val M_KEYS = "keys"
-val M_VALUES = "values"
-val M_GET = "get"
-
-// Misc
-// val M_NOW = "now" // Date function
-// val M_UUID = "uuid"
-// val M_MAPFROM = "mapFrom"
-// val M_MAPTO = "mapTo"
+  // never actually resolves — fail fast
+  override def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ZIO.fail(DynaLensError("NoOpFn should never be resolved"))

@@ -36,7 +36,7 @@ object MathSpec extends ZIOSpecDefault:
           |  id = s
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(s,SumFn(GetFn(l1,false))), UpdateStmt(id,GetFn(s,false))))"""
+        """BlockStmt(List(ValStmt(s,SumFn(GetFn(l1,false,None))), UpdateStmt(id,GetFn(s,false,None))))"""
       val inst = MyLists(0, List(1, 2, 3, 4), None)
       val a = dynalens[MyLists]
       for {
@@ -59,7 +59,7 @@ object MathSpec extends ZIOSpecDefault:
           |  val m = l1.min()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(m,MinFn(GetFn(l1,false)))))"""
+        """BlockStmt(List(ValStmt(m,MinFn(GetFn(l1,false,None)))))"""
       val inst = MyLists(99, List(9, -2, 7, 4), None)
       val a = dynalens[MyLists]
       for {
@@ -78,7 +78,7 @@ object MathSpec extends ZIOSpecDefault:
           |  val mx = l1.filter(this >= 3).max()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(mx,MaxFn(FilterFn(GetFn(l1,false),GreaterThanOrEqualFn(GetFn(this,false),ConstantFn(3)))))))"""
+        """BlockStmt(List(ValStmt(mx,MaxFn(FilterFn(GetFn(l1,false,None),GreaterThanOrEqualFn(GetFn(this,false,Some(GetFn(l1,false,None))),ConstantFn(3)))))))"""
       val inst = MyLists(5, List(1, 3, 2, 10, 4), None)
       val a = dynalens[MyLists]
       for {
@@ -97,7 +97,7 @@ object MathSpec extends ZIOSpecDefault:
           |  val a = l1.avg()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(a,AvgFn(GetFn(l1,false)))))"""
+        """BlockStmt(List(ValStmt(a,AvgFn(GetFn(l1,false,None)))))"""
       val inst = MyLists(0, List(2, 4, 6, 8), None) // avg = 5.0
       val aLens = dynalens[MyLists]
       for {
@@ -117,7 +117,7 @@ object MathSpec extends ZIOSpecDefault:
           |  val med = l1.median()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(med,MedianFn(GetFn(l1,false)))))"""
+        """BlockStmt(List(ValStmt(med,MedianFn(GetFn(l1,false,None)))))"""
       val inst = MyLists(0, List(9, 1, 7), None) // sorted: 1,7,9 → median = 7.0 or 7 depending on impl; ours is 7.0
       val a = dynalens[MyLists]
       for {
@@ -136,7 +136,7 @@ object MathSpec extends ZIOSpecDefault:
           |  val med = l1.median()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(med,MedianFn(GetFn(l1,false)))))"""
+        """BlockStmt(List(ValStmt(med,MedianFn(GetFn(l1,false,None)))))"""
       val inst = MyLists(0, List(1, 100, 2, 50), None) // sorted: 1,2,50,100 → (2+50)/2 = 26.0
       val a = dynalens[MyLists]
       for {
@@ -156,7 +156,7 @@ object MathSpec extends ZIOSpecDefault:
           |  id = x
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,AbsFn(GetFn(id,false))), UpdateStmt(id,GetFn(x,false))))"""
+        """BlockStmt(List(ValStmt(x,AbsFn(GetFn(id,false,None))), UpdateStmt(id,GetFn(x,false,None))))"""
       val inst = MyLists(-12, List(1, 2, 3), None)
       val a = dynalens[MyLists]
       for {
@@ -175,7 +175,7 @@ object MathSpec extends ZIOSpecDefault:
           |  val s = l2.sum()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(s,SumFn(GetFn(l2,true)))))"""
+        """BlockStmt(List(ValStmt(s,SumFn(GetFn(l2,true,None)))))"""
       val inst = MyLists(0, List(1, 2, 3), None) // l2 = None
       val a = dynalens[MyLists]
       for {
@@ -194,7 +194,7 @@ object MathSpec extends ZIOSpecDefault:
           |  val s = l2.sum()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(s,SumFn(GetFn(l2,true)))))"""
+        """BlockStmt(List(ValStmt(s,SumFn(GetFn(l2,true,None)))))"""
       val inst = MyLists(0, List(1, 2, 3), Some(List(10, 5)))
       val a = dynalens[MyLists]
       for {
@@ -213,7 +213,7 @@ object MathSpec extends ZIOSpecDefault:
           |  val med = l1.sortAsc().median()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(med,MedianFn(SortAscFn(GetFn(l1,false),None)))))"""
+        """BlockStmt(List(ValStmt(med,MedianFn(SortAscFn(GetFn(l1,false,None),None)))))"""
       val inst = MyLists(0, List(5, 1, 9, 3), None) // sorted: 1,3,5,9 → (3+5)/2 = 4.0
       val a = dynalens[MyLists]
       for {
@@ -232,7 +232,7 @@ object MathSpec extends ZIOSpecDefault:
           |  val s = l1.filter(this % 2 == 0).sum()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(s,SumFn(FilterFn(GetFn(l1,false),EqualFn(ModuloFn(GetFn(this,false),ConstantFn(2)),ConstantFn(0)))))))"""
+        """BlockStmt(List(ValStmt(s,SumFn(FilterFn(GetFn(l1,false,None),EqualFn(ModuloFn(GetFn(this,false,Some(GetFn(l1,false,None))),ConstantFn(2)),ConstantFn(0)))))))"""
       val inst = MyLists(0, List(1, 2, 3, 4, 5, 6), None) // evens: 2+4+6=12
       val a = dynalens[MyLists]
       for {

@@ -9,7 +9,39 @@ sealed trait FieldType {
   def name: String
   def typeName: String
   def isNumeric: Boolean = false
+  def isStringLike: Boolean = this match
+    case ScalarType(_, "java.lang.String")                   => true
+    case ListType(_, ScalarType(_, "java.lang.String"), _)   => true
+    case OptionType(_, ListType(_, ScalarType(_, "java.lang.String"), _), _) => true
+    case _                                                   => false
+
+  /** True if this type can be assigned from that type (e.g. Int <- Int, Option[Int] <- Int, etc.) */
+  def conformsTo(other: FieldType): Boolean = (this, other) match
+    // exact match
+    case (ScalarType(_, tn1), ScalarType(_, tn2)) => tn1 == tn2
+
+    // allow widening for numeric types
+    case (ScalarType(_, "scala.Int"),  ScalarType(_, "scala.Long"))   => true
+    case (ScalarType(_, "scala.Int"),  ScalarType(_, "scala.Double")) => true
+    case (ScalarType(_, "scala.Long"), ScalarType(_, "scala.Double")) => true
+    case (ScalarType(_, "scala.Float"), ScalarType(_, "scala.Double")) => true
+
+    // Option unwrap
+    case (OptionType(_, inner, _), other) => inner.conformsTo(other)
+    case (ft, OptionType(_, inner, _))    => ft.conformsTo(inner)
+
+    // List element match
+    case (ListType(_, elem, _), ListType(_, otherElem, _)) =>
+      elem.conformsTo(otherElem)
+
+    // Map key/value match
+    case (MapType(_, k1, v1, _), MapType(_, k2, v2, _)) =>
+      k1.conformsTo(k2) && v1.conformsTo(v2)
+
+    // fallback
+    case _ => false
 }
+
 case class ScalarType(name: String, typeName: String) extends FieldType:
   override def isNumeric: Boolean =
     this match

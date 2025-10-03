@@ -68,3 +68,8 @@ case class OptTest(
                    maybeInt: Option[Int],
                    nums: List[Int]
                  )
+
+case class SampleStrings(s1: String, s2: String,
+                         ls: List[String],
+                         optLs: Option[List[String]],
+                         n1: Int, n2: Int)

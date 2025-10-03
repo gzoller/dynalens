@@ -28,24 +28,72 @@ import scala.annotation.tailrec
 
 object Utility:
 
+  private def constantToFieldType(v: Any): Option[FieldType] = v match {
+    case null => Some(ScalarType("", "scala.Null"))
+    case _: String => Some(ScalarType("", "java.lang.String"))
+    case _: Boolean => Some(ScalarType("", "scala.Boolean"))
+    case _: Byte => Some(ScalarType("", "scala.Byte"))
+    case _: Short => Some(ScalarType("", "scala.Short"))
+    case _: Int => Some(ScalarType("", "scala.Int"))
+    case _: Long => Some(ScalarType("", "scala.Long"))
+    case _: Float => Some(ScalarType("", "scala.Float"))
+    case _: Double => Some(ScalarType("", "scala.Double"))
+    case _: BigDecimal => Some(ScalarType("", "scala.math.BigDecimal"))
+    case _: java.util.Date => Some(ScalarType("", "java.util.Date"))
+    case _: java.util.UUID => Some(ScalarType("", "java.util.UUID"))
+    case _ => None // fallback: unknown type
+  }
+
+  def normalizeNumeric(t: String): String = t match {
+    case "Int" | "scala.Int" => "scala.Int"
+    case "Long" | "scala.Long" => "scala.Long"
+    case "Float" | "scala.Float" => "scala.Float"
+    case "Double" | "scala.Double" => "scala.Double"
+    case other => other
+  }
+
+  def numericPromote(left: String, right: String): String = {
+    val l = normalizeNumeric(left)
+    val r = normalizeNumeric(right)
+    (l, r) match {
+      case ("scala.Int", "scala.Long") | ("scala.Long", "scala.Int") =>
+        "scala.Long"
+      case ("scala.Int", "scala.Double") | ("scala.Double", "scala.Int") =>
+        "scala.Double"
+      case ("scala.Double", _) | (_, "scala.Double") =>
+        "scala.Double"
+      case ("scala.Float", _) | (_, "scala.Float") =>
+        "scala.Float"
+      case ("scala.Long", _) | (_, "scala.Long") =>
+        "scala.Long"
+      case ("scala.Int", "scala.Int") =>
+        "scala.Int"
+      case other =>
+        throw new IllegalArgumentException(s"Cannot promote numeric types: $other")
+    }
+  }
+
   def getPathType(path: String)(using ctx: ExprContext): FieldType = {
     val segments = path.split("\\.").toList
     if segments.isEmpty then return ScalarType("", "scala.Any")
 
-    //  1 check user-defined vals first (top of symbol stack wins)
+    // 1. check user-defined vals first (top of symbol stack wins)
     ctx.symbols.collectFirst { case m if m.contains(segments.head) => m(segments.head) } match {
       case Some(v: ValType) =>
-        // if there's more path after a val, walk inside its valueType
         val base = v.valueType
-        return if segments.tail.nonEmpty then descend(base, segments.tail).getOrElse(ScalarType("", "scala.Any"))
+        return if segments.tail.nonEmpty then
+          walkType(base, segments.tail).getOrElse(ScalarType("", "scala.Any"))
         else base
+
       case Some(ft) =>
-        return if segments.tail.nonEmpty then descend(ft, segments.tail).getOrElse(ScalarType("", "scala.Any"))
+        return if segments.tail.nonEmpty then
+          walkType(ft, segments.tail).getOrElse(ScalarType("", "scala.Any"))
         else ft
-      case None => // keep going
+
+      case None => // fall through to schema
     }
 
-    // 2 fall back to schema-based resolution
+    // 2. fall back to schema-based resolution
     @tailrec
     def stepIntoForHead(ft: FieldType, headSeg: String): FieldType = {
       val hasIndex = headSeg.matches(""".*\[\d+\]""")
@@ -62,208 +110,178 @@ object Utility:
           case None => ScalarType("", "scala.Any")
           case Some(ft0) =>
             val ft1 = stepIntoForHead(ft0, head)
-            descend(ft1, tail).getOrElse(ScalarType("", "scala.Any"))
+            walkType(ft1, tail).getOrElse(ScalarType("", "scala.Any"))
+
+      case Nil => ScalarType("", "scala.Any") // defensive, shouldn’t happen
   }
 
-
   /**
-   * Recursively resolve a dot path into its FieldType.
-   * Normalizes indexed segments like "items[3]" → "items".
-   * Prints detailed debug at every step.
+   * Walk down a type given path segments.
+   * - Strips [123] index sugar automatically.
+   * - Unwraps Option/List as needed.
+   * - Stops when no match can be found.
    */
-  // Put this once (top-level in Utility or wherever you keep helpers)
-  private def descend(ft: FieldType, rest: List[String]): Option[FieldType] =
-    rest match
+  private def walkType(ft: FieldType, segs: List[String]): Option[FieldType] =
+    segs match
       case Nil =>
-        // done: return whatever type we've landed on
         Some(ft)
 
-      case seg :: tail =>
-        // strip any [123] index sugar off this segment
-        val norm = seg.replaceAll("\\[\\d+\\]", "")
+      case rawSeg :: tail =>
+        val norm = rawSeg.replaceAll("\\[\\d+\\]", "")
 
         ft match
           case c: ClassType =>
-            // consume this segment by finding the matching field on the class
-            c.fields.find(_.name == norm).flatMap(descend(_, tail))
+            println(s"[walkType] class=${c.typeName}, seg=$norm, fields=${c.fields.map(_.name)}")
+            c.fields.find(_.name == norm).flatMap(f => walkType(f, tail))
 
-          case o: OptionType =>
-            // unwrap Option to continue, but DO NOT consume the segment here
-            descend(o.valueType, rest)
+          case OptionType(_, inner, _) =>
+            walkType(inner, segs) // don’t consume segment, just unwrap
 
-          case l: ListType =>
-            // step into element type, but DO NOT consume the segment here.
-            // We still need to match `norm` against the element’s fields next.
-            descend(l.elementType, rest)
+          case ListType(_, elem, _) =>
+            walkType(elem, segs)  // don’t consume segment, just unwrap
+
+          case MapType(_, _, valueType, _) if segs.nonEmpty && (segs.head == "key" || segs.head == "value") =>
+            Some(valueType) // or ScalarType("","scala.String") for .keys()
 
           case _ =>
             None
 
+  /** Unwrap one level of Option or List to the element type */
+  def unwrapCollection(ft: FieldType): Option[FieldType] = ft match {
+    case ListType(_, elem, _) => Some(elem)
+    case OptionType(_, ListType(_, elem, _), _) => Some(elem)
+    case other => Some(other)
+  }
+
   def rhsType(fn: Fn[?])(using ctx: ExprContext): Option[FieldType] =
-
-    // All these to handle figuring out rhs type of arithmetic functions, which can have different argument types (all numeric, tho)
-    def normNum(tn: String): Option[String] = tn match
-      case "scala.Int" | "java.lang.Integer" => Some("scala.Int")
-      case "scala.Long" | "java.lang.Long" => Some("scala.Long")
-      case "scala.Float" | "java.lang.Float" => Some("scala.Float")
-      case "scala.Double" | "java.lang.Double" => Some("scala.Double")
-      case _ => None
-
-    val rank = Map("scala.Int" -> 1, "scala.Long" -> 2, "scala.Float" -> 3, "scala.Double" -> 4)
-
-    def promote(a: String, b: String, atLeastDouble: Boolean): String =
-      if atLeastDouble then "scala.Double"
-      else if rank(a) >= rank(b) then a else b
-
-    def numericResultType(l: Fn[?], r: Fn[?], atLeastDouble: Boolean): Option[FieldType] =
-      for
-        lt <- rhsType(l)
-        rt <- rhsType(r)
-        ln <- normNum(lt.typeName)
-        rn <- normNum(rt.typeName)
-        res = promote(ln, rn, atLeastDouble)
-      yield ScalarType("", res)
-
     fn match
 
       // special-cases where we must inspect inner structure
-      case IndexFn(inner, idx) =>
-        rhsType(inner).flatMap {
-          case l: ListType => Some(l.elementType)
-          case o: OptionType if o.valueType.isInstanceOf[ListType] =>
-            Some(o.valueType.asInstanceOf[ListType].elementType)
-          case _ => None
-        }
+      case IndexFn(inner, i) =>
+        val innerT = rhsType(inner)
+        println(s"[rhsType IndexFn] inner=$inner => $innerT (index=$i)")
+        def elementOf(ft: FieldType): Option[FieldType] = ft match
+          case ListType(_, elem, _)                         => Some(elem)
+          case OptionType(_, ListType(_, elem, _), _)       => Some(elem)
+          case _                                            => None
+
+        Utility.rhsType(inner).map {
+          case v: ValType => v.valueType
+          case ft         => ft
+        }.flatMap(elementOf)
 
       case IdentityFn(real) =>
         println(s"[rhsType] unwrapping IdentityFn to $real")
         rhsType(real)
 
       case f: GetFn =>
-        val cleanPath =
-          f.path.replaceFirst("^_\\.", "")   // keep indices
+        // keep indices in `cleanPath` for logs, but use `normalized` for type-walks
+        val cleanPath  = f.path.replaceFirst("^_\\.", "")
+        val normalized = cleanPath.replaceAll("\\[\\d+\\]", "") // <- strip [N]
+        println(s"[DEBUG rhsType] cleanPath=$cleanPath, normalized=$normalized, f.recv=${f.recv}")
 
-        println(s"[DEBUG rhsType] cleanPath=$cleanPath, f.recv=${f.recv}")
-
-        // --- paths that explicitly use `this` ---
-        if cleanPath == "this" || cleanPath.startsWith("this.") then
+        // --- paths that explicitly use `this` or "_" ---
+        if normalized == "this" || normalized.startsWith("this.") || normalized == "_" || normalized.startsWith("_.") then
           val base: Option[FieldType] =
             ctx.receiver.map(_.fieldType)
-              .orElse(f.recv.flatMap(Utility.rhsType)) // fallback to attached recv if present
+              .orElse(f.recv.flatMap(rhsType))
 
-          if cleanPath == "this" then
-            base.flatMap {
-              case ListType(_, elem, _)                         => Some(elem)
-              case OptionType(_, ListType(_, elem, _), _)       => Some(elem)
-              case other                                        => Some(other)
+          base.flatMap { b =>
+            val target =
+              b match {
+                case ListType(_, elem, _) => elem // unwrap List[T] to T
+                case OptionType(_, inner, _) => inner // unwrap Option[T] to T
+                case other => other
+              }
+
+            if normalized == "this" || normalized == "_" then
+              Some(target)
+            else {
+              val segs = normalized.stripPrefix("this.").stripPrefix("_.").split("\\.").toList
+              walkType(target, segs)
             }
-          else {
-            val segs = cleanPath.stripPrefix("this.").split("\\.").toList
-            base.flatMap(descend(_, segs))
           }
 
-        // ---path without "this" but a receiver is attached -> resolve inside receiver ---
+        // --- path with attached receiver ---
         else if f.recv.nonEmpty then
-          // Prefer compile-time receiver from context (set by Filter/collection scope),
-          // otherwise try to infer from the attached recv fn.
-          val base0: Option[FieldType] =
-            ctx.receiver.map(_.fieldType)
-              .orElse(f.recv.flatMap(Utility.rhsType))
+          val base0 = f.recv.flatMap(rhsType) // <- drop ctx.receiver first
+          base0.flatMap { b =>
+            val segs = cleanPath.split("\\.").toList
+            walkType(b, segs)
+          }
 
-          // Unwrap Option/List so we can resolve a field like "qty" on element types.
-          def unwrapToElement(ft: FieldType): FieldType = ft match
-            case OptionType(_, inner, _)         => unwrapToElement(inner)
-            case ListType(_, elem, _)            => unwrapToElement(elem)
-            case other                           => other
-
-          base0
-            .map(unwrapToElement)
-            .flatMap { baseElemType =>
-              // allow dotted relative paths too (e.g., "addr.zip")
-              val segs = cleanPath.split("\\.").toList
-              descend(baseElemType, segs)
-            }
-
-        // --- no receiver involved: symbols-first, then schema walk ---
+        // --- fallback: try SCHEMA first, then symbols ---
         else {
-          val symHit: Option[FieldType] =
-            ctx.symbols.collectFirst { case scope if scope.contains(cleanPath) => scope(cleanPath) }
-
-          symHit match
-            case Some(vt: ValType) =>
-              println(s"[rhsType] symbol hit (ValType): $vt")
-              Some(vt)
-
-            case Some(ft) =>
-              println(s"[rhsType] symbol hit: $ft")
-              Some(ft)
+          // 1) Schema root resolution (top-level fields)
+          val firstSeg = normalized.takeWhile(_ != '.')
+          ctx.schema.fields.find(_.name == firstSeg) match
+            case Some(rootFt) =>
+              // exact top-level: "m" → return the field type directly
+              if normalized == firstSeg then
+                Some(rootFt)
+              else
+                // nested: "m.foo.bar" → walk starting from the root field
+                val segs = normalized.split("\\.").toList.tail
+                walkType(rootFt, segs)
 
             case None =>
-              println(s"[rhsType] no symbol hit, falling back to schema walk for $cleanPath")
-              val firstSeg = cleanPath.split("\\.").head
-              val (baseHead, _) = Path.segmentAndIndex(firstSeg)
-              if !ctx.schema.fields.exists(_.name == baseHead) then
-                None
-              else
-                rhsTypeFromSchemaPath(cleanPath, ctx.schema)
+              // 2) Fall back to symbol scopes (locals/vals), only if not in schema
+              ctx.symbols.collectFirst { case scope if scope.contains(normalized) => scope(normalized) } match
+                case Some(vt: ValType) => Some(vt)
+                case Some(ft)          => Some(ft)
+                case None              => None
         }
-
-      case f: ElseFn => rhsType(f.fallback)
-      case f: IfFn[?] => rhsType(f.thenFn)
-      case f: BlockFn[?] => rhsType(f.finalFn)
-      case c: ConcatFn => Some(ScalarType("", "java.lang.String"))
-      case MapGetFn(recv, _) => recv match
-        case GetFn(p, _, _) => Utility.mapGetValueType(p)
-        case _ => None
-
-      case CaseWhenFn(_, cases, default, _) =>
-        val ts: List[FieldType] =
-          (cases.iterator.flatMap { case (_, fn) => rhsType(fn) } ++ default.iterator.flatMap(rhsType)).toList
-        ts.distinct match
-          case single :: Nil => Some(single)
-          case _             => None
-
-      case b: BooleanConstantFn =>
-        Some(ScalarType("", "scala.Boolean"))
-
-      case c: ConstantFn[?] =>
-        // If ConstantFn already carries a FieldType, prefer it; otherwise derive from value
-        c match
-          case _ =>
-            c.out match
-              case _: Int     => Some(ScalarType("", "scala.Int"))
-              case _: Long    => Some(ScalarType("", "scala.Long"))
-              case _: Float   => Some(ScalarType("", "scala.Float"))
-              case _: Double  => Some(ScalarType("", "scala.Double"))
-              case _: Boolean => Some(ScalarType("", "scala.Boolean"))
-              case _: String  => Some(ScalarType("", "java.lang.String"))
-              case _          => Some(ScalarType("", "scala.Any"))
 
       case v: ValType =>
         println(s"[rhsType valType] $v")
         Some(v.valueType)
 
-      case AddFn(l, r)      => numericResultType(l, r, atLeastDouble = false)
-      case SubtractFn(l, r) => numericResultType(l, r, atLeastDouble = false)
-      case MultiplyFn(l, r) => numericResultType(l, r, atLeastDouble = false)
-      case DivideFn(l, r)   => numericResultType(l, r, atLeastDouble = true)
+      case f: Fn[?] =>
+        println(s"[rhsType Fn] entering: method=${f.methodName}, recv=${f.recv}, args=${f.args}")
+        CompileFnRegistry.lookup(f.methodName) match
+          case Some(cfn) =>
+            val recvType  = f.recv.flatMap(rhsType).getOrElse(ScalarType("", "scala.Any"))
+            println(s"[rhsType Fn]   resolved recvType=$recvType for ${f.methodName}")
 
-      // generic fallback: look up MethodSig
-      case other =>
-        // --- DEBUG instrumentation ---
-        val recvDebug =
-          other.recv
-            .flatMap(rhsType)
-            .map(ft => s"${ft.getClass.getSimpleName}(${ft.typeName})")
-            .getOrElse("None")
+            if !cfn.accepts(recvType)(using ctx) then
+              println(s"[rhsType Fn] receiver ${recvType.typeName} not accepted by ${cfn.name}")
+              return None // or Some(ScalarType("", "scala.Any")) depending on your convention
 
-        MethodSig.lookup(other.methodName).flatMap { sig =>
-          val recvType: FieldType =
-            other.recv.flatMap(rhsType).getOrElse(ScalarType("", "java.lang.String"))
+            // --- instrumentation: check accepts before args ---
+            val accepts = cfn.accepts(recvType)(using ctx)
+            println(s"[rhsType Fn]   cfn.accepts($recvType) = $accepts")
 
-          if sig.accepts(recvType) then Some(sig.result(recvType))
-          else None
-        }
+            if !accepts then
+              println(s"[rhsType Fn]   skipping args: receiver not accepted for ${f.methodName}")
+              None
+            else
+              val argTypeEs = f.args.map(a => rhsType(a))
+              println(s"[rhsType Fn]   arg type results = $argTypeEs")
+              val missingIx = argTypeEs.indexWhere(_.isEmpty)
+              if (missingIx >= 0) {
+                println(s"[rhsType Fn]   arg#$missingIx type unresolved for arg=${f.args(missingIx)}")
+                None
+              } else {
+                val argTypes = argTypeEs.flatten
+                val res = cfn.resultType(recvType, argTypes)(using ctx)
+                println(s"[rhsType Fn]   resultType=$res")
+                Some(res)
+              }
+
+          case None =>
+            println(s"[rhsType Fn]   NO CompileFn for method=${f.methodName} (node=${f.getClass.getSimpleName})")
+            f match
+              case BooleanConstantFn(_) =>
+                println(s"[rhsType Fn]   → BooleanConstantFn => Boolean")
+                Some(ScalarType("", "scala.Boolean"))
+              case ConstantFn(v) =>
+                val t = Utility.constantToFieldType(v)
+                println(s"[rhsType Fn]   → ConstantFn($v) => $t")
+                t
+              case _ =>
+                println(s"[rhsType Fn]   → no idea, returning None")
+                None
+
 
   /** For a list or map at `basePath`, return the FieldType of the element/value.
    * - For `List` or `Option[List]` → its element type.
@@ -295,61 +313,16 @@ object Utility:
   /** Determine FieldType for a dotted path that may contain [index] segments.
    * Handles items[1].num by drilling through the list element type.
    */
-  def rhsTypeFromSchemaPath(path: String, schema: ClassType): Option[FieldType] = {
-    println(s"[rhsTypeFromSchemaPath] start: path=$path  schema=${schema.name}")
-
-    def walk(ft: FieldType, segs: List[String]): Option[FieldType] = {
-      println(s"[rhsTypeFromSchemaPath] walk: ft=${ft.name}:${ft.getClass.getSimpleName}, segs=$segs")
-
-      segs match
-        case Nil =>
-          println(s"[rhsTypeFromSchemaPath] ✓ found final type: $ft")
-          Some(ft)
-
-        case rawHead :: tail =>
-          // Parse the current segment for an optional index (e.g. items[1])
-          val m = """^([^\[]+)(?:\[(\d+)\])?$""".r
-          val (name, idxOpt) = rawHead match
-            case m(base, idx) => (base, Option(idx))
-            case _            => (rawHead, None)
-          println(s"[rhsTypeFromSchemaPath]   head=$rawHead name=$name idx=$idxOpt")
-
-          ft match
-            case o: OptionType =>
-              println(s"[rhsTypeFromSchemaPath]   unwrapping OptionType")
-              // unwrap Option but **keep current segment list**
-              walk(o.valueType, segs)
-
-            case l: ListType if idxOpt.nonEmpty || (tail.nonEmpty && l.elementType.isInstanceOf[ClassType]) =>
-              // We either have an explicit index OR we're implicitly accessing a field inside each element.
-              println(s"[rhsTypeFromSchemaPath]   ListType unwrap -> elemType=${l.elementType}, remaining=$tail")
-              walk(l.elementType, tail)
-
-            case l: ListType =>
-              println(s"[rhsTypeFromSchemaPath]   ListType hit, idxOpt=$idxOpt, head=$name, tail=$tail")
-              idxOpt match
-                case Some(_) =>
-                  // Explicit index like items[1] -> unwrap and continue with the remaining tail
-                  walk(l.elementType, tail)
-                case None =>
-                  // Implicit element access (e.g., items.num):
-                  // unwrap but re-check the SAME head segment (`name`) against the element type
-                  // i.e., don't drop `head`; keep `segs` so `name` is matched on the element.
-                  walk(l.elementType, segs)
-
-            case c: ClassType =>
-              println(s"[rhsTypeFromSchemaPath]   ClassType fields=${c.fields.map(_.name)}")
-              c.fields.find(_.name == name)
-                .flatMap(f => walk(f, tail))
-
-            case other =>
-              println(s"[rhsTypeFromSchemaPath]   no match (type=${other.getClass.getSimpleName}), giving up")
-              None
+  private def rhsTypeFromSchemaPath(path: String, schema: ClassType): Option[FieldType] = {
+    val segs = path.split("\\.").toList
+    println(s"[rhsTypeFromSchemaPath] path=$path, schema=${schema.name}")
+    segs match {
+      case Nil => None
+      case head :: tail =>
+        schema.fields.find(_.name == head).flatMap { root =>
+          if (tail.isEmpty) Some(root) else walkType(root, tail)
+        }
     }
-
-    val segList = path.split("\\.").toList
-    println(s"[rhsTypeFromSchemaPath] segments = $segList")
-    walk(schema, segList)
   }
 
   def elementTypeOf(fn: Fn[Any])(using ctx: ExprContext): FieldType =
@@ -368,45 +341,6 @@ object Utility:
       case Some(OptionType(_, ListType(_, elem, _), _)) => elem
       case Some(ft) => ft
       case None => ScalarType("this", "scala.Any")
-
-  //  def elementTypeOf(fn: Fn[Any])(using ctx: ExprContext): FieldType = {
-//    val maybeType = rhsType(fn)
-//    println(s"[elementTypeOf] rhsType($fn) = $maybeType")
-//
-//    maybeType match {
-//      // scalar list, e.g. List[Int]
-//      case Some(ListType(_, e: ScalarType, _)) =>
-//        println(s"[elementTypeOf] matched ListType with element: $e")
-//        ScalarType("this", e.typeName)
-//
-//      // optional list, e.g. Option[List[Int]]
-//      case Some(OptionType(_, l: ListType, _)) =>
-//        l.elementType match {
-//          case s: ScalarType =>
-//            println(s"[elementTypeOf] matched Option[ListType] with element: $s")
-//            ScalarType("this", s.typeName)
-//          case other =>
-//            println(s"[elementTypeOf] Option[ListType] but element not scalar: $other")
-//            other
-//        }
-//
-//      // class list, e.g. List[Item]
-//      case Some(ListType(_, c: ClassType, _)) =>
-//        println(s"[elementTypeOf] matched ListType with ClassType element: $c")
-//        c
-//
-//      // option of class list
-//      case Some(OptionType(_, l: ListType, _)) if l.elementType.isInstanceOf[ClassType] =>
-//        val c = l.elementType.asInstanceOf[ClassType]
-//        println(s"[elementTypeOf] matched Option[ListType] with ClassType element: $c")
-//        c
-//
-//      // anything else falls back
-//      case other =>
-//        println(s"[elementTypeOf] no special match, defaulting to ScalarType(this, scala.Any)")
-//        ScalarType("this", "scala.Any")
-//    }
-//  }
 
   def addThisType(cleanPath: String, ctx: ExprContext): ExprContext = {
     val parts = Path.parsePath(cleanPath)

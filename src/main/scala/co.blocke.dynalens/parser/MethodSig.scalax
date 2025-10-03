@@ -222,7 +222,7 @@ object MethodSig:
         case _ => false
     def result(receiver: FieldType): FieldType = receiver
 
-  private object ReverseAscSig extends MethodSig:
+  private object ReverseSig extends MethodSig:
     def accepts(receiver: FieldType): Boolean =
       receiver match
         case ListType(_, _, _) => true
@@ -405,6 +405,6 @@ object MethodSig:
     M_FILTER -> FilterSig,
     M_DISTINCT -> DistinctSig,
     M_LIMIT -> LimitSig,
-    M_REVERSE -> ReverseAscSig,
+    M_REVERSE -> ReverseSig,
     M_CLEAN -> CleanSig
   )

@@ -1,16 +1,62 @@
 package co.blocke.dynalens
 package parser
 
-/** Minimal compile-time companion for every Fn.
- * Lets us attach compile-time checks without polluting runtime code.
- */
-trait CompileFn[R <: Fn[?]]:
-  /** Parse/build the runtime Fn.
-   * Use ctx for schema/type checks and return a DLCompileError if something is invalid.
-   */
-  def build(args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, R]
+import co.blocke.dynalens._
 
-trait CompileChecks:
+/** Base trait for every DSL compile function.
+ *
+ * Each function:
+ *   1. declares its DSL name and built-in status
+ *      2. specifies its valid arity and receiver acceptance rules
+ *      3. builds an AST node (Fn) and performs semantic validation
+ *      4. computes the resulting FieldType for downstream type checks
+ */
+trait CompileFn[R <: Fn[?]] {
+
+  /** DSL keyword or symbol (e.g. "filter", "<", "+", "abs") */
+  def name: String
+
+  /** True for core language built-ins (like +, <, ::) */
+  def builtIn: Boolean = false
+
+  /** True for functions that don't have a receiver, eg now() or uuid() */
+  def standalone: Boolean = false
+
+  /** Arity requirement. */
+  def minArgs: Int
+
+  def maxArgs: Int = minArgs // default: exact arity
+
+  /** Check if the receiver’s type is acceptable. */
+  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean
+
+  /** The resulting type after applying this function. */
+  def resultType(receiver: FieldType, args: List[FieldType])
+                (using ctx: ExprContext): FieldType
+
+  /** Phase 1: Build the AST node from argument Fns. */
+  def build(recv: Fn[Any], args: List[Fn[Any]])
+           (using ctx: ExprContext): Either[DLCompileError, R]
+
+  /** Phase 2: Validate semantics and argument types (may refine error messages). */
+  def validate(fn: Fn[?])(using ctx: ExprContext)
+  : Either[DLCompileError, Unit] = Right(())
+}
+
+
+object CompileFn:
+  def requireNumeric1(arg: Fn[Any], name: String, off: Int)
+                     (using ctx: ExprContext): Either[DLCompileError, Unit] =
+    Utility.rhsType(arg) match
+      case Some(t) if t.isNumeric =>
+        Right(())
+      case Some(t) =>
+        Left(DLCompileError(off,
+          s"$name requires a numeric operand, found ${t.typeName}"))
+      case None =>
+        Left(DLCompileError(off,
+          s"$name cannot determine operand type"))
+
   /** Ensure both args are numeric at compile time. */
   def requireNumeric2(args: List[Fn[Any]], name: String, off: Int)
                      (using ctx: ExprContext): Either[DLCompileError, Unit] =
@@ -63,151 +109,19 @@ trait CompileChecks:
         Left(DLCompileError(off,
           s"$name cannot determine operand type"))
 
+  inline def isNum(ft: FieldType): Boolean = ft match
+    case ScalarType(_, t) =>
+      t match
+        case "scala.Int" | "scala.Long" | "scala.Float" | "scala.Double" |
+             "scala.Short" | "scala.Byte" |
+             "java.lang.Integer" | "java.lang.Long" | "java.lang.Float" | "java.lang.Double" |
+             "java.math.BigDecimal" => true
+        case _ => false
+    case _ => false
 
-// ==== Arithmetic Fns ====
-
-object CAddFn extends CompileFn[AddFn], CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, AddFn] =
-    for
-      left  <- args.headOption.toRight(DLCompileError(0, "+ missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "+ missing right arg"))
-      _     <- requireNonOptional2(List(left, right), "+", 0)
-      _     <- requireNumeric2(List(left, right), "+", 0)
-    yield AddFn(left, right)
-
-object CSubtractFn extends CompileFn[SubtractFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, "- missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "- missing right arg"))
-      _ <- requireNonOptional2(args, "-", 0)
-      _ <- requireNumeric2(args, "-", 0)
-    yield SubtractFn(left, right)
-
-object CMultiplyFn extends CompileFn[MultiplyFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, "* missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "* missing right arg"))
-      _ <- requireNonOptional2(args, "*", 0)
-      _ <- requireNumeric2(args, "*", 0)
-    yield MultiplyFn(left, right)
-
-object CDivideFn extends CompileFn[DivideFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, "/ missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "/ missing right arg"))
-      _ <- requireNonOptional2(args, "/", 0)
-      _ <- requireNumeric2(args, "/", 0)
-    yield DivideFn(left, right)
-
-object CModuloFn extends CompileFn[ModuloFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, "% missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "% missing right arg"))
-      _ <- requireNonOptional2(args, "%", 0)
-      _ <- requireNumeric2(args, "%", 0)
-    yield ModuloFn(left, right)
-
-// ==== Comparison Fns ====
-
-object CGreaterThanFn extends CompileFn[GreaterThanFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, GreaterThanFn] =
-    for {
-      left  <- args.headOption.toRight(DLCompileError(0, "> missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "> missing right arg"))
-      _     <- requireNonOptional2(List(left, right), ">", 0)   // add this if you want no Option
-      _     <- requireNumeric2(List(left, right), ">", 0)
-    } yield GreaterThanFn(left, right)
-
-object CLessThanFn extends CompileFn[LessThanFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, "< missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "< missing right arg"))
-      _ <- requireNonOptional2(args, "<", 0)
-      _ <- requireNumeric2(args, "<", 0)
-    yield LessThanFn(left, right)
-
-object CGreaterThanOrEqualFn extends CompileFn[GreaterThanOrEqualFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, ">= missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, ">= missing right arg"))
-      _ <- requireNonOptional2(args, ">=", 0)
-      _ <- requireNumeric2(args, ">=", 0)
-    yield GreaterThanOrEqualFn(left, right)
-
-object CLessThanOrEqualFn extends CompileFn[LessThanOrEqualFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, "<= missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "<= missing right arg"))
-      _ <- requireNonOptional2(args, "<=", 0)
-      _ <- requireNumeric2(args, "<=", 0)
-    yield LessThanOrEqualFn(left, right)
-
-object CNegateFn extends CompileFn[NegateFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, NegateFn] =
-    for
-      arg <- args.headOption.toRight(DLCompileError(0, "unary - missing operand"))
-      tpe <- Utility.rhsType(arg).toRight(DLCompileError(0, "unary - cannot determine operand type"))
-      _ <- if tpe.isNumeric then Right(())
-      else Left(DLCompileError(0, s"unary - requires a numeric operand, found ${tpe.typeName}"))
-    yield NegateFn(arg)
-
-object CEqualFn extends CompileFn[EqualFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, "== missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "== missing right arg"))
-    yield EqualFn(left, right)
-
-object CNotEqualFn extends CompileFn[NotEqualFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, "!= missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "!= missing right arg"))
-    yield NotEqualFn(left, right)
-
-// ==== Boolean Fns ====
-
-object CAndFn extends CompileFn[AndFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, AndFn] =
-    for
-      left  <- args.headOption.toRight(DLCompileError(0, "&& missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "&& missing right arg"))
-      _     <- requireBoolean2(args, "&&", 0)
-      lBool <- left match
+  def expectBoolean1(arg: Fn[Any], name: String, off: Int)
+    : Either[DLCompileError, BooleanFn] =
+      arg match
         case b: BooleanFn => Right(b)
-        case _ => Left(DLCompileError(0, "&& left side is not a boolean expression"))
-      rBool <- right match
-        case b: BooleanFn => Right(b)
-        case _ => Left(DLCompileError(0, "&& right side is not a boolean expression"))
-    yield AndFn(lBool, rBool)
-
-object COrFn extends CompileFn[OrFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, OrFn] =
-    for
-      left  <- args.headOption.toRight(DLCompileError(0, "|| missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "|| missing right arg"))
-      _     <- requireBoolean2(args, "||", 0)
-      lBool <- left match
-        case b: BooleanFn => Right(b)
-        case _ => Left(DLCompileError(0, "|| left side is not a boolean expression"))
-      rBool <- right match
-        case b: BooleanFn => Right(b)
-        case _ => Left(DLCompileError(0, "|| right side is not a boolean expression"))
-    yield OrFn(lBool, rBool)
-
-object CNotFn extends CompileFn[NotFn] with CompileChecks:
-  def build(args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, NotFn] =
-    for
-      arg <- args.headOption.toRight(DLCompileError(0, "! missing arg"))
-      _   <- requireBoolean1(arg, "!", 0)
-      b   <- arg match
-        case bool: BooleanFn => Right(bool)
-        case _ => Left(DLCompileError(0, "! operand is not a boolean expression"))
-    yield NotFn(b)
+        case _ =>
+          Left(DLCompileError(off, s"$name requires a boolean operand"))

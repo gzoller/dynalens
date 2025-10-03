@@ -24,6 +24,7 @@ package parser
 
 import fastparse.*
 import NoWhitespace.*
+import fn.*
 
 //
 // Second level:
@@ -36,26 +37,44 @@ trait Level2 extends Level1 with ValueExprModule:
   // ---- Boolean ----
 
   /** Helpers to combine boolean results left-to-right, short-circuiting on the first Left */
-  private inline def andCombine(a: ParseBoolResult, b: ParseBoolResult): ParseBoolResult =
+  private inline def andCombine(a: ParseBoolResult, b: ParseBoolResult)(using ctx: ExprContext): ParseBoolResult =
     (a, b) match
-      case (Left(e), _)           => Left(e)
-      case (Right(_), Left(e))    => Left(e)
-      case (Right(a1), Right(b1)) => Right(AndFn(a1, b1))
+      case (Left(e), _) => Left(e)
+      case (Right(_), Left(e)) => Left(e)
+      case (Right(a1), Right(b1)) =>
+        CompileFnRegistry.lookup("&&") match
+          case Some(cfn) =>
+            cfn.build(NoOpFn, List(a1.asInstanceOf[Fn[Any]], b1.asInstanceOf[Fn[Any]])) match
+              case Left(err) => Left(err)
+              case Right(fn) =>
+                cfn.validate(fn)(using ctx).map(_ => fn.asInstanceOf[BooleanFn])
+          case None =>
+            Left(DLCompileError(0, "Missing CompileFn for &&"))
 
-  private inline def orCombine(a: ParseBoolResult, b: ParseBoolResult): ParseBoolResult =
+  private inline def orCombine(a: ParseBoolResult, b: ParseBoolResult)(using ctx: ExprContext): ParseBoolResult =
     (a, b) match
-      case (Left(e), _)           => Left(e)
-      case (Right(_), Left(e))    => Left(e)
-      case (Right(a1), Right(b1)) => Right(OrFn(a1, b1))
+      case (Left(e), _) => Left(e)
+      case (Right(_), Left(e)) => Left(e)
+      case (Right(a1), Right(b1)) =>
+        CompileFnRegistry.lookup("||") match
+          case Some(cfn) =>
+            cfn.build(NoOpFn, List(a1.asInstanceOf[Fn[Any]], b1.asInstanceOf[Fn[Any]])) match
+              case Left(err) => Left(err)
+              case Right(fn) =>
+                cfn.asInstanceOf[CompileFn[Fn[Any]]]
+                  .validate(fn.asInstanceOf[Fn[Any]])(using ctx)
+                  .map(_ => fn.asInstanceOf[BooleanFn])
+          case None =>
+            Left(DLCompileError(0, "Missing CompileFn for ||"))
 
-  /** atom := '(' booleanExpr ')' | comparisonExpr | booleanLiteral | toBoolean(arithmeticExpr) */
+  /** atom := '(' booleanExpr ')' | comparisonExpr | booleanLiteral | ToBoolean(arithmeticExpr) */
   private def booleanAtom[$: P](using ctx: ExprContext): P[ParseBoolResult] =
     P(
       WS0 ~ (
         "(" ~/ booleanExpr ~ ")" |
           comparisonExpr |
           booleanLiteral.map(b => Right(b): ParseBoolResult) |
-          arithmeticExpr.map(_.map(toBooleanFn.apply): ParseBoolResult)
+          arithmeticExpr.map(_.map(ToBooleanFn.apply): ParseBoolResult)
       )
     )
 
@@ -65,7 +84,13 @@ trait Level2 extends Level1 with ValueExprModule:
       case (first, rest) =>
         rest.foldLeft(first) {
           case (Left(e), _) => Left(e)
-          case (Right(acc), Right(rhs)) => COrFn.build(List(acc, rhs))
+          case (Right(acc), Right(rhs)) =>
+            // Phase 1: build
+            COrFn.build(NoOpFn, List(acc.asInstanceOf[Fn[Any]], rhs.asInstanceOf[Fn[Any]])) match
+              case Left(err) => Left(err)
+              case Right(fn) =>
+                // Phase 2: validate
+                COrFn.validate(fn)(using ctx).map(_ => fn)
           case (Right(_), Left(e)) => Left(e)
           case (Left(e), Right(_)) => Left(e)
         }
@@ -77,7 +102,13 @@ trait Level2 extends Level1 with ValueExprModule:
       case (first, rest) =>
         rest.foldLeft(first) {
           case (Left(e), _) => Left(e)
-          case (Right(acc), Right(rhs)) => CAndFn.build(List(acc, rhs))
+          case (Right(acc), Right(rhs)) =>
+            // Phase 1: build
+            CAndFn.build(NoOpFn, List(acc.asInstanceOf[Fn[Any]], rhs.asInstanceOf[Fn[Any]])) match
+              case Left(err) => Left(err)
+              case Right(fn) =>
+                // Phase 2: validate
+                CAndFn.validate(fn)(using ctx).map(_ => fn)
           case (Right(_), Left(e)) => Left(e)
           case (Left(e), Right(_)) => Left(e)
         }
@@ -85,10 +116,18 @@ trait Level2 extends Level1 with ValueExprModule:
 
   /** booleanNot := '!' booleanNot | atom */
   private def booleanNot[$: P](using ctx: ExprContext): P[ParseBoolResult] =
-    P(("!" ~ WS0 ~ booleanNot).map {
-      case Right(b) => CNotFn.build(List(b))
-      case Left(e) => Left(e)
-    } | booleanAtom)
+    P(
+      ("!" ~ WS0 ~ booleanNot).map {
+        case Right(b) =>
+          // Phase 1: build
+          CNotFn.build(NoOpFn, List(b.asInstanceOf[Fn[Any]])) match
+            case Left(err) => Left(err)
+            case Right(fn) =>
+              // Phase 2: validate
+              CNotFn.validate(fn)(using ctx).map(_ => fn)
+        case Left(e) => Left(e)
+      } | booleanAtom
+    )
 
   /** comparisonExpr := arithmeticExpr (==|!=|>=|<=|>|<) arithmeticExpr */
   private def comparisonExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
@@ -97,13 +136,17 @@ trait Level2 extends Level1 with ValueExprModule:
         for {
           left  <- lE
           right <- rE
-          _ = {
-            println(s"[comparisonExpr] building DeferredCompare op=$op")
-            println(s"[comparisonExpr] left=$left, left.recv=${left.recv}")
-            println(s"[comparisonExpr] right=$right, right.recv=${right.recv}")
-            println(s"[comparisonExpr] ctx.receiver=${ctx.receiver}")
-          }
-        } yield DeferredCompare(op, left, right)
+          cfn   <- Right(op match {
+            case ">"  => CGreaterThanFn
+            case ">=" => CGreaterThanOrEqualFn
+            case "<"  => CLessThanFn
+            case "<=" => CLessThanOrEqualFn
+            case "==" => CEqualFn
+            case "!=" => CNotEqualFn
+          })
+          built <- cfn.build(NoOpFn, List(left, right))
+          _     <- cfn.validate(built)(using ctx)
+        } yield built
       }
 
   // ---- Arithmetic ----
@@ -115,12 +158,21 @@ trait Level2 extends Level1 with ValueExprModule:
     P(Index ~ arithmeticFactor ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticFactor).rep).map {
       case (off, first, rest) =>
         rest.foldLeft(first) {
-          case (Left(e), _) => Left(e) // stop on earlier error
+          case (Left(e), _) => Left(e)
           case (Right(acc), (op, rightE)) =>
             rightE.flatMap { r =>
               op match
-                case "+" => CAddFn.build(List(acc, r))
-                case "-" => CSubtractFn.build(List(acc, r))
+                case "+" =>
+                  for
+                    built <- CPlusFn.build(NoOpFn, List(acc, r))
+                    _ <- CPlusFn.validate(built)(using ctx)
+                  yield built
+
+                case "-" =>
+                  for
+                    built <- CMinusFn.build(NoOpFn, List(acc, r))
+                    _ <- CMinusFn.validate(built)(using ctx)
+                  yield built
             }
         }
     }
@@ -133,9 +185,23 @@ trait Level2 extends Level1 with ValueExprModule:
           case (Right(acc), (op, rightE)) =>
             rightE.flatMap { r =>
               op match
-                case "*" => CMultiplyFn.build(List(acc, r))
-                case "/" => CDivideFn.build(List(acc, r))
-                case "%" => CModuloFn.build(List(acc, r))
+                case "*" =>
+                  for {
+                    built <- CMultiplyFn.build(NoOpFn, List(acc, r))
+                    _ <- CMultiplyFn.validate(built)(using ctx)
+                  } yield built
+
+                case "/" =>
+                  for {
+                    built <- CDivideFn.build(NoOpFn, List(acc, r))
+                    _ <- CDivideFn.validate(built)(using ctx)
+                  } yield built
+
+                case "%" =>
+                  for {
+                    built <- CModulusFn.build(NoOpFn, List(acc, r))
+                    _ <- CModulusFn.validate(built)(using ctx)
+                  } yield built
             }
         }
     }
@@ -154,26 +220,50 @@ trait Level2 extends Level1 with ValueExprModule:
   // support unary minus: -x
   private def unaryMinus[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P("-" ~/ WS0 ~ arithmeticAtom).flatMap {
-      case Right(fn)  => P(Pass(CNegateFn.build(List(fn))))
-      case Left(err)  => P(Pass(Left(err)))
+      case Right(fn) =>
+        (for {
+          built <- CMinusFn.build(NoOpFn, List(fn))   // CMinusFn handles unary
+          _     <- CMinusFn.validate(built)(using ctx)
+        } yield built) match
+          case ok @ Right(_) => P(Pass(ok))
+          case err @ Left(_) => P(Pass(err))
+
+      case Left(err) =>
+        P(Pass(Left(err)))
     } | arithmeticAtom
 
   // ---- String Concat ----
 
-  private def concatExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
+  private def consExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(
-      arithmeticExpr ~
-        (WS0 ~ "::" ~ WS0 ~ arithmeticExpr).rep ~
-        &(WS0 ~ !CharIn("=<>!")) // Lookahead to reject comparisons
+      arithmeticExpr ~ (WS0 ~ "::" ~ WS0 ~ arithmeticExpr).rep ~
+        &(WS0 ~ !CharIn("=<>!")) // prevent mis-parsing into comparison
     ).map { case (firstE, restE) =>
-      val all: List[ParseFnResult] = firstE :: restE.toList
-
-      val (errs, oks) = all.partitionMap(identity)
-      if errs.nonEmpty then Left(errs.head) // propagate first error
+      // if there was no "::", just return lhs unchanged
+      if restE.isEmpty then
+        firstE
       else {
-        val fns: List[Fn[Any]] = oks
-        if fns.lengthCompare(1) == 0 then Right(fns.head) // a :: nothing => just the first
-        else Right(ConcatFn(fns)) // a :: b :: c ...
+        val all = firstE :: restE.toList
+        val (errs, oks) = all.partitionMap(identity)
+
+        if errs.nonEmpty then Left(errs.head)
+        else {
+          val fns: List[Fn[Any]] = oks.map {
+            case GetFn("Nil", _, _) =>
+              ConstantFn[List[Any]](Nil).asInstanceOf[Fn[Any]]
+            case other => other
+          }
+
+          val consTree: Fn[Any] =
+            fns.reduceRight[Fn[Any]] { (h, t) =>
+              ConsFn(h, t).asInstanceOf[Fn[Any]]
+            }
+
+          for {
+            built <- CConsFn.build(NoOpFn, List(consTree))
+            _ <- CConsFn.validate(built)(using ctx)
+          } yield built.asInstanceOf[Fn[Any]]
+        }
       }
     }
 
@@ -183,11 +273,11 @@ trait Level2 extends Level1 with ValueExprModule:
     P(
       ifFn |
         blockFn |
-        concatExpr | // this already handles arithmetic and path+method stuff
+        consExpr | // this already handles arithmetic and path+method stuff
         booleanExpr
     ).flatMap {
       case Left(err)   => P(Pass.map(_ => Left(err)))
-      case Right(base) => maybeCaseTail(base)
+      case Right(base) => maybeCaseTail(base.asInstanceOf[Fn[Any]])
     }
 
   def statementSeq[$: P](using ctx0: ExprContext): P[List[ParseStmtResult]] = {
@@ -273,7 +363,7 @@ trait Level2 extends Level1 with ValueExprModule:
           mapStmt |
           updateStmt |
           blockStmt |
-          collectionStmt(booleanExpr)
+          collectionStmt
       ) ~ WS0
     )
 
@@ -282,6 +372,7 @@ trait Level2 extends Level1 with ValueExprModule:
     P("val" ~/ WS ~ identifier.! ~ WS0 ~ "=" ~ WS0 ~ Index ~ valueExpr).map {
       case (name, offset, Right(vfn)) =>
         val maybeFt = Utility.rhsType(vfn)
+
         maybeFt match
           case Some(ft: FieldType) =>
             // ensure ScalarType carries the val name, so later assignments match cleanly
@@ -315,38 +406,28 @@ trait Level2 extends Level1 with ValueExprModule:
     P(Index ~ pathBase ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
       CorrectPath.rewritePath(rawPath, pathOff) match {
         case Left(err) => P(Pass(Left(err)))
+
         case Right(cleanPath) =>
+          // --- enrich context for RHS (so `this` and nested fields are valid) ---
           val ctxForRhs = Utility.addThisType(cleanPath, ctx)
           given ExprContext = ctxForRhs
 
           P(valueExpr ~ WS0).map {
             case Left(e) => Left(e)
-            case Right(vfn) =>
-              val lhsSym = Utility.getPathType(cleanPath)
-              println(s"[updateStmt] lhsSym for $cleanPath = $lhsSym")
 
-              val effLhs = Utility.effectiveLhsForAssignment(lhsSym, cleanPath)
+            case Right(rhsFn) =>
+              // --- Infer effective LHS type ---
+              val lhsFieldType: FieldType = Utility.getPathType(cleanPath)
+              val effLhs: FieldType = Utility.effectiveLhsForAssignment(lhsFieldType, cleanPath)
 
-              Utility.rhsType(vfn) match {
+              // --- Infer RHS type using updated rhsType (unwraps ValType, delegates to CFns) ---
+              Utility.rhsType(rhsFn) match {
                 case None =>
-                  Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${vfn.getClass.getSimpleName}"))
+                  Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${rhsFn.getClass.getSimpleName}"))
 
-                case Some(rhsSym0) =>
-                  // --- unwrap ValType on RHS for assignment comparison ---
-                  val effRhs: FieldType = rhsSym0 match {
-                    case v: ValType =>
-                      println(s"[updateStmt] RHS is ValType -> unwrapping to ${v.valueType}")
-                      v.valueType
-                    case other => other
-                  }
-
-                  println(s"[updateStmt] effLhs = $effLhs")
-                  println(s"[updateStmt] effRhs = $effRhs")
-
-                  val ok = Utility.areTypesCompatible(effLhs, effRhs)
-                  println(s"[updateStmt] areTypesCompatible? $ok")
-
-                  if ok then Right((ctx, UpdateStmt(cleanPath, vfn)))
+                case Some(effRhs) =>
+                  if Utility.areTypesCompatible(effLhs, effRhs) then
+                    Right((ctx, UpdateStmt(cleanPath, rhsFn)))
                   else {
                     val lStr = Utility.prettyFieldType(effLhs)
                     val rStr = Utility.prettyFieldType(effRhs)
@@ -358,34 +439,38 @@ trait Level2 extends Level1 with ValueExprModule:
     }
 
   // Parses: ( <expr> , <expr> )
-  private def pairExpr[$: P](using ctx: ExprContext): P[Either[DLCompileError, (Fn[Any], Fn[Any])]] =
+  private def pairExpr[$: P](using ctx: ExprContext)
+  : P[Either[DLCompileError, (Fn[Any], Fn[Any])]] =
     P("(" ~/ WS0 ~ valueExpr ~ WS0 ~ "," ~ WS0 ~ valueExpr ~ WS0 ~ ")").map {
       case (Left(e1), _) => Left(e1)
       case (_, Left(e2)) => Left(e2)
-      case (Right(a: Fn[Any] @unchecked), Right(b: Fn[Any] @unchecked)) =>
-        Right((a, b))
+      case (Right(k: Fn[Any] @unchecked), Right(v: Fn[Any] @unchecked)) =>
+        Right((k, v))
     }
 
   // exactly like blockFn but forcing the final expression to be pairExpr
   private def blockPairFn[$: P](using ctx0: ExprContext): P[ParseFnResult] =
     P("{" ~/ WS0).flatMap { _ =>
       given ExprContext = ctx0
+
       statementSeq.flatMap { stmtsE =>
         val folded =
           stmtsE.foldLeft[Either[DLCompileError, (ExprContext, List[Statement])]](Right(ctx0 -> Nil)) {
-            case (Left(err), _)                               => Left(err)
-            case (_, Left(err))                               => Left(err)
-            case (Right((accCtx, ss)), Right((newCtx, stmt))) => Right(accCtx.merge(newCtx) -> (ss :+ stmt))
+            case (Left(err), _) => Left(err)
+            case (_, Left(err)) => Left(err)
+            case (Right((accCtx, ss)), Right((newCtx, stmt))) =>
+              Right(accCtx.merge(newCtx) -> (ss :+ stmt))
           }
 
         folded match {
           case Left(e) => P(Pass(Left(e)))
+
           case Right((finalCtx, ss)) =>
             given ExprContext = finalCtx
+
             P(pairExpr ~ WS0 ~ "}").map {
               case Left(err) => Left(err)
-              case Right(pair) =>
-                val (kFn, vFn) = pair // already (Fn[Any], Fn[Any]) from pairExpr
+              case Right((kFn, vFn)) =>
                 Right(BlockFn(ss, Tuple2Fn(kFn, vFn)): Fn[Any])
             }
         }
@@ -524,11 +609,18 @@ trait Level2 extends Level1 with ValueExprModule:
         "then" ~/ WS0 ~ valueExpr ~ WS0 ~
         "else" ~/ WS0 ~ valueExpr
     ).map { case (condRes, thenRes, elseRes) =>
-      for
-        c <- condRes
-        t <- thenRes
-        e <- elseRes
-      yield IfFn(c, t, e)
+      for {
+        cond <- condRes
+        thenB <- thenRes
+        elseB <- elseRes
+        _ = {
+          println(s"[ifFn] cond parsed as: $cond, rhsType=${Utility.rhsType(cond)}")
+          println(s"[ifFn] then branch: $thenB, rhsType=${Utility.rhsType(thenB)}")
+          println(s"[ifFn] else branch: $elseB, rhsType=${Utility.rhsType(elseB)}")
+        }
+        built <- CIfFn.build(NoOpFn, List(cond.asInstanceOf[Fn[Any]], thenB, elseB))
+        _     <- CIfFn.validate(built)(using ctx)
+      } yield built.asInstanceOf[Fn[Any]]
     }
 
   private def defaultCase[$: P](using ctx: ExprContext): P[Either[DLCompileError, (String, Fn[Any])]] =
