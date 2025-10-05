@@ -4,7 +4,7 @@ package parser
 
 object CompileFnRegistry:
   // materialized at compile time by the macro
-  private val functions: Map[String, CompileFn[?]] = RegistryMacro.gen
+  val functions: Map[String, CompileFn[?]] = RegistryMacro.gen
 
   // detect dupes at startup
   private val dupes = functions

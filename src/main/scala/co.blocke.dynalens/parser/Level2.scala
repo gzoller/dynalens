@@ -133,20 +133,23 @@ trait Level2 extends Level1 with ValueExprModule:
   private def comparisonExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
     P(arithmeticExpr ~ WS0 ~ StringIn("==", "!=", ">=", "<=", ">", "<").! ~ WS0 ~ arithmeticExpr)
       .map { case (lE, op, rE) =>
-        for {
+        // Pick the comparison function first
+        val cfn: CompileFn[?] = op match
+          case ">"  => CGreaterThanFn
+          case ">=" => CGreaterThanOrEqualFn
+          case "<"  => CLessThanFn
+          case "<=" => CLessThanOrEqualFn
+          case "==" => CEqualFn
+          case "!=" => CNotEqualFn
+
+        for
           left  <- lE
           right <- rE
-          cfn   <- Right(op match {
-            case ">"  => CGreaterThanFn
-            case ">=" => CGreaterThanOrEqualFn
-            case "<"  => CLessThanFn
-            case "<=" => CLessThanOrEqualFn
-            case "==" => CEqualFn
-            case "!=" => CNotEqualFn
-          })
-          built <- cfn.build(NoOpFn, List(left, right))
+          built <- cfn
+            .build(NoOpFn, List(left, right))
+            .asInstanceOf[Either[DLCompileError, BooleanFn]]
           _     <- cfn.validate(built)(using ctx)
-        } yield built
+        yield built
       }
 
   // ---- Arithmetic ----
@@ -260,9 +263,8 @@ trait Level2 extends Level1 with ValueExprModule:
             }
 
           for {
-            built <- CConsFn.build(NoOpFn, List(consTree))
-            _ <- CConsFn.validate(built)(using ctx)
-          } yield built.asInstanceOf[Fn[Any]]
+            _ <- CConsFn.validate(consTree)(using ctx)
+          } yield consTree
         }
       }
     }
@@ -420,8 +422,23 @@ trait Level2 extends Level1 with ValueExprModule:
               val lhsFieldType: FieldType = Utility.getPathType(cleanPath)
               val effLhs: FieldType = Utility.effectiveLhsForAssignment(lhsFieldType, cleanPath)
 
-              // --- Infer RHS type using updated rhsType (unwraps ValType, delegates to CFns) ---
-              Utility.rhsType(rhsFn) match {
+              // --- Infer RHS type ---
+              val effRhsOpt: Option[FieldType] = rhsFn match {
+                case GetFn(sym, _, _) =>
+                  // Check symbol table first
+                  ctx.symbols.collectFirst {
+                    case scope if scope.contains(sym) =>
+                      scope(sym) match {
+                        case vt: ValType   => vt.valueType
+                        case ft: FieldType => ft
+                      }
+                  }.orElse(Utility.rhsType(rhsFn)(using ctx))
+
+                case _ =>
+                  Utility.rhsType(rhsFn)(using ctx)
+              }
+
+              effRhsOpt match {
                 case None =>
                   Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${rhsFn.getClass.getSimpleName}"))
 

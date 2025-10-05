@@ -6,71 +6,59 @@ package fn
 // List Prepend (::)
 // ---------------------------------
 object CConsFn extends CompileFn[ConsFn]:
-  val name     = "::"
+  val name = "::"
+  val minArgs = 2
   override val builtIn = true
-  val minArgs  = 2
-  override val maxArgs = 2
 
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true // always accepted
+  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
 
-  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
+  override def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
     (args.headOption, args.lift(1)) match
-      // element + list case (unwrap Option[List] too)
-      case (Some(elem: ScalarType), Some(list: ListType))
-        if list.elementType.typeName == elem.typeName =>
-        list
+      // elem :: list
+      case (Some(elem: ScalarType), Some(list@ListType(_, e, container))) =>
+        val outElem =
+          if e.typeName == "scala.Any" then elem else e
+        ListType("", outElem, container)
 
-      case (Some(elem: ScalarType), Some(optList: OptionType))
-        if optList.valueType.isInstanceOf[ListType] &&
-          optList.valueType.asInstanceOf[ListType].elementType.typeName == elem.typeName =>
-        optList // preserve Option[List[T]]
-
-      // list + list case
-      case (Some(list1: ListType), Some(list2: ListType))
-        if list1.elementType == list2.elementType =>
-        list2
-
-      case (Some(optList1: OptionType), Some(optList2: OptionType))
-        if optList1.valueType == optList2.valueType =>
-        optList2 // preserve Option[List[T]]
+      // list1 :: list2  (concatenate) – prefer a concrete element if either side is Any
+      case (Some(list1@ListType(_, e1, c1)), Some(list2@ListType(_, e2, c2))) =>
+        val outElem =
+          if e1.typeName == "scala.Any" then e2
+          else if e2.typeName == "scala.Any" then e1
+          else e2
+        ListType("", outElem, c2)
 
       case _ =>
         ListType("", ScalarType("", "scala.Any"), "scala.collection.immutable.List")
-
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left  <- args.headOption.toRight(DLCompileError(0, ":: missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, ":: missing right arg"))
-    yield ConsFn(left, right)
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
       case c: ConsFn =>
         (Utility.rhsType(c.left), Utility.rhsType(c.right)) match
-          case (Some(elem: ScalarType), Some(list: ListType))
-            if list.elementType.typeName == elem.typeName =>
-            Right(())
+          // elem :: list
+          case (Some(elem: ScalarType), Some(ListType(_, e, _))) =>
+            if e.typeName == "scala.Any" || e.typeName == elem.typeName then Right(())
+            else Left(DLCompileError(0, s":: requires matching element/list types, found ${elem.typeName} and List[${e.typeName}]"))
 
-          case (Some(elem: ScalarType), Some(optList: OptionType))
-            if optList.valueType.isInstanceOf[ListType] &&
-              optList.valueType.asInstanceOf[ListType].elementType.typeName == elem.typeName =>
-            Right(())
-
-          case (Some(list1: ListType), Some(list2: ListType))
-            if list1.elementType == list2.elementType =>
-            Right(())
-
-          case (Some(optList1: OptionType), Some(optList2: OptionType))
-            if optList1.valueType == optList2.valueType =>
-            Right(())
+          // list :: list – allow Any as a wildcard on either side
+          case (Some(ListType(_, e1, _)), Some(ListType(_, e2, _))) =>
+            if e1.typeName == "scala.Any" || e2.typeName == "scala.Any" || e1.typeName == e2.typeName then Right(())
+            else Left(DLCompileError(0, s":: requires lists of same element type, found List[${e1.typeName}] and List[${e2.typeName}]"))
 
           case (Some(lt), Some(rt)) =>
-            Left(DLCompileError(0, s":: requires matching element/list types, found ${lt.typeName} and ${rt.typeName}"))
+            Left(DLCompileError(0, s":: requires element :: list or list :: list, found ${lt.typeName} and ${rt.typeName}"))
 
           case _ =>
             Left(DLCompileError(0, ":: cannot determine operand types"))
-
       case _ => Right(())
+
+  def build(
+             recv: Fn[Any],
+             args: List[Fn[Any]]
+           )(using ctx: ExprContext): Either[DLCompileError, ConsFn] =
+    (args.headOption, args.lift(1)) match
+      case (Some(left), Some(right)) => Right(ConsFn(left, right))
+      case _ => Left(DLCompileError(0, s"$name missing right arg"))
 
 
 object CKeysFn extends CompileFn[KeysFn]:
@@ -368,6 +356,10 @@ object CDistinctFn extends CompileFn[DistinctFn]:
       // one constant string arg → distinct by that field
       case List(ConstantFn(s: String)) => Right(DistinctFn(recv, Some(s)))
 
+      case List(GetFn(name, _, _)) =>
+        // interpret GetFn(x) as the *field name string* 'x'
+        Right(DistinctFn(recv, Some(name)))
+
       // wrong arity
       case _ => Left(DLCompileError(0, "distinct() takes zero or one constant string argument"))
 
@@ -448,31 +440,30 @@ object CCleanFn extends CompileFn[CleanFn]:
 
   def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean =
     receiver match
-      case ListType(_, OptionType(_, _, _), _) => true
-      case OptionType(_, ListType(_, OptionType(_, _, _), _), _) => true
-      case OptionType(_, _: ListType, _) => true // <- NEW: allow Option[List[_]]
+      case ListType(_, _, _) => true
+      case OptionType(_, _: ListType, _) => true
       case _ => false
 
   def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
     receiver match
       case ListType(_, OptionType(_, inner, _), coll) =>
-        ListType("", inner, coll)
+        ListType("", inner, coll) // remove inner Option
       case OptionType(_, ListType(_, OptionType(_, inner, _), coll), opt) =>
-        OptionType("", ListType("", inner, coll), opt)
-      case OptionType(_, list: ListType, opt) => // <- NEW
-        OptionType("", list, opt)
+        OptionType("", ListType("", inner, coll), opt) // unwrap both
       case _ =>
-        ScalarType("", "scala.Any")
+        receiver // if no Option nesting, no-op (type stays the same)
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
       case c: CleanFn =>
         c.recv.flatMap(Utility.rhsType) match
-          case Some(ListType(_, OptionType(_, _, _), _)) |
-               Some(OptionType(_, ListType(_, OptionType(_, _, _), _), _)) |
-               Some(OptionType(_, _: ListType, _)) => Right(()) // <- NEW
-          case Some(ft) => Left(DLCompileError(0, s"clean() requires a List[Option[_]] receiver, got ${ft.typeName}"))
-          case None => Left(DLCompileError(0, "clean() cannot determine receiver type"))
+          case Some(ListType(_, _, _)) |
+               Some(OptionType(_, _: ListType, _)) =>
+            Right(()) // valid — includes lists of Option or plain
+          case Some(ft) =>
+            Left(DLCompileError(0, s"clean() requires a List[_] receiver, got ${ft.typeName}"))
+          case None =>
+            Left(DLCompileError(0, "clean() cannot determine receiver type"))
       case _ => Right(())
 
   def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =

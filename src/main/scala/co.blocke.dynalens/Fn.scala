@@ -1393,6 +1393,7 @@ case class ValuesFn(receiver: Fn[Any]) extends Fn[List[Any]] with ReceiverUnaryF
     } yield result
 
 case class MapGetFn(receiver: Fn[Any], other: Fn[Any]) extends Fn[Any] with ReceiverBinaryFn[Any]:
+  override val methodName: String = "get"
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(
       kids(0).asInstanceOf[Fn[Any]],
@@ -1666,17 +1667,6 @@ case class PolyFn(parts: List[Fn[Any]]) extends NAryFn[Any]:
       case None =>
         ZIO.fail(DynaLensError("'this' not found in context"))
 
-
-case class IdentityFn(receiver: Fn[?]) extends Fn[Any] {
-  override def children: List[Fn[?]] = List(receiver)
-  override def rebuild(kids: List[Fn[?]]): Fn[Any] =
-    copy(kids.head)
-  override val recv: Option[Fn[?]] = Some(receiver)
-  override val isOptional: Boolean = receiver.isOptional
-
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
-    receiver.resolve(ctx)
-}
 
 case class LenFn(receiver: Fn[Any]) extends Fn[Int] {
   override def children: List[Fn[?]] = List(receiver)

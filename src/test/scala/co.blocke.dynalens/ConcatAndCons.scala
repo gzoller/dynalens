@@ -29,7 +29,6 @@ import zio.test.*
 object ConcatAndCons extends ZIOSpecDefault:
 
   def spec = suite("Concat and Cons Tests")(
-
     test("string + string concatenation") {
       val script =
         """

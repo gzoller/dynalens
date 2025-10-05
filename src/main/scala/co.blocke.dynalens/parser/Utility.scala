@@ -41,7 +41,18 @@ object Utility:
     case _: BigDecimal => Some(ScalarType("", "scala.math.BigDecimal"))
     case _: java.util.Date => Some(ScalarType("", "java.util.Date"))
     case _: java.util.UUID => Some(ScalarType("", "java.util.UUID"))
-    case _ => None // fallback: unknown type
+
+    // put list handling **before** the default case
+    case v: List[?] =>
+      val elemType =
+        v.headOption
+          .flatMap(constantToFieldType)
+          .getOrElse(ScalarType("", "scala.Any"))
+      Some(ListType("", elemType, "scala.collection.immutable.List"))
+
+    // must be last
+    case other =>
+      Some(ScalarType("", other.getClass.getName))
   }
 
   def normalizeNumeric(t: String): String = t match {
@@ -170,10 +181,6 @@ object Utility:
           case ft         => ft
         }.flatMap(elementOf)
 
-      case IdentityFn(real) =>
-        println(s"[rhsType] unwrapping IdentityFn to $real")
-        rhsType(real)
-
       case f: GetFn =>
         // keep indices in `cleanPath` for logs, but use `normalized` for type-walks
         val cleanPath  = f.path.replaceFirst("^_\\.", "")
@@ -240,14 +247,24 @@ object Utility:
         println(s"[rhsType Fn] entering: method=${f.methodName}, recv=${f.recv}, args=${f.args}")
         CompileFnRegistry.lookup(f.methodName) match
           case Some(cfn) =>
-            val recvType  = f.recv.flatMap(rhsType).getOrElse(ScalarType("", "scala.Any"))
+            val recvType = f.recv.flatMap(rhsType).getOrElse(ScalarType("", "scala.Any"))
             println(s"[rhsType Fn]   resolved recvType=$recvType for ${f.methodName}")
 
+            // --- Friendly DSL name for reporting ---
+            val methodName =
+              CompileFnRegistry.functions.collectFirst {
+                case (_, regCfn) if regCfn.getClass == cfn.getClass => regCfn.name
+              }.getOrElse(f.methodName)
+
+            // --- Early receiver rejection check ---
             if !cfn.accepts(recvType)(using ctx) then
               println(s"[rhsType Fn] receiver ${recvType.typeName} not accepted by ${cfn.name}")
-              return None // or Some(ScalarType("", "scala.Any")) depending on your convention
+              // Better human-facing error message
+              throw DynaLensError(
+                s"Method '$methodName' cannot be applied to receiver of type ${recvType.typeName}"
+              )
 
-            // --- instrumentation: check accepts before args ---
+            // --- Instrumentation: check accepts before args ---
             val accepts = cfn.accepts(recvType)(using ctx)
             println(s"[rhsType Fn]   cfn.accepts($recvType) = $accepts")
 
@@ -258,15 +275,14 @@ object Utility:
               val argTypeEs = f.args.map(a => rhsType(a))
               println(s"[rhsType Fn]   arg type results = $argTypeEs")
               val missingIx = argTypeEs.indexWhere(_.isEmpty)
-              if (missingIx >= 0) {
+              if missingIx >= 0 then
                 println(s"[rhsType Fn]   arg#$missingIx type unresolved for arg=${f.args(missingIx)}")
                 None
-              } else {
+              else
                 val argTypes = argTypeEs.flatten
                 val res = cfn.resultType(recvType, argTypes)(using ctx)
                 println(s"[rhsType Fn]   resultType=$res")
                 Some(res)
-              }
 
           case None =>
             println(s"[rhsType Fn]   NO CompileFn for method=${f.methodName} (node=${f.getClass.getSimpleName})")
@@ -327,16 +343,12 @@ object Utility:
 
   def elementTypeOf(fn: Fn[Any])(using ctx: ExprContext): FieldType =
     val r = rhsType(fn)
-    // Unwrap IdentityFn if present so we get to the true list source
-    val source: Fn[Any] = fn match
-      case id: IdentityFn.type if id.recv.nonEmpty => id.recv.get.asInstanceOf[Fn[Any]]
-      case _ => fn
 
     println(s"[elementTypeOf] incoming fn = $fn, fn.recv = ${fn.recv}")
     val rt = rhsType(fn)
     println(s"[elementTypeOf] rhsType($fn) = $rt")
 
-    rhsType(source) match
+    rhsType(fn) match
       case Some(ListType(_, elem, _)) => elem
       case Some(OptionType(_, ListType(_, elem, _), _)) => elem
       case Some(ft) => ft

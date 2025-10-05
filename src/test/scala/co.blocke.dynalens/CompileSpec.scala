@@ -212,7 +212,6 @@ object CompileSpec extends ZIOSpecDefault {
       val lens   = dynalens[Shipment]
       for {
         r <- Script.compile(script, lens).either
-        _ <- ZIO.succeed(println(">>> "+r))
       } yield assertTrue(r.left.exists(_.getMessage.contains("Error: Method 'filter' cannot be applied to receiver of type java.time.LocalDateTime")))
     },
 
@@ -238,7 +237,7 @@ object CompileSpec extends ZIOSpecDefault {
       for {
         r <- Script.compile(script, lens).either
       } yield assertTrue(
-        r.left.exists(_.getMessage.contains("Error: > cannot be applied to Option types (use .else() to handle missing values"))
+        r.left.exists(_.getMessage.contains("Error: > operands cannot be optional"))
       )
     },
 
@@ -251,7 +250,7 @@ object CompileSpec extends ZIOSpecDefault {
       for {
         r <- Script.compile(script, lens).either
       } yield assertTrue(
-        r.left.exists(_.getMessage.contains("Error: > requires numeric operands, found scala.Int and java.lang.String"))
+        r.left.exists(_.getMessage.contains(" Error: > operands must be numeric (found scala.Int, java.lang.String)"))
       )
     },
 
@@ -261,7 +260,7 @@ object CompileSpec extends ZIOSpecDefault {
       for {
         r <- Script.compile(script, lens).either
       } yield assertTrue(
-        r.left.exists(_.getMessage.contains("Error: > requires numeric operands, found scala.Int and scala.Boolean"))
+        r.left.exists(_.getMessage.contains("Error: > operands must be numeric (found scala.Int, scala.Boolean)"))
       )
     },
 
@@ -282,7 +281,7 @@ object CompileSpec extends ZIOSpecDefault {
       for {
         r <- Script.compile(script, lens).either
       } yield assertTrue(
-        r.left.exists(_.getMessage.contains("Error: < requires numeric operands, found scala.Int and scala.Boolean"))
+        r.left.exists(_.getMessage.contains("Error: < operands must be numeric (found scala.Int, scala.Boolean)"))
       )
     }
   )

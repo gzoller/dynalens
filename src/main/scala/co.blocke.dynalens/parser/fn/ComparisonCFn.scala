@@ -3,152 +3,111 @@ package parser
 package fn
 
 
-object CLessThanFn extends CompileFn[LessThanFn]:
-  val name     = "<"
-  override val builtIn = true
-  val minArgs  = 2
-  override val maxArgs = 2
+/**
+ * Base for all comparison-style Boolean CFns (<, >, <=, >=, ==, !=).
+ * Handles the two-phase validation pattern (defer until both operand types known),
+ * and standard numeric + non-optional enforcement.
+ */
+// Base
+abstract class ComparisonCFn[T <: OperandBinaryFn[?]](val op: String)
+  extends CompileFn[T]:
+
+  override val name: String = op
+  override val builtIn: Boolean = true
+  val minArgs: Int = 2
+  override val maxArgs: Int = 2
 
   def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
 
-  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
+  def resultType(receiver: FieldType, args: List[FieldType])
+                (using ctx: ExprContext): FieldType =
     ScalarType("", "scala.Boolean")
 
+  override def validate(fn: Fn[?])
+                       (using ctx: ExprContext): Either[DLCompileError, Unit] =
+    fn match
+      case cmp: OperandBinaryFn[?] =>
+        val lhsOpt = Utility.rhsType(cmp.left)
+        val rhsOpt = Utility.rhsType(cmp.right)
+        Validation.deferIfUnknown(lhsOpt, rhsOpt, validatePair)
+      case _ => Right(())
+
+  /** Shared comparison operand validation once both types are known */
+  protected def validatePair(lhs: FieldType, rhs: FieldType)
+                            (using ctx: ExprContext): Either[DLCompileError, Unit] =
+    for
+      // Disallow optional operands
+      _ <- (lhs, rhs) match
+        case (_: OptionType, _) | (_, _: OptionType) =>
+          Left(DLCompileError(0, s"$name operands cannot be optional"))
+        case _ => Right(())
+
+      // Require both numeric
+      _ <- if lhs.isNumeric && rhs.isNumeric then Right(())
+      else Left(DLCompileError(0,
+        s"$name operands must be numeric (found ${lhs.typeName}, ${rhs.typeName})"
+      ))
+    yield ()
+
+
+abstract class EqualityCFn[T <: OperandBinaryFn[?]](val opName: String)
+  extends ComparisonCFn[T](opName):
+
+  override protected def validatePair(lhs: FieldType, rhs: FieldType)
+                                     (using ctx: ExprContext): Either[DLCompileError, Unit] =
+    // Non-optional only; equality can compare any compatible scalar types
+    (lhs, rhs) match
+      case (_: OptionType, _) | (_, _: OptionType) =>
+        Left(DLCompileError(0, s"$opName operands cannot be optional"))
+      case _ =>
+        Right(())
+
+
+//--------------------------------------------------------------------------
+
+object CLessThanFn extends ComparisonCFn[LessThanFn]("<"):
   def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
     for
       left  <- args.headOption.toRight(DLCompileError(0, "< missing left arg"))
       right <- args.lift(1).toRight(DLCompileError(0, "< missing right arg"))
     yield LessThanFn(left, right)
 
-  override def validate(fn: Fn[?])(using ctx: ExprContext) =
-    fn match
-      case lt: LessThanFn =>
-        for
-          _ <- CompileFn.requireNonOptional2(List(lt.left, lt.right), "<", 0)
-          _ <- CompileFn.requireNumeric2(List(lt.left, lt.right), "<", 0)
-        yield ()
-      case _ => Right(())
 
-object CLessThanOrEqualFn extends CompileFn[LessThanOrEqualFn]:
-  val name     = "<="
-  override val builtIn = true
-  val minArgs  = 2
-
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
-  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext) =
-    ScalarType("", "scala.Boolean")
-
+object CLessThanOrEqualFn extends ComparisonCFn[LessThanOrEqualFn]("<="):
   def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
     for
-      left  <- args.headOption.toRight(DLCompileError(0, "<= missing left arg"))
+      left <- args.headOption.toRight(DLCompileError(0, "<= missing left arg"))
       right <- args.lift(1).toRight(DLCompileError(0, "<= missing right arg"))
     yield LessThanOrEqualFn(left, right)
 
-  override def validate(fn: Fn[?])(using ctx: ExprContext) =
-    fn match
-      case le: LessThanOrEqualFn =>
-        for
-          _ <- CompileFn.requireNonOptional2(List(le.left, le.right), "<=", 0)
-          _ <- CompileFn.requireNumeric2(List(le.left, le.right), "<=", 0)
-        yield ()
-      case _ => Right(())
 
-
-object CGreaterThanFn extends CompileFn[GreaterThanFn]:
-  val name = ">"
-  override val builtIn = true
-  val minArgs = 2
-
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
-
-  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext) =
-    ScalarType("", "scala.Boolean")
-
+object CGreaterThanFn extends ComparisonCFn[GreaterThanFn](">"):
   def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
     for
       left <- args.headOption.toRight(DLCompileError(0, "> missing left arg"))
       right <- args.lift(1).toRight(DLCompileError(0, "> missing right arg"))
     yield GreaterThanFn(left, right)
 
-  override def validate(fn: Fn[?])(using ctx: ExprContext) =
-    fn match
-      case gt: GreaterThanFn =>
-        for
-          _ <- CompileFn.requireNonOptional2(List(gt.left, gt.right), ">", 0)
-          _ <- CompileFn.requireNumeric2(List(gt.left, gt.right), ">", 0)
-        yield ()
-      case _ => Right(())
 
-
-object CGreaterThanOrEqualFn extends CompileFn[GreaterThanOrEqualFn]:
-  val name = ">="
-  override val builtIn = true
-  val minArgs = 2
-
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
-
-  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext) =
-    ScalarType("", "scala.Boolean")
-
+object CGreaterThanOrEqualFn extends ComparisonCFn[GreaterThanOrEqualFn](">="):
   def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
     for
       left <- args.headOption.toRight(DLCompileError(0, ">= missing left arg"))
       right <- args.lift(1).toRight(DLCompileError(0, ">= missing right arg"))
     yield GreaterThanOrEqualFn(left, right)
 
-  override def validate(fn: Fn[?])(using ctx: ExprContext) =
-    fn match
-      case ge: GreaterThanOrEqualFn =>
-        for
-          _ <- CompileFn.requireNonOptional2(List(ge.left, ge.right), ">=", 0)
-          _ <- CompileFn.requireNumeric2(List(ge.left, ge.right), ">=", 0)
-        yield ()
-      case _ => Right(())
 
-
-object CEqualFn extends CompileFn[EqualFn]:
-  val name     = "=="
-  override val builtIn = true
-  val minArgs  = 2
-
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
-  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext) =
-    ScalarType("", "scala.Boolean")
-
+object CEqualFn extends EqualityCFn[EqualFn]("=="):
   def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
     for
       left  <- args.headOption.toRight(DLCompileError(0, "== missing left arg"))
       right <- args.lift(1).toRight(DLCompileError(0, "== missing right arg"))
     yield EqualFn(left, right)
 
-  override def validate(fn: Fn[?])(using ctx: ExprContext) =
-    fn match
-      case eq: EqualFn =>
-        for _ <- CompileFn.requireNonOptional2(List(eq.left, eq.right), "==", 0)
-          yield ()
-      case _ => Right(())
 
-
-object CNotEqualFn extends CompileFn[NotEqualFn]:
-  val name = "!="
-  override val builtIn = true
-  val minArgs = 2
-
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
-
-  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext) =
-    ScalarType("", "scala.Boolean")
-
+object CNotEqualFn extends EqualityCFn[NotEqualFn]("!="):
   def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
     for
-      left <- args.headOption.toRight(DLCompileError(0, "!= missing left arg"))
+      left  <- args.headOption.toRight(DLCompileError(0, "!= missing left arg"))
       right <- args.lift(1).toRight(DLCompileError(0, "!= missing right arg"))
     yield NotEqualFn(left, right)
-
-  override def validate(fn: Fn[?])(using ctx: ExprContext) =
-    fn match
-      case ne: NotEqualFn =>
-        for _ <- CompileFn.requireNonOptional2(List(ne.left, ne.right), "!=", 0)
-          yield ()
-      case _ => Right(())
-
