@@ -27,8 +27,8 @@ object Path:
     def name: String
     def isOptional: Boolean
   }
-  case class Field(name: String, isOptional: Boolean = false) extends PathElement
-  case class IndexedField(name: String, index: Option[Int], isOptional: Boolean = false) extends PathElement
+  case class Field(name: String, override val isOptional: Boolean = false) extends PathElement
+  case class IndexedField(name: String, index: Option[Int], override val isOptional: Boolean = false) extends PathElement
 
   def parsePath(path: String): List[PathElement] =
     path.split("\\.").toList.map { segment =>

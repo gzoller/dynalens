@@ -67,13 +67,14 @@ trait Level1 extends Level0 {
   private def curlyBraces[$: P]: P[String] =
     P("{}").!
 
-  private def optSuffix[$: P]: P[String] =
-    P("?".!.?).map(_.getOrElse(""))
+  private def optQ[$: P]: P[String] =
+    P("?").!.?.map(_.getOrElse(""))
 
   private def segment[$: P]: P[String] =
-    P(identS ~ (wildcardIndex | indexPart | curlyBraces).?).map {
-      case (name, Some(suffix)) => s"$name$suffix"
-      case (name, None) => name
+    // ident + optional '?' + optional [index] / [] / {}
+    P(identS.! ~ optQ ~ (wildcardIndex | indexPart | curlyBraces).?).map {
+      case (name, q, Some(suffix)) => s"$name$q$suffix"
+      case (name, q, None) => s"$name$q"
     }
 
   def pathBase[$: P]: P[String] =
@@ -96,32 +97,81 @@ trait Level1 extends Level0 {
 
   // 3) Make pathFn propagate domain errors (no parser Fail here)
   private def pathFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(Index ~ segmentFn ~ (!("." ~ identU ~ "(") ~ "." ~ segmentFn).rep)
-      .flatMap { case (offset, head, tail) =>
-        val base: Fn[Any] = tail.foldLeft(head) {
-          // Case: chaining GetFns → just extend path string
-          case (g1: GetFn, g2: GetFn) =>
-            g2.copy(recv = Some(g1))
+    P(Index ~ segmentFn ~ (!("." ~ identU ~ "(") ~ "." ~ segmentFn).rep).flatMap {
+      case (offset, headRes, tailRes) =>
+        println(s"[pathFn] START head=$headRes tail=$tailRes")
 
-          // Case: base GetFn followed by index → wrap in IndexFn
-          case (g1: GetFn, idx: IndexFn) =>
-            IndexFn(g1, idx.index)
+        (headRes :: tailRes.toList).partitionMap(identity) match
+          case (err :: _, _) =>
+            println(s"[pathFn] ❌ parse error bubble: $err")
+            P(Pass(Left(err)))
 
-          // Case: IndexFn followed by another index → nest deeper
-          case (idx1: IndexFn, idx2: IndexFn) =>
-            IndexFn(idx1, idx2.index)
+          case (Nil, okFns) =>
+            val head = okFns.head
+            val tail = okFns.tail
 
-          // Case: IndexFn then a field access → make GetFn child of IndexFn
-          case (idx: IndexFn, g2: GetFn) =>
-            g2.copy(recv = Some(idx))
-        }
-        println(s"[pathFn] offset=$offset")
-        println(s"[pathFn] head=$head")
-        println(s"[pathFn] tail=$tail")
-        println(s"[pathFn] base=$base")
-        println(s"[pathFn] ctx.schema.fields=${ctx.schema.fields.map(_.name)}")
-        methodChain(base)
-      }
+            val base: Fn[Any] = tail.foldLeft(head) {
+              case (g1: GetFn, g2: GetFn)   => g2.copy(recv = Some(g1))
+              case (g1: GetFn, idx: IndexFn) => IndexFn(g1, idx.index)
+              case (idx1: IndexFn, idx2: IndexFn) => IndexFn(idx1, idx2.index)
+              case (idx: IndexFn, g2: GetFn) => g2.copy(recv = Some(idx))
+              case (acc, next)               => next.asInstanceOf[Fn[Any]]
+            }
+
+            println(s"[pathFn] offset=$offset")
+            println(s"[pathFn] base=$base  (${base.getClass.getSimpleName})")
+            println(s"[pathFn] ctx.receiver=${ctx.receiver}")
+            println(s"[pathFn] ctx.schema.fields=${ctx.schema.fields.map(_.name)}")
+
+            base match
+              case GetFn(path, _, _) =>
+                println(s"[pathFn] evaluating GetFn path='$path' receiver?=${ctx.receiver.isDefined}")
+                if path == "Nil" then
+                  println(s"[pathFn] ✅ recognized Nil keyword")
+                  P(Pass(Right(ConstantFn[List[Any]](Nil).asInstanceOf[Fn[Any]])))
+                else if path == "this" && ctx.receiver.isEmpty then
+                // inside pathFn, in the base match for GetFn(path, _, _)
+                  println(s"[pathFn] 🚨 illegal 'this' detected — receiver=${ctx.receiver}")
+                  P(Pass(Left(DLCompileError(offset,
+                    "Use of 'this' with no receiver in scope"))))
+                else {
+                  // 1️⃣ Compute an effective receiver type that unwraps List/Option[List]
+                  val effectiveRecvType =
+                    ctx.receiver
+                      .map(_.fieldType)
+                      .map(Utility.unwrapVal)
+                      .flatMap {
+                        case ListType(_, elem, _) => Some(elem)
+                        case OptionType(_, ListType(_, elem, _), _) => Some(elem)
+                        case other => Some(other)
+                      }
+
+                  println(s"[pathFn] effectiveRecvType=$effectiveRecvType")
+
+                  // 2️⃣ Build a combined field lookup
+                  val fieldExists =
+                    ctx.resolveSymbol(path).isDefined ||
+                      effectiveRecvType.exists {
+                        case ClassType(_, _, fields) => fields.exists(_.name == path)
+                        case _ => false
+                      } ||
+                      ctx.schema.fields.exists(_.name == path)
+
+                  // 3️⃣ Validate
+                  if !fieldExists && path != "this" then
+                    P(Pass(Left(DLCompileError(offset, s"Field '$path' does not exist"))))
+                  else
+                    methodChain(base)
+                }
+
+              case other =>
+                println(s"[pathFn] other node type = ${other.getClass.getSimpleName}")
+                methodChain(base)
+    }
+
+//    println(s"[pathFn] offset=$offset")
+//    println(s"[pathFn] base=$base")
+//    println(s"[pathFn] ctx.schema.fields=${ctx.schema.fields.map(_.name)}")
 
   // Parses: "." ident "(" args ")"
   // Parses: "." ident "(" args ")"
@@ -146,18 +196,64 @@ trait Level1 extends Level0 {
     }
 
   // parse optional fixed index and wrap.
-  private def maybeIndex[$: P](fn: Fn[Any]): P[Fn[Any]] =
+  private def maybeIndex[$: P](fn: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] =
     P("[" ~ CharsWhileIn("0-9").! ~ "]").?.map {
-      case Some(iStr) => IndexFn(fn, iStr.toInt)
-      case None       => fn
+      case Some(iStr) =>
+        println(s"[maybeIndex] attempting to index fn=$fn with index=$iStr")
+
+        val baseTypeOpt = Utility.rhsType(fn)
+        println(s"[maybeIndex] baseTypeOpt = $baseTypeOpt")
+
+        baseTypeOpt match
+          case Some(v: ValType) =>  // ✅ unwrap ValType before checking
+            v.valueType match
+              case lt if Utility.isIndexable(lt) =>
+                println(s"[maybeIndex] (ValType) field type ${lt.typeName} IS indexable → creating IndexFn")
+                Right(IndexFn(fn, iStr.toInt))
+              case lt =>
+                println(s"[maybeIndex] (ValType) field type ${lt.typeName} is NOT indexable → returning Left")
+                Left(DLCompileError(1, s"Cannot index into non-list field '${fn match
+                  case g: GetFn => g.path
+                  case _        => "value"
+                }' of type ${lt.typeName}"))
+
+          case Some(ft) if Utility.isIndexable(ft) =>
+            println(s"[maybeIndex] field type ${ft.typeName} IS indexable → creating IndexFn")
+            Right(IndexFn(fn, iStr.toInt))
+
+          case Some(ft) =>
+            println(s"[maybeIndex] field type ${ft.typeName} is NOT indexable → returning Left")
+            Left(DLCompileError(1, s"Cannot index into non-list field '${fn match
+              case g: GetFn => g.path
+              case _        => "value"
+            }' of type ${ft.typeName}"))
+
+          case None =>
+            println(s"[maybeIndex] field type UNKNOWN for $fn → returning Left")
+            Left(DLCompileError(1, "Cannot determine type for indexed receiver"))
+
+      case None =>
+        println(s"[maybeIndex] no index found for fn=$fn → returning Right(fn)")
+        Right(fn)
     }
 
-  private def segmentFn[$: P](using ctx: ExprContext): P[Fn[Any]] =
+  // Level1.scala (or wherever getPathType/pathFn lives)
+  private def effectiveReceiverType(using ctx: ExprContext): Option[FieldType] =
+    ctx.receiver
+      .map(_.fieldType)
+      .map(Utility.unwrapVal)
+      .flatMap {
+        case ListType(_, elem, _) => Some(elem) // <- use element
+        case OptionType(_, ListType(_, elem, _), _) => Some(elem) // <- use element
+        case other => Some(other) // class/scalar/option(non-list)
+      }
+
+  private def segmentFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(identU.!).flatMap { name =>
       val isOpt = Utility.isPathOptional(name, ctx)
-      // attach current collection parent (if any) as the receiver
       val recv: Option[Fn[Any]] = ctx.receiver.flatMap(_.parentFn)
-      maybeIndex(GetFn(name, isOptional = isOpt, recv))
+      val gf = GetFn(name, isOptional = isOpt, recv)
+      maybeIndex(gf) // <- now returns ParseFnResult
     }
 
   def methodChain[$: P](base: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] = {
@@ -253,8 +349,12 @@ trait Level1 extends Level0 {
 
     // === 3) Optional trailing index (unchanged) ===
     loop(base).flatMap {
-      case Left(err) => P(Pass(Left(err)))
-      case Right(fn) => maybeIndex(fn).map(Right(_))
+      case Left(err)  => P(Pass(Left(err)))
+      case Right(fn0) =>
+        maybeIndex(fn0).map {
+          case Left(e)   => Left(e)
+          case Right(fn) => Right(fn)
+        }
     }
   }
 

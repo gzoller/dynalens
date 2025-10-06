@@ -1690,7 +1690,7 @@ case class LenFn(receiver: Fn[Any]) extends Fn[Int] {
     }
 }
 
-case class MapFwdFn(mapName: String, receiver: Fn[Any]) extends Fn[Any] with ReceiverUnaryFn[Any] {
+case class MapToFn(mapName: String, receiver: Fn[Any]) extends Fn[Any] with ReceiverUnaryFn[Any] {
   override val isOptional: Boolean = receiver.isOptional
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(receiver = kids.head.asInstanceOf[Fn[Any]])
@@ -1700,7 +1700,7 @@ case class MapFwdFn(mapName: String, receiver: Fn[Any]) extends Fn[Any] with Rec
       res <- ZIO.serviceWithZIO[_BiMapRegistry] { registry =>
         registry.get(mapName) match {
           case Some(bimap) =>
-            asSeq(raw, s"mapFwd($mapName)") match {
+            asSeq(raw, s"mapTo($mapName)") match {
               case Right(seq) =>
                 ZIO.foreach(seq) { item =>
                   bimap.getForward(item.toString) match
@@ -1719,7 +1719,7 @@ case class MapFwdFn(mapName: String, receiver: Fn[Any]) extends Fn[Any] with Rec
     } yield res
 }
 
-case class MapRevFn(mapName: String, receiver: Fn[Any]) extends Fn[Any] with ReceiverUnaryFn[Any] {
+case class MapFromFn(mapName: String, receiver: Fn[Any]) extends Fn[Any] with ReceiverUnaryFn[Any] {
   override val isOptional: Boolean = receiver.isOptional
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(receiver = kids.head.asInstanceOf[Fn[Any]])
@@ -1729,7 +1729,7 @@ case class MapRevFn(mapName: String, receiver: Fn[Any]) extends Fn[Any] with Rec
       res <- ZIO.serviceWithZIO[_BiMapRegistry] { registry =>
         registry.get(mapName) match {
           case Some(bimap) =>
-            asSeq(raw, s"mapRev($mapName)") match {
+            asSeq(raw, s"mapFrom($mapName)") match {
               case Right(seq) =>
                 ZIO.foreach(seq) { item =>
                   bimap.getReverse(item.toString) match

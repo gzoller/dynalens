@@ -318,7 +318,11 @@ case class DynaLens[T](
                   case Some(i) =>
                     list.lift(i) match {
                       case None =>
-                        ZIO.fail(DynaLensError(s"Index $i out of bounds for field '$f'"))
+                        raw match
+                          case None => // None -- no-op
+                            ZIO.succeed(current)
+                          case _ =>  // Some(...) -> out of bounds
+                            ZIO.fail(DynaLensError(s"Index $i out of bounds for field '$f'"))
 
                       case Some(elem) =>
                         currentLens._registry.get(f) match {

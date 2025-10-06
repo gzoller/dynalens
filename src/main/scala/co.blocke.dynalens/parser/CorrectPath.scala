@@ -22,17 +22,26 @@
 package co.blocke.dynalens
 package parser
 
+
 object CorrectPath:
 
-  private def parseSeg(name: String): Either[String, Seg] = name match
-    case segRx(base, idxStr, optStr) =>
-      val idx =
-        if idxStr eq null then None
-        else if idxStr.isEmpty then Some(Wildcard)
-        else Some(Fixed(idxStr.toInt))
-      Right(Seg(base, idx, opt = (optStr ne null)))
-    case _ =>
-      Left(s"Invalid path segment '$name'")
+  private val segRx = "^([A-Za-z0-9_]+)(?:\\[(\\d*)\\])?(\\?)?$".r
+
+  private def parseSeg(segStr: String): Either[String, Seg] =
+    segRx.findFirstMatchIn(segStr) match
+      case Some(m) =>
+        val base = m.group(1)
+        val idxOpt =
+          Option(m.group(2)).filter(_.nonEmpty).map { raw =>
+            if (raw == "") Wildcard else Fixed(raw.toInt)
+          }
+        val hasQ = Option(m.group(3)).isDefined
+        if hasQ then
+          Left(s"Optional path syntax (?) is not supported: '$segStr'")
+        else
+          Right(Seg(base, idxOpt, opt = false))
+      case None =>
+        Left(s"Invalid path segment '$segStr'")
 
   private def render(base: String, idx: Option[Idx], opt: Boolean): String =
     val idxTxt = idx match
@@ -65,6 +74,10 @@ object CorrectPath:
           parseSeg(segStr) match
             case Left(msg) => Left(DLCompileError(offset, msg))
             case Right(seg) =>
+              val segToken = seg.idx match
+                case Some(Fixed(i)) => s"${seg.base}[$i]"
+                case _ => seg.base
+
               // --- 1) Leading `this` ---
               if isFirst && seg.base == "this" then
                 ctx.receiver match
@@ -120,7 +133,7 @@ object CorrectPath:
                   case Some(_) =>
                     return
                       if tail.nonEmpty then Left(DLCompileError(offset, s"Symbol '${seg.base}' is not a path; cannot access '${tail.head}'"))
-                      else Right(acc :+ seg.base)
+                      else Right(acc :+ segToken)
                   case None => ()
 
               // --- 3) Walk schema fields ---
@@ -130,11 +143,28 @@ object CorrectPath:
                     case c: ClassType =>
                       loop(c, tail, acc :+ seg.base, isFirst = false, inReceiver = inReceiver, offset)
                     case o: OptionType if o.valueType.isInstanceOf[ClassType] =>
+                      println(s"[CorrectPath] Matched OptionType->ClassType: ${o.valueType} tail=$tail acc=$acc")
                       loop(o.valueType.asInstanceOf[ClassType], tail, acc :+ seg.base, isFirst = false, inReceiver = inReceiver, offset)
                     case l: ListType if l.elementType.isInstanceOf[ClassType] =>
                       loop(l.elementType.asInstanceOf[ClassType], tail, acc :+ seg.base, isFirst = false, inReceiver = inReceiver, offset)
+                    case o: OptionType if o.valueType.isInstanceOf[ListType] =>
+                      val innerList = o.valueType.asInstanceOf[ListType]
+                      println("[Here in OptionType of CorrectPath] " + o + " inner: " + innerList)
+
+                      innerList.elementType match
+                        case c: ClassType =>
+                          // Option[List[ClassType]] – continue descending
+                          loop(c, tail, acc :+ segToken, isFirst = false, inReceiver = inReceiver, offset)
+
+                        case _: ScalarType =>
+                          // Option[List[Scalar]] – allow indexing, but nothing beyond
+                          if tail.isEmpty then Right(acc :+ segToken)
+                          else Left(DLCompileError(offset, s"Cannot navigate inside list of scalar field '${seg.base}'"))
+
+                        case _ =>
+                          Left(DLCompileError(offset, s"Unsupported Option[List] element type for field '${seg.base}'"))
                     case _ =>
-                      if tail.isEmpty then Right(acc :+ seg.base)
+                      if tail.isEmpty then Right(acc :+ segToken)
                       else Left(DLCompileError(offset, s"Field '${seg.base}' is not a nested object"))
                 case None =>
                   if isFirst then
@@ -142,7 +172,7 @@ object CorrectPath:
                       case Some(_) =>
                         if tail.nonEmpty then
                           Left(DLCompileError(offset, s"Symbol '${seg.base}' is not a path; cannot access '${tail.head}'"))
-                        else Right(acc :+ seg.base)
+                        else Right(acc :+ segToken)
                       case None =>
                         Left(DLCompileError(offset,
                           s"Field '${seg.base}' does not exist in schema, receiver, or symbol scope"))

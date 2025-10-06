@@ -160,53 +160,84 @@ trait Level2 extends Level1 with ValueExprModule:
   private def arithmeticTerm[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(Index ~ arithmeticFactor ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticFactor).rep).map {
       case (off, first, rest) =>
-        rest.foldLeft(first) {
-          case (Left(e), _) => Left(e)
-          case (Right(acc), (op, rightE)) =>
-            rightE.flatMap { r =>
-              op match
-                case "+" =>
-                  for
-                    built <- CPlusFn.build(NoOpFn, List(acc, r))
-                    _ <- CPlusFn.validate(built)(using ctx)
-                  yield built
+        def containsIllegalThis(fn: Fn[?]): Boolean =
+          fn match
+            case GetFn("this", _, _) if ctx.receiver.isEmpty => true
+            case _ => false
 
-                case "-" =>
-                  for
-                    built <- CMinusFn.build(NoOpFn, List(acc, r))
-                    _ <- CMinusFn.validate(built)(using ctx)
-                  yield built
+        // Check top-level illegal use immediately
+        first match
+          case Right(fn) if containsIllegalThis(fn) =>
+            Left(DLCompileError(off, "Use of 'this' with no receiver in scope"))
+          case _ =>
+            rest.foldLeft(first) {
+              case (Left(e), _) => Left(e)
+              case (Right(acc), (op, rightE)) =>
+                rightE.flatMap { r =>
+                  // Catch illegal RHS
+                  if containsIllegalThis(r) then
+                    Left(DLCompileError(off, "Use of 'this' with no receiver in scope"))
+                  else
+                    op match
+                      case "+" =>
+                        for
+                          built <- CPlusFn.build(NoOpFn, List(acc, r))
+                          _ <- CPlusFn.validate(built)(using ctx)
+                        yield built
+
+                      case "-" =>
+                        for
+                          built <- CMinusFn.build(NoOpFn, List(acc, r))
+                          _ <- CMinusFn.validate(built)(using ctx)
+                        yield built
+                }
             }
-        }
     }
 
   private def arithmeticFactor[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(Index ~ unaryMinus ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ unaryMinus).rep).map {
-      case (off, first, rest) =>
-        rest.foldLeft(first) {
-          case (Left(e), _) => Left(e)
-          case (Right(acc), (op, rightE)) =>
-            rightE.flatMap { r =>
-              op match
-                case "*" =>
-                  for {
-                    built <- CMultiplyFn.build(NoOpFn, List(acc, r))
-                    _ <- CMultiplyFn.validate(built)(using ctx)
-                  } yield built
+    P(arithmeticAtom ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ arithmeticAtom).rep).map {
+      case (first, rest) =>
+        def containsIllegalThis(fn: Fn[?]): Boolean =
+          fn match
+            case GetFn("this", _, _) if ctx.receiver.isEmpty => true
+            case _ => false
 
-                case "/" =>
-                  for {
-                    built <- CDivideFn.build(NoOpFn, List(acc, r))
-                    _ <- CDivideFn.validate(built)(using ctx)
-                  } yield built
+        first match
+          case Right(fn) =>
+            if containsIllegalThis(fn) then
+              println(s"[arithFactor] ❌ Illegal top-level 'this' detected")
+              Left(DLCompileError(0, "Use of 'this' with no receiver in scope"))
+            else
+              rest.foldLeft(Right(fn): ParseFnResult) {
+                case (Left(e), _) => Left(e)
+                case (Right(acc), (op, rightE)) =>
+                  rightE.flatMap { r =>
+                    if containsIllegalThis(r) then
+                      println(s"[arithFactor] ❌ Illegal RHS 'this' detected")
+                      Left(DLCompileError(0, "Use of 'this' with no receiver in scope"))
+                    else
+                      op match
+                        case "*" =>
+                          for
+                            built <- CMultiplyFn.build(NoOpFn, List(acc, r))
+                            _ <- CMultiplyFn.validate(built)(using ctx)
+                          yield built
+                        case "/" =>
+                          for
+                            built <- CDivideFn.build(NoOpFn, List(acc, r))
+                            _ <- CDivideFn.validate(built)(using ctx)
+                          yield built
+                        case "%" =>
+                          for
+                            built <- CModulusFn.build(NoOpFn, List(acc, r))
+                            _ <- CModulusFn.validate(built)(using ctx)
+                          yield built
+                  }
+              }
 
-                case "%" =>
-                  for {
-                    built <- CModulusFn.build(NoOpFn, List(acc, r))
-                    _ <- CModulusFn.validate(built)(using ctx)
-                  } yield built
-            }
-        }
+          case Left(err) =>
+            println(s"[arithFactor] ❌ Early error: $err")
+            Left(err)
     }
 
   private def arithmeticAtom[$: P](using ctx: ExprContext): P[ParseFnResult] =
@@ -403,52 +434,117 @@ trait Level2 extends Level1 with ValueExprModule:
         Left(err)
     }
 
+  /** Ensure that any `[i]` on the LHS is applied to a list or Option[List[_]]. */
+  private def enforceIndexedBaseIsCollection(path: String, off: Int)
+                                            (using ctx: ExprContext): Either[DLCompileError, Unit] = {
+    import co.blocke.dynalens.Path
+
+    val parts = Path.parsePath(path)
+
+    // Find the *first* indexed segment and reconstruct its base path prefix
+    val idxPos = parts.indexWhere {
+      case _: Path.IndexedField => true
+      case _ => false
+    }
+
+    if (idxPos < 0) Right(()) // no indexing present
+    else {
+      val baseParts = parts.take(idxPos) :+ parts(idxPos) // include the indexed field’s name
+      val baseName = baseParts.last match {
+        case Path.IndexedField(n, _, _) => n
+        case Path.Field(n, _)           => n
+      }
+
+      // Build the dotted prefix up to (and including) the indexed field name
+      val basePath = baseParts.map {
+        case Path.Field(n, _)           => n
+        case Path.IndexedField(n, _, _) => n
+      }.mkString(".")
+
+      val rawType = Utility.getPathType(basePath)
+      println(s"[enforceIndexedBaseIsCollection] basePath=$basePath rawType=$rawType (${rawType.getClass.getName})")
+      val effectiveType = rawType match
+        case o: OptionType if o.valueType.isInstanceOf[ListType] =>
+          o.valueType.asInstanceOf[ListType]
+        case other => other
+
+      println(s"[enforceIndexedBaseIsCollection] basePath=$basePath  rawType=$rawType  effective=$effectiveType")
+
+      effectiveType match {
+        case _: ListType => Right(())
+        case _           => Left(DLCompileError(off, s"Cannot index into non-list field '$baseName'"))
+      }
+    }
+  }
+
   // '=': always assignment
   private def updateStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(Index ~ pathBase ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
+      println(s"[updateStmt] starting parse, raw path: $rawPath, rewritten: ${CorrectPath.rewritePath(rawPath, pathOff)}")
+
       CorrectPath.rewritePath(rawPath, pathOff) match {
         case Left(err) => P(Pass(Left(err)))
-
         case Right(cleanPath) =>
-          // --- enrich context for RHS (so `this` and nested fields are valid) ---
-          val ctxForRhs = Utility.addThisType(cleanPath, ctx)
-          given ExprContext = ctxForRhs
+          enforceIndexedBaseIsCollection(cleanPath, pathOff) match {
+            case Left(e) => P(Pass(Left(e)))
+            case Right(_) =>
 
-          P(valueExpr ~ WS0).map {
-            case Left(e) => Left(e)
+              // --- enrich context for RHS (so `this` and nested fields are valid) ---
+              val ctxForRhs = Utility.addThisType(cleanPath, ctx)
 
-            case Right(rhsFn) =>
-              // --- Infer effective LHS type ---
-              val lhsFieldType: FieldType = Utility.getPathType(cleanPath)
-              val effLhs: FieldType = Utility.effectiveLhsForAssignment(lhsFieldType, cleanPath)
+              given ExprContext = ctxForRhs
 
-              // --- Infer RHS type ---
-              val effRhsOpt: Option[FieldType] = rhsFn match {
-                case GetFn(sym, _, _) =>
-                  // Check symbol table first
-                  ctx.symbols.collectFirst {
-                    case scope if scope.contains(sym) =>
-                      scope(sym) match {
-                        case vt: ValType   => vt.valueType
-                        case ft: FieldType => ft
-                      }
-                  }.orElse(Utility.rhsType(rhsFn)(using ctx))
+              P(valueExpr ~ WS0).map {
+                case Left(e) => Left(e)
 
-                case _ =>
-                  Utility.rhsType(rhsFn)(using ctx)
-              }
-
-              effRhsOpt match {
-                case None =>
-                  Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${rhsFn.getClass.getSimpleName}"))
-
-                case Some(effRhs) =>
-                  if Utility.areTypesCompatible(effLhs, effRhs) then
-                    Right((ctx, UpdateStmt(cleanPath, rhsFn)))
+                case Right(rhsFn) =>
+                  // --- Check for illegal use of 'this' outside collection/map context ---
+                  if Utility.containsThis(rhsFn) && ctx.receiver.isEmpty then
+                    Left(DLCompileError(rhsOff, "Use of 'this' with no receiver in scope"))
                   else {
-                    val lStr = Utility.prettyFieldType(effLhs)
-                    val rStr = Utility.prettyFieldType(effRhs)
-                    Left(DLCompileError(rhsOff, s"Type mismatch: cannot assign $rStr to $lStr at $cleanPath"))
+                    // --- Infer effective LHS type ---
+                    val lhsFieldType: FieldType = Utility.getPathType(cleanPath)
+                    val effLhs: FieldType = Utility.effectiveLhsForAssignment(lhsFieldType, cleanPath)
+
+                    // --- Infer RHS type ---
+                    val effRhsOpt: Option[FieldType] = rhsFn match {
+                      case GetFn(sym, _, _) =>
+                        ctx.symbols.collectFirst {
+                          case scope if scope.contains(sym) =>
+                            scope(sym) match {
+                              case vt: ValType => vt.valueType
+                              case ft: FieldType => ft
+                            }
+                        }.orElse(Utility.rhsType(rhsFn)(using ctx))
+
+                      case _ =>
+                        Utility.rhsType(rhsFn)(using ctx)
+                    }
+
+                    effRhsOpt match {
+                      case None =>
+                        Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${rhsFn.getClass.getSimpleName}"))
+
+                      case Some(effRhs) =>
+                        if Utility.areTypesCompatible(effLhs, effRhs) then
+                          Right((ctx, UpdateStmt(cleanPath, rhsFn)))
+                        else {
+                          val lhsMsg = Utility.prettyFieldType(lhsFieldType) // declared type for message
+                          val rhsMsg = Utility.prettyFieldType(effRhs)
+
+                            // If you want a trailing '?' when LHS is optional:
+                          val pathForMsg =
+                            lhsFieldType match
+                              case _: OptionType => s"$cleanPath"
+                              case _             => cleanPath
+                          println(s"[updateStmt] LHS raw type: ${Utility.getPathType(cleanPath)}")
+                          println(s"[updateStmt] LHS effective type: $effLhs")
+                          Left(DLCompileError(
+                            rhsOff,
+                            s"Type mismatch: cannot assign $rhsMsg to $lhsMsg at $pathForMsg"
+                          ))
+                        }
+                    }
                   }
               }
           }

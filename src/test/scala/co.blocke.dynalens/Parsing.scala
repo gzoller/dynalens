@@ -421,14 +421,14 @@ object Parsing extends ZIOSpecDefault:
         """
           |  items[].number.mapTo("testmap")
           |""".stripMargin
-      val expectedCompiledFwd = """BlockStmt(List(MapStmt(items[].number,MapFwdFn(testmap))))"""
+      val expectedCompiledFwd = """BlockStmt(List(MapStmt(items[].number,MapToFn(testmap))))"""
       val expectedResultFwd = """top -> Shipment(aaa,List(Item(p123,9,5), Item(p456,1,7)),1)""".stripMargin + "\n"
 
       val scriptRev =
         """
           |  items[].number.mapFrom("testmap")
           |""".stripMargin
-      val expectedCompiledRev = """BlockStmt(List(MapStmt(items[].number,MapRevFn(testmap))))"""
+      val expectedCompiledRev = """BlockStmt(List(MapStmt(items[].number,MapFromFn(testmap))))"""
       val expectedResultRev = """top -> Shipment(aaa,List(Item(abc,9,5), Item(xyz,1,7)),1)""".stripMargin + "\n"
 
       for {
@@ -517,14 +517,14 @@ object Parsing extends ZIOSpecDefault:
         """
           |  giftDesc[].mapTo("strMap")
           |""".stripMargin
-      val expectedCompiledFwd = """BlockStmt(List(MapStmt(giftDesc[],MapFwdFn(strMap))))"""
+      val expectedCompiledFwd = """BlockStmt(List(MapStmt(giftDesc[],MapToFn(strMap))))"""
       val expectedResultFwd = """top -> Registry(abc,List(),List(X, Y))""" + "\n"
 
       val scriptRev =
         """
           |  giftDesc[].mapFrom("strMap")
           |""".stripMargin
-      val expectedCompiledRev = """BlockStmt(List(MapStmt(giftDesc[],MapRevFn(strMap))))"""
+      val expectedCompiledRev = """BlockStmt(List(MapStmt(giftDesc[],MapFromFn(strMap))))"""
       val expectedResultRev = """top -> Registry(abc,List(),List(a, b))""" + "\n"
 
       for {

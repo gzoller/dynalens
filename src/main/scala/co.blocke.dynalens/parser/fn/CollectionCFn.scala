@@ -504,55 +504,93 @@ object CLenFn extends CompileFn[LenFn]:
       case _ => Right(())
 
 
-object CMapFwdFn extends CompileFn[MapFwdFn]:
-  val name = "mapFwd"           // DSL keyword
+object CMapToFn extends CompileFn[MapToFn]:
+  val name = "mapTo"           // DSL keyword
   override val builtIn = false  // user-supplied mapping registry
   val minArgs = 1
   override val maxArgs = 1
 
   def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean =
-    receiver.isInstanceOf[ScalarType]
+    receiver match
+      case _: ScalarType => true
+      case ListType(_, _: ScalarType, _) => true
+      case _ => false
 
   def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.lang.String")
+    receiver match
+      case ListType(_, _: ScalarType, coll) =>
+        ListType("", ScalarType("", "java.lang.String"), coll)
+      case _ =>
+        ScalarType("", "java.lang.String")
 
   def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    args.headOption.toRight(DLCompileError(0, "mapFwd requires a receiver"))
-      .map(rcv => MapFwdFn("<<MAPNAME>>", rcv))
-  // TODO: populate real map name from parser
+    args.headOption match
+      case Some(ConstantFn(mapName: String)) =>
+        Right(MapToFn(mapName, recv))
+      case Some(other) =>
+        Left(DLCompileError(0, s"mapTo() expects a string constant map name, got ${other.getClass.getSimpleName}"))
+      case None =>
+        Left(DLCompileError(0, "mapTo() requires a map name argument"))
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
-      case m: MapFwdFn =>
-        Utility.rhsType(m.receiver) match
+      case m: MapToFn =>
+        // First, try the normal rhsType lookup
+        val recvTypeOpt = Utility.rhsType(m.receiver)
+          .orElse {
+            m.receiver match
+              case GetFn(path, _, _) =>
+                Some(Utility.getPathType(path))
+              case _ => None
+          }
+
+        recvTypeOpt match
           case Some(_: ScalarType) => Right(())
-          case Some(ft) => Left(DLCompileError(0, s"mapFwd requires a scalar, got ${ft.typeName}"))
-          case None => Left(DLCompileError(0, "mapFwd cannot determine receiver type"))
+          case Some(ListType(_, _: ScalarType, _)) => Right(())
+          case Some(ft) =>
+            Left(DLCompileError(0, s"mapTo requires a scalar or list of scalars, got ${ft.typeName}"))
+          case None =>
+            Left(DLCompileError(0, "mapTo cannot determine receiver type"))
+
       case _ => Right(())
 
 
-object CMapRevFn extends CompileFn[MapRevFn]:
-  val name = "mapRev"
-  override val builtIn = false
+object CMapFromFn extends CompileFn[MapFromFn]:
+  val name = "mapFrom"          // DSL keyword
+  override val builtIn = false   // user-supplied mapping registry
   val minArgs = 1
   override val maxArgs = 1
 
   def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean =
-    receiver.isInstanceOf[ScalarType]
+    receiver match
+      case _: ScalarType => true
+      case ListType(_, _: ScalarType, _) => true
+      case _ => false
 
   def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.lang.String")
+    receiver match
+      case ListType(_, _: ScalarType, coll) =>
+        ListType("", ScalarType("", "java.lang.String"), coll)
+      case _ =>
+        ScalarType("", "java.lang.String")
 
   def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    args.headOption.toRight(DLCompileError(0, "mapRev requires a receiver"))
-      .map(rcv => MapRevFn("<<MAPNAME>>", rcv))
-  // TODO: populate real map name from parser
+    args.headOption match
+      case Some(ConstantFn(mapName: String)) =>
+        Right(MapFromFn(mapName, recv))
+      case Some(other) =>
+        Left(DLCompileError(0, s"mapFrom expects a string constant map name, got ${other.getClass.getSimpleName}"))
+      case None =>
+        Left(DLCompileError(0, "mapFrom requires a map name argument"))
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
-      case m: MapRevFn =>
+      case m: MapFromFn =>
         Utility.rhsType(m.receiver) match
           case Some(_: ScalarType) => Right(())
-          case Some(ft) => Left(DLCompileError(0, s"mapRev requires a scalar, got ${ft.typeName}"))
-          case None => Left(DLCompileError(0, "mapRev cannot determine receiver type"))
+          case Some(ListType(_, _: ScalarType, _)) => Right(())
+          case Some(ft) =>
+            Left(DLCompileError(0, s"mapFrom requires a scalar or list of scalars, got ${ft.typeName}"))
+          case None =>
+            Left(DLCompileError(0, "mapFrom cannot determine receiver type"))
       case _ => Right(())

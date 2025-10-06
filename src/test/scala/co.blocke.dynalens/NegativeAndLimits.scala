@@ -51,7 +51,6 @@ object NegativeAndLimits extends ZIOSpecDefault:
         compiled.toString == expectedCompiled
       )
     },
-    /*
     test("Accessing nonexistent field should fail") {
       val script = "bogus = 99"
       val a = dynalens[Item]
@@ -71,7 +70,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val result = Script.compileNoZIO(script, a).flatMap(compiled => a.runNoZIO(compiled, Person("bob", 35)))
       result match {
         case Left(err: DynaLensError) =>
-          assertTrue(err.msg.contains("Cannot compare types: class java.lang.String and class java.lang.Integer"))
+          assertTrue(err.msg.contains("Error: > operands must be numeric (found java.lang.String, scala.Int)"))
         case _ =>
           assertTrue(false).label("Expected type mismatch error")
       }
@@ -79,13 +78,15 @@ object NegativeAndLimits extends ZIOSpecDefault:
     test("mapTo with missing key should fail") {
       val bimap = BiMap.fromMap(Map("abc" -> "123"))
       val ctx = new BiMapRegistry().register("testmap", bimap)
-      val inst = Registry("abc", Nil, List("xyz"))
+      val inst = Registry("foo", Nil, List("xyz"))
       val a = dynalens[Registry]
 
       val script = """giftDesc[].mapTo("testmap")"""
       val result = for {
         compiled <- Script.compile(script, a)
+        _ <- ZIO.succeed(println(">>> "+compiled))
         output <- a.run(compiled, inst, ctx)
+        _ <- ZIO.succeed(println("!!! "+output))
       } yield output
 
       result.exit.map {
@@ -105,7 +106,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Registry]
 
       val expected = Registry("r1", Nil, List("a", "b"))
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftDesc,CleanFn(IdentityFn(GetFn(giftDesc,false,None))))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftDesc,CleanFn(GetFn(giftDesc,false,None)))))"""
       val expectedResult = "top -> Registry(r1,List(),List(a, b))\n"
 
       for {
@@ -124,7 +125,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Registry]
 
       val expected = Registry("r1", List(3, 4), Nil)
-      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,FilterFn(IdentityFn(GetFn(giftNums,false,None)),GreaterThanFn(GetFn(this,false,Some(IdentityFn(GetFn(giftNums,false,None)))),ConstantFn(2))))))"""
+      val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,FilterFn(GetFn(giftNums,false,None),GreaterThanFn(GetFn(this,false,Some(GetFn(giftNums,false,None))),ConstantFn(2))))))"""
       val expectedResult = "top -> Registry(r1,List(3, 4),List())\n"
 
       for {
@@ -144,16 +145,50 @@ object NegativeAndLimits extends ZIOSpecDefault:
           |""".stripMargin
       val inst = MyLists(1, List(1, 2, 3), None)
       val a = dynalens[MyLists]
-      val effect =
-        Script.compile(script, a).flatMap(compiled => a.run(compiled, inst))
+      val expectedCompiled = """BlockStmt(List(UpdateStmt(l2[2],ConstantFn(99))))"""
+      val expectedResult = "top -> MyLists(1,List(1, 2, 3),None)\n"
 
       for {
-        res <- effect.either // Either[DynaLensError, (MyLists, DynaContext)]
-      } yield res match {
-        case Left(err) =>
-          assertTrue(err.getMessage.contains("Index 2 out of bounds for field 'l2'"))
-        case Right(_) =>
-          assertTrue(false).label("Expected a DynaLensError, but got success")
+        compiled <- Script.compile(script, a)
+        (x, ctx) <- a.run(compiled, inst)
+        ctxStr = toStringCtx(ctx)
+      } yield assertTrue(
+        x == inst,
+        compiled.toString == expectedCompiled,
+        ctxStr == expectedResult
+      )
+    },
+    test("Assignment to optional list (non-empty)") {
+      val script =
+        """
+          |  l2[2] = 99
+          |""".stripMargin
+      val inst = MyLists(1, List(1, 2, 3), Some(List(4,5,6)))
+      val a = dynalens[MyLists]
+      val expectedCompiled = """BlockStmt(List(UpdateStmt(l2[2],ConstantFn(99))))"""
+      val expectedResult = "top -> MyLists(1,List(1, 2, 3),Some(List(4, 5, 99)))\n"
+
+      for {
+        compiled <- Script.compile(script, a)
+        (x, ctx) <- a.run(compiled, inst)
+        ctxStr = toStringCtx(ctx)
+      } yield assertTrue(
+        x == MyLists(1, List(1, 2, 3), Some(List(4,5,99))),
+        compiled.toString == expectedCompiled,
+        ctxStr == expectedResult
+      )
+    },
+    test("Assignment to optional list (non-empty--out of bounds)") {
+      val script =
+        """
+          |  l2[3] = 99
+          |""".stripMargin
+      val inst = MyLists(1, List(1, 2, 3), Some(List(4,5,6)))
+      val a = dynalens[MyLists]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Index 3 out of bounds for field 'l2'"))
+        case _         => assertTrue(false).label("Expected unknown field error")
       }
     },
     test("Unknown nested field should fail") {
@@ -165,13 +200,25 @@ object NegativeAndLimits extends ZIOSpecDefault:
         case _         => assertTrue(false).label("Expected unknown field error")
       }
     },
-    test("Indexing a non-list should fail") {
+    test("Indexing a non-list should fail (assignment)") {
       val script = "qty[0] = 1" // qty is an Int on Item
       val a = dynalens[Item]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 2)))
+      println(">>> "+Script.compileNoZIO(script, a))
       result match {
         case Left(err) => assertTrue(err.msg.contains("Cannot index into non-list field 'qty"))
         case _         => assertTrue(false).label("Expected 'not a Seq' error")
+      }
+    },
+    test("Indexing a non-list should fail (path)") {
+      val script = """val x = if qty[3] > 2 then 1 else 0""" // qty is Int
+      val a = dynalens[Item]
+      val result = Script.compileNoZIO(script, a)
+      result match {
+        case Left(err: DynaLensError) =>
+          assertTrue(err.msg.contains("Cannot index into non-list field 'qty'"))
+        case Right(_) =>
+          assertTrue(false).label("Expected compile-time path validation error for qty[3]")
       }
     },
     test("Fixed index out of bounds should fail") {
@@ -190,7 +237,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Registry]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
       result match {
-        case Left(err) => assertTrue(err.msg.contains("Unknown collection method: blorp"))
+        case Left(err) => assertTrue(err.msg.contains("Unknown method: blorp"))
         case _         => assertTrue(false).label("Expected unknown method error")
       }
     },
@@ -200,12 +247,21 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Registry]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
       result match {
-        case Left(err) => assertTrue(err.msg.contains("Expected Boolean result at runtime, but got: Integer = 123"))
+        case Left(err) => assertTrue(err.msg.contains(" Error: filter() requires boolean predicate, got scala.Int"))
         case _         => assertTrue(false).label("Expected boolean predicate error")
       }
     },
-    test("'this' outside collection/map should fail") {
+    test("'this' outside collection/map should fail (assignment)") {
       val script = "qty = this * 2"
+      val a = dynalens[Item]
+      val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 3)))
+      result match {
+        case Left(err) => assertTrue(err.msg.contains("Use of 'this' with no receiver in scope"))
+        case _         => assertTrue(false).label("Expected 'this' misuse error")
+      }
+    },
+    test("'this' outside collection/map should fail (valdef)") {
+      val script = "val x = this * 2"
       val a = dynalens[Item]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 3)))
       result match {
@@ -215,11 +271,12 @@ object NegativeAndLimits extends ZIOSpecDefault:
     },
     test("Optional scalar LHS with non-inferable RHS should fail") {
       // dunno?: Option[String], RHS is a boolean fn here
-      val script = "dunno? = 3 > 5"
+      val script = "dunno = 3 > 5"
       val a = dynalens[Maybe] // case class Maybe(id: String, dunno: Option[String], ...)
+      println(">>> "+Script.compileNoZIO(script, a))
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Maybe("id", None, None)))
       result match {
-        case Left(err) => assertTrue(err.msg.contains("Error: Type mismatch: cannot assign Boolean to OptionalScalar at dunno?"))
+        case Left(err) => assertTrue(err.msg.contains("Error: Type mismatch: cannot assign scala.Boolean to Option[java.lang.String] at dunno"))
         case _         => assertTrue(false).label("Expected RHS inference/type error")
       }
     },
@@ -228,7 +285,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val a = dynalens[Item]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, Item("abc", 3)))
       result match {
-        case Left(err) => assertTrue(err.msg.contains("Type mismatch: cannot assign None to Scalar at qty"))
+        case Left(err) => assertTrue(err.msg.contains("Error: Type mismatch: cannot assign Option[scala.Any] to scala.Int at qty"))
         case _         => assertTrue(false).label("Expected None→non-optional error")
       }
     },
@@ -283,7 +340,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
           )
         )
       result match {
-        case Left(err) => assertTrue(err.msg.contains("Error: > requires numeric operands, found co.blocke.dynalens.Pack and scala.Int"))
+        case Left(err) => assertTrue(err.msg.contains("Error: > operands must be numeric (found co.blocke.dynalens.Pack, scala.Int)"))
         case _         => assertTrue(false).label("Expected receiver kind error")
       }
     },
@@ -377,5 +434,4 @@ object NegativeAndLimits extends ZIOSpecDefault:
         case _         => assertTrue(false).label("Expected relative path field error")
       }
     }
-     */
   )
