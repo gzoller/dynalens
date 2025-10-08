@@ -123,7 +123,7 @@ object Collections extends ZIOSpecDefault:
     test("distinct (map--simple)") {
       val script =
         """
-          |  giftNums[].distinct()
+          |  giftNums.distinct()
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,DistinctFn(GetFn(giftNums,false,None),None))))"""
       val expectedResult = """top -> Registry(abc,List(2, 5, 7, 9),List())""" + "\n"
@@ -206,7 +206,7 @@ object Collections extends ZIOSpecDefault:
     test("clean (map--simple)") {
       val script =
         """
-          |  giftNums[].clean()
+          |  giftNums.clean()
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,CleanFn(GetFn(giftNums,false,None)))))"""
       val expectedResult = """top -> Registry(abc,List(2, 5, 7, 5, 2, 9),List())""" + "\n"
@@ -287,7 +287,7 @@ object Collections extends ZIOSpecDefault:
     test("reverse (map--simple)") {
       val script =
         """
-          |  giftNums[].reverse()
+          |  giftNums.reverse()
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,ReverseFn(GetFn(giftNums,false,None)))))"""
       val expectedResult = """top -> Registry(abc,List(9, 2, 5, 7, 5, 2),List())""" + "\n"
@@ -368,7 +368,7 @@ object Collections extends ZIOSpecDefault:
     test("limit (map--simple)") {
       val script =
         """
-          |  giftNums[].limit(3)
+          |  giftNums.limit(3)
           |""".stripMargin
       val expectedCompiled = """BlockStmt(List(MapStmt(giftNums,LimitFn(GetFn(giftNums,false,None),3))))"""
       val expectedResult = """top -> Registry(abc,List(2, 5, 7),List())""" + "\n"
@@ -451,7 +451,7 @@ object Collections extends ZIOSpecDefault:
     test("sortAsc (map--simple)") {
       val script =
         """
-          |  giftNums[].sortAsc()
+          |  giftNums.sortAsc()
           |""".stripMargin
       val expectedCompiled =
         """BlockStmt(List(MapStmt(giftNums,SortAscFn(GetFn(giftNums,false,None),None))))"""
@@ -578,7 +578,7 @@ object Collections extends ZIOSpecDefault:
     test("sortDesc (map--simple)") {
       val script =
         """
-          |  giftNums[].sortDesc()
+          |  giftNums.sortDesc()
           |""".stripMargin
       val expectedCompiled =
         """BlockStmt(List(MapStmt(giftNums,SortDescFn(GetFn(giftNums,false,None),None))))"""

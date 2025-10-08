@@ -43,14 +43,6 @@ object CorrectPath:
       case None =>
         Left(s"Invalid path segment '$segStr'")
 
-  private def render(base: String, idx: Option[Idx], opt: Boolean): String =
-    val idxTxt = idx match
-      case Some(Wildcard) => "[]"
-      case Some(Fixed(i)) => s"[$i]"
-      case None           => ""
-    val optTxt = if opt then "?" else ""
-    s"$base$idxTxt$optTxt"
-
   /** Rewrite/validate a path under current ctx (Schema/Receiver/symbols). */
   def rewritePath(rawPath: String, offset: Int)(using ctx: ExprContext): Either[DLCompileError, String] =
     inline def scopeLookup(name: String): Option[FieldType] =
@@ -110,7 +102,7 @@ object CorrectPath:
 
                 scopeLookup(seg.base) match
                   case Some(ListType(_, elem: ClassType, _)) =>
-                    val collToken = s"${seg.base}[]"
+                    val collToken = s"${seg.base}"
                     return loop(
                       elem,
                       tail,
@@ -121,7 +113,7 @@ object CorrectPath:
                     )
                   case Some(OptionType(_, inner: ListType, _)) if inner.elementType.isInstanceOf[ClassType] =>
                     val elem = inner.elementType.asInstanceOf[ClassType]
-                    val collToken = s"${seg.base}[]"
+                    val collToken = s"${seg.base}"
                     return loop(
                       elem,
                       tail,

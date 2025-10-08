@@ -47,10 +47,6 @@ trait ValueExprModule {
 //
 trait Level1 extends Level0 {
   self: ValueExprModule =>
-  // Simple symbol or dotted path, possibly with array notation
-  //   foo.bar
-  //   foo[].bar
-  //   foo[3].bar
 
   private def identS[$: P]: P[String] =
     P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep).!
@@ -61,20 +57,11 @@ trait Level1 extends Level0 {
   private def indexPart[$: P]: P[String] =
     P("[" ~ CharsWhileIn("0-9").! ~ "]").map(i => s"[$i]")
 
-  private def wildcardIndex[$: P]: P[String] =
-    P("[]").!
-
-  private def curlyBraces[$: P]: P[String] =
-    P("{}").!
-
-  private def optQ[$: P]: P[String] =
-    P("?").!.?.map(_.getOrElse(""))
-
   private def segment[$: P]: P[String] =
     // ident + optional '?' + optional [index] / [] / {}
-    P(identS.! ~ optQ ~ (wildcardIndex | indexPart | curlyBraces).?).map {
-      case (name, q, Some(suffix)) => s"$name$q$suffix"
-      case (name, q, None) => s"$name$q"
+    P(identS.! ~ (indexPart).?).map {
+      case (name, Some(suffix)) => s"$name$suffix"
+      case (name, None) => s"$name"
     }
 
   def pathBase[$: P]: P[String] =
@@ -296,6 +283,76 @@ trait Level1 extends Level0 {
     def loop(current: Fn[Any]): P[Either[DLCompileError, Fn[Any]]] =
       P(methodCall).flatMap {
         case Left((err, name, off)) =>
+          val recvType = Utility.rhsType(current)
+          println(s"[loop] methodCall error: $err, receiver=$recvType, method=$name")
+
+          val refined: DLCompileError = recvType match {
+            case Some(rt) =>
+              CompileFnRegistry.lookup(name) match {
+                case Some(cfn) if !cfn.accepts(rt)(using ctx) =>
+                  DLCompileError(off, s"Method '$name' cannot be applied to receiver of type ${rt.typeName}")
+                case _ => err
+              }
+            case None => err
+          }
+          P(Pass(Left(refined)))
+
+        case Right((name, args, off)) =>
+          println(s"[loop] got method name: $name, args: $args, off: $off")
+          CompileFnRegistry.lookup(name) match {
+            case Some(cfn) =>
+              println(s"[loop] found CompileFn for $name")
+
+              // ---- NEW: prefer context/schema (recvFieldTypeOpt), then fall back to rhsType ----
+              val recvFieldTypeOpt: Option[FieldType] = current match
+                case g: GetFn =>
+                  val fromCtx = ctx.symbols.collectFirst { case scope if scope.contains(g.path) => scope(g.path) }
+                  fromCtx.orElse(Utility.elementSchemaFor(g.path, ctx.schema))
+                case _ =>
+                  Utility.rhsType(current)(using argsCtx)
+
+              // Normalize ValType → its underlying FieldType (so accepts() can match OptionType/ListType/MapType)
+              val recvType: FieldType =
+                recvFieldTypeOpt
+                  .orElse(Utility.rhsType(current)(using argsCtx))
+                  .map {
+                    case vt: ValType => vt.valueType // <-- important: unwrap ValType
+                    case ft: FieldType => ft
+                  }
+                  .getOrElse(ScalarType("", "scala.Any"))
+
+              println(s"[loop] recvType(for accepts)=$recvType for method '$name'")
+
+              if !cfn.accepts(recvType)(using argsCtx) then
+                println(s"[loop] receiver type ${recvType.typeName} not accepted by $name")
+                P(Pass(Left(DLCompileError(off,
+                  s"Method '$name' cannot be applied to receiver of type ${recvType.typeName}"
+                ))))
+              else {
+                // build/validate as before
+                cfn.build(current, args)(using argsCtx) match
+                  case Left(e) =>
+                    println(s"[loop] build for $name failed: $e")
+                    P(Pass(Left(e)))
+                  case Right(fnBuilt) =>
+                    cfn.validate(fnBuilt.asInstanceOf)(using argsCtx) match
+                      case Left(err) =>
+                        println(s"[loop] validate for $name failed: $err")
+                        P(Pass(Left(err)))
+                      case Right(_) =>
+                        println(s"[loop] $name succeeded: $fnBuilt")
+                        loop(fnBuilt.asInstanceOf[Fn[Any]])
+              }
+
+            case None =>
+              println(s"[loop] no CompileFn for $name")
+              P(Pass(Left(DLCompileError(off, s"Unknown method: $name"))))
+          }
+      } | P(Pass(Right(current)))
+    /*
+    def loop(current: Fn[Any]): P[Either[DLCompileError, Fn[Any]]] =
+      P(methodCall).flatMap {
+        case Left((err, name, off)) =>
           // We got an error from parsing args/predicate
           val recvType = Utility.rhsType(current)
           println(s"[loop] methodCall error: $err, receiver=$recvType, method=$name")
@@ -319,6 +376,21 @@ trait Level1 extends Level0 {
               println(s"[loop] found CompileFn for $name")
 
               // Early receiver check
+              val recvFieldTypeOpt: Option[FieldType] = current match
+                case g: GetFn =>
+                  // 1️⃣ Look up any val or symbol bound to this field name
+                  val fromCtx: Option[FieldType] =
+                    ctx.symbols.collectFirst {
+                      case scope if scope.contains(g.path) => scope(g.path)
+                    }
+
+                  // 2️⃣ Fallback: look up from schema (for top-level fields)
+                  fromCtx.orElse(Utility.elementSchemaFor(g.path, ctx.schema))
+
+                case _ =>
+                  Utility.rhsType(current)(using argsCtx)
+
+              // Normalize ValType → its underlying FieldType
               val recvType = Utility.rhsType(current)(using argsCtx).getOrElse(ScalarType("", "scala.Any"))
               if !cfn.accepts(recvType)(using argsCtx) then
                 println(s"[loop] receiver type ${recvType.typeName} not accepted by $name")
@@ -331,7 +403,36 @@ trait Level1 extends Level0 {
                     P(Pass(Left(e)))
 
                   case Right(fnBuilt) =>
-                    // phase 2: validate
+                      // phase 2: validate
+                      cfn.validate(fnBuilt.asInstanceOf)(using argsCtx) match
+                        case Left(err) =>
+                          println(s"[loop] validate for $name failed: $err")
+                          P(Pass(Left(err)))
+                        case Right(_) =>
+                          println(s"[loop] $name succeeded: $fnBuilt")
+                          loop(fnBuilt.asInstanceOf[Fn[Any]])
+              }
+                  /*
+              val recvFieldType = recvFieldTypeOpt match
+                case Some(vt: ValType) => vt.valueType
+                case Some(ft: FieldType) => ft
+                case Some(other) => other.asInstanceOf[FieldType]
+                case None => ScalarType("", "scala.Any")
+
+              println(s"[loop] recvFieldType=$recvFieldType for method '$name'")
+
+              if !cfn.accepts(recvFieldType)(using argsCtx) then
+                println(s"[loop] receiver type ${recvFieldType.typeName} not accepted by $name")
+                P(Pass(Left(DLCompileError(off,
+                  s"Method '$name' cannot be applied to receiver of type ${recvFieldType.typeName}"
+                ))))
+              else {
+                // (unchanged build/validate logic)
+                cfn.build(current, args)(using argsCtx) match
+                  case Left(e) =>
+                    println(s"[loop] build for $name failed: $e")
+                    P(Pass(Left(e)))
+                  case Right(fnBuilt) =>
                     cfn.validate(fnBuilt.asInstanceOf)(using argsCtx) match
                       case Left(err) =>
                         println(s"[loop] validate for $name failed: $err")
@@ -340,13 +441,37 @@ trait Level1 extends Level0 {
                         println(s"[loop] $name succeeded: $fnBuilt")
                         loop(fnBuilt.asInstanceOf[Fn[Any]])
               }
+                   */
 
             case None =>
               println(s"[loop] no CompileFn for $name")
               P(Pass(Left(DLCompileError(off, s"Unknown method: $name"))))
           }
       } | P(Pass(Right(current)))
+      */
+    /*
+    val recvType = Utility.rhsType(current)(using argsCtx).getOrElse(ScalarType("", "scala.Any"))
+    if !cfn.accepts(recvType)(using argsCtx) then
+      println(s"[loop] receiver type ${recvType.typeName} not accepted by $name")
+      P(Pass(Left(DLCompileError(off, s"Method '$name' cannot be applied to receiver of type ${recvType.typeName}"))))
+    else {
+      // phase 1: build
+      cfn.build(current, args)(using argsCtx) match
+        case Left(e) =>
+          println(s"[loop] build for $name failed: $e")
+          P(Pass(Left(e)))
 
+        case Right(fnBuilt) =>
+          // phase 2: validate
+          cfn.validate(fnBuilt.asInstanceOf)(using argsCtx) match
+            case Left(err) =>
+              println(s"[loop] validate for $name failed: $err")
+              P(Pass(Left(err)))
+            case Right(_) =>
+              println(s"[loop] $name succeeded: $fnBuilt")
+              loop(fnBuilt.asInstanceOf[Fn[Any]])
+    }
+    */
     // === 3) Optional trailing index (unchanged) ===
     loop(base).flatMap {
       case Left(err)  => P(Pass(Left(err)))
@@ -407,7 +532,7 @@ trait Level1 extends Level0 {
     case g @ GetFn(name,_,_) =>
       // If the bare name is in loop scope, prefer its collection binding `name[]`
       val inLoop = ctx.symbols.headOption.exists(_.contains(name))
-      if inLoop then GetFn(s"$name[]", g.isOptional) else g
+      if inLoop then GetFn(s"$name", g.isOptional) else g
     case other => other
 
   def collectionStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =

@@ -13,6 +13,7 @@ sealed trait FieldType {
     case ScalarType(_, "java.lang.String")                   => true
     case ListType(_, ScalarType(_, "java.lang.String"), _)   => true
     case OptionType(_, ListType(_, ScalarType(_, "java.lang.String"), _), _) => true
+    case ValType(_, inner, _) => inner.isStringLike
     case _                                                   => false
 
   /** True if this type can be assigned from that type (e.g. Int <- Int, Option[Int] <- Int, etc.) */
@@ -44,9 +45,13 @@ sealed trait FieldType {
 
 case class ScalarType(name: String, typeName: String) extends FieldType:
   override def isNumeric: Boolean =
-    this match
-      case ScalarType(_, t) if Set("scala.Int", "scala.Long", "scala.Float", "scala.Double").contains(t) => true
-      case _ => false
+    Set(
+      "scala.Byte", "scala.Short", "scala.Int", "scala.Long",
+      "scala.Float", "scala.Double",
+      "java.lang.Integer", "java.lang.Long",
+      "java.lang.Float", "java.lang.Double",
+      "scala.math.BigDecimal", "scala.math.BigInt"
+    ).contains(typeName)
 
 case class OptionType(name: String, valueType: FieldType, typeName: String) extends FieldType
 case class ListType(name: String, elementType: FieldType, typeName: String) extends FieldType
@@ -63,7 +68,9 @@ case class SealedTraitType(
                             subTypes: List[String]
                           ) extends FieldType
 
-case class ValType(name: String, valueType: FieldType, typeName: String) extends FieldType
+case class ValType(name: String, valueType: FieldType, typeName: String) extends FieldType:
+  override def isNumeric: Boolean = valueType.isNumeric
+  override def isStringLike: Boolean = valueType.isStringLike
 
 case class ResolvedType(
                          fieldType: FieldType,

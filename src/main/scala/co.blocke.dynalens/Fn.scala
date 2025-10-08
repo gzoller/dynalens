@@ -44,16 +44,38 @@ trait Fn[R]:
   def rebuild(kids: List[Fn[?]]): Fn[R]
 
   /** Walk the tree and patch every `GetFn("this")` with the given receiver. */
+//  def withReceiver(r: Fn[?]): Fn[R] =
+//    this match
+//      case g: GetFn =>
+//        // Attach receiver to any GetFn, even if path doesn't start with "this"
+//        g.copy(recv = Some(r)).asInstanceOf[Fn[R]]
+//
+//      case other if other.children.nonEmpty =>
+//        other.rebuild(other.children.map(_.withReceiver(r)))
+//
+//      case other => other
+
+  // In Fn.scala (or wherever withReceiver lives)
   def withReceiver(r: Fn[?]): Fn[R] =
     this match
       case g: GetFn =>
-        // Attach receiver to any GetFn, even if path doesn't start with "this"
-        g.copy(recv = Some(r)).asInstanceOf[Fn[R]]
+        val willAttach = g.path.startsWith("this") || g.path.startsWith("_")
+        println(s"[withReceiver:GetFn] path='${g.path}', existingRecv=${g.recv.isDefined}, attach?=$willAttach, recvNode=${r.getClass.getSimpleName}")
+        val out =
+          if willAttach then g.copy(recv = Some(r)).asInstanceOf[Fn[R]]
+          else this
+        println(s"[withReceiver:GetFn] result=${out}")
+        out
 
       case other if other.children.nonEmpty =>
-        other.rebuild(other.children.map(_.withReceiver(r)))
+        println(s"[withReceiver:${other.getClass.getSimpleName}] descend into children (n=${other.children.size})")
+        val out = other.rebuild(other.children.map(_.withReceiver(r)))
+        println(s"[withReceiver:${other.getClass.getSimpleName}] rebuilt=${out}")
+        out
 
-      case other => other
+      case other =>
+        println(s"[withReceiver:${other.getClass.getSimpleName}] leaf, unchanged")
+        other
 
 
 trait ReceiverUnaryFn[R] extends Fn[R]:
@@ -72,7 +94,7 @@ trait ReceiverBinaryFn[R] extends Fn[R]:
 trait OperandUnaryFn[R] extends Fn[R]:
   def operand: Fn[Any]
   override def args: List[Fn[Any]] = List(operand)
-  override val recv: Option[Fn[?]] = None
+  override val recv: Option[Fn[?]] = None  // TODO fix: Some(operand)
   override val isOptional: Boolean = operand.isOptional
 
 trait OperandBinaryFn[R] extends Fn[R]:
@@ -581,25 +603,38 @@ case class OrFn(left: Fn[Any], right: Fn[Any]) extends BooleanFn with OperandBin
     } yield l || r
 
 case class NotFn(operand: Fn[Any]) extends BooleanFn with OperandUnaryFn[Boolean]:
+  override val recv: Option[Fn[?]] = Some(operand)
+  override def args: List[Fn[Any]] = Nil
   override val methodName: String = "!"
   override def rebuild(kids: List[Fn[?]]): BooleanFn =
     copy(operand = kids.head.asInstanceOf[Fn[Any]])
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     operand.resolve(ctx).map(_.asInstanceOf[Boolean]).map(b => !b)
 
-case class IsDefinedFn(operand: Fn[Any]) extends BooleanFn with OperandUnaryFn[Boolean] {
-  override def rebuild(kids: List[Fn[?]]): BooleanFn = copy(operand = kids.head.asInstanceOf[Fn[Any]])
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
-    for {
-      value <- operand.resolve(ctx)
-    } yield value match {
-      case opt: Option[?] => opt.isDefined
-      case null           => false
-      case Nil            => false
-      case _              =>
-        // Non-option types are always considered defined
-        true
+case class IsDefinedFn(operand: Fn[Any]) extends BooleanFn {
+  override def rebuild(kids: List[Fn[?]]): BooleanFn =
+    copy(operand = kids.head.asInstanceOf[Fn[Any]])
+
+  // Treat the operand as the receiver so rhsType sees an Option[...] here.
+  override val recv: Option[Fn[?]] = Some(operand)
+  override def args: List[Fn[Any]] = Nil
+  override val isOptional: Boolean = false
+
+  override def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+    operand.resolve(ctx).map {
+      case null => false
+      case o: Option[?] => o.isDefined
+      case it: Iterable[?] => it.nonEmpty
+      case m: scala.collection.Map[?, ?] => m.nonEmpty
+      case other => false // conservative
     }
+//  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+//    operand.resolve(ctx).map {
+//      case opt: Option[?] => opt.isDefined
+//      case null           => false
+//      case Nil            => false
+//      case _              => true
+//    }
 }
 
 // Special converter: Fn[Any]->BooleanFn
@@ -1338,6 +1373,8 @@ case class ReplaceFn(
 
 // left = primary, right = fallback
 case class ElseFn(left: Fn[Any], right: Fn[Any]) extends Fn[Any] with OperandBinaryFn[Any]:
+  override val recv: Option[Fn[?]] = Some(left)
+  override def args: List[Fn[Any]] = List(left, right)
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(
       kids(0).asInstanceOf[Fn[Any]],
@@ -1459,12 +1496,16 @@ case class LoopFn(inner: Fn[Any]) extends Fn[Any]:
   override val isOptional: Boolean = inner.isOptional
 
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    println(s"[LoopFn] ctx.this = ${ctx.get("this").map(_._1.getClass.getName)}")
     ctx.get("this") match
       case Some((raw, lens)) =>
         for
           seq     <- ZIO.fromEither(asSeq(raw, "loop"))
+          _ <- ZIO.succeed(println(s"[LoopFn] seq.size? ${seq.size}"))
           results <- ZIO.foreach(seq) { item =>
-            val localCtx = ctx.updatedWith("this", (item, lens))
+            // Preserve outer vals and other context keys
+//            val localCtx = ctx.updatedWith("this", (item, lens))
+            val localCtx = ctx.clone.addOne("this", (item, lens))
             inner.resolve(localCtx)
           }
         yield results.toList
@@ -1490,21 +1531,46 @@ case class FilterFn(receiver: Fn[Any], other: Fn[Any]) extends Fn[Any] with Rece
 
 
 // left = head, right = tail
-case class ConsFn(left: Fn[Any], right: Fn[Any]) extends Fn[List[Any]] with OperandBinaryFn[List[Any]]:
+case class ConsFn(left: Fn[Any], right: Fn[Any])
+  extends Fn[List[Any]] with OperandBinaryFn[List[Any]] {
+
   override val methodName: String = "::"
+
   override def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
     copy(kids.head.asInstanceOf[Fn[Any]], kids(1).asInstanceOf[Fn[Any]])
+
   override val isOptional: Boolean = left.isOptional || right.isOptional
+
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, List[Any]] =
-    for
+    for {
       h <- left.resolve(ctx)
       t <- right.resolve(ctx)
-      list <- t match
-        case null | None       => ZIO.succeed(List(h))
-        case Some(xs: Seq[?])  => ZIO.succeed(h :: xs.asInstanceOf[Seq[Any]].toList)
-        case xs: Seq[?]        => ZIO.succeed(h :: xs.asInstanceOf[Seq[Any]].toList)
-        case other             => ZIO.fail(DynaLensError(s":: expects a list tail, got: ${other.getClass.getSimpleName}"))
-    yield list
+      out <- (h, t) match {
+        // right is “empty” → singleton
+        case (head, null | None) =>
+          ZIO.succeed(List(head))
+
+        // elem :: Some(list)   OR   elem :: list
+        case (head, Some(ts: Seq[?])) =>
+          ZIO.succeed(head :: ts.asInstanceOf[Seq[Any]].toList)
+        case (head, ts: Seq[?]) =>
+          ZIO.succeed(head :: ts.asInstanceOf[Seq[Any]].toList)
+
+        // list :: list  (concatenate)
+        case (hs: Seq[?], Some(ts: Seq[?])) =>
+          ZIO.succeed(hs.asInstanceOf[Seq[Any]].toList ++ ts.asInstanceOf[Seq[Any]].toList)
+        case (hs: Seq[?], ts: Seq[?]) =>
+          ZIO.succeed(hs.asInstanceOf[Seq[Any]].toList ++ ts.asInstanceOf[Seq[Any]].toList)
+
+        // elem :: Some(non-list)   OR   elem :: elem  → promote right to singleton list
+        case (head, Some(x)) =>
+          ZIO.succeed(List(head, x))
+        case (head, x) =>
+          ZIO.succeed(List(head, x))
+      }
+    } yield out
+}
+
 
 case class SortAscFn(receiver: Fn[Any], keyPath: Option[String]) extends SortFn with ReceiverUnaryFn[Any]:
   val asc: Boolean = true

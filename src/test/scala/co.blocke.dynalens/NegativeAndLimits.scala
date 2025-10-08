@@ -81,7 +81,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       val inst = Registry("foo", Nil, List("xyz"))
       val a = dynalens[Registry]
 
-      val script = """giftDesc[].mapTo("testmap")"""
+      val script = """giftDesc.mapTo("testmap")"""
       val result = for {
         compiled <- Script.compile(script, a)
         _ <- ZIO.succeed(println(">>> "+compiled))
@@ -101,7 +101,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       }
     },
     test("clean must remove null and empty strings") {
-      val script = """giftDesc[].clean()"""
+      val script = """giftDesc.clean()"""
       val inst = Registry("r1", Nil, List("a", "", null, "b", ""))
       val a = dynalens[Registry]
 
@@ -120,7 +120,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       )
     },
     test("filter on primitive list using 'this' must work") {
-      val script = """giftNums[].filter(this > 2)"""
+      val script = """giftNums.filter(this > 2)"""
       val inst = Registry("r1", List(1, 2, 3, 4), Nil)
       val a = dynalens[Registry]
 
@@ -192,7 +192,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       }
     },
     test("Unknown nested field should fail") {
-      val script = "items[].bogus = 1"
+      val script = "items.bogus = 1"
       val a = dynalens[Shipment]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, /* your instance */ ???))
       result match {
@@ -232,7 +232,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       }
     },
     test("Unknown collection method should fail") {
-      val script = "giftNums[].blorp()"
+      val script = "giftNums.blorp()"
       val inst = Registry("r1", List(1, 2, 3), Nil)
       val a = dynalens[Registry]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
@@ -242,7 +242,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       }
     },
     test("Non-boolean predicate in filter should fail") {
-      val script = "giftNums[].filter(123)"
+      val script = "giftNums.filter(123)"
       val inst = Registry("r1", List(1, 2, 3), Nil)
       val a = dynalens[Registry]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))
@@ -345,7 +345,7 @@ object NegativeAndLimits extends ZIOSpecDefault:
       }
     },
     test("filter using unknown relative field should fail") {
-      val script = "giftNums[].filter(qty > 2)" // giftNums is List[Int], no 'qty' in element scope
+      val script = "giftNums.filter(qty > 2)" // giftNums is List[Int], no 'qty' in element scope
       val inst = Registry("r1", List(1, 2, 3), Nil)
       val a = dynalens[Registry]
       val result = Script.compileNoZIO(script, a).flatMap(c => a.runNoZIO(c, inst))

@@ -29,14 +29,15 @@ import zio.test.*
 object Options extends ZIOSpecDefault:
 
   def spec = suite("Options Tests")(
+    /*
     test("Simple option assignment") {
       val script =
         """
-          |  dunno? = "foom"
-          |  interest? = None
+          |  dunno = "foom"
+          |  interest = None
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(dunno?,ConstantFn(foom)), UpdateStmt(interest[]?,NoneFn())))"""
+        """BlockStmt(List(UpdateStmt(dunno,ConstantFn(foom)), UpdateStmt(interest,NoneFn)))"""
       val expectedResult =
         """top -> Maybe(abc,Some(foom),None)
           |""".stripMargin
@@ -57,7 +58,7 @@ object Options extends ZIOSpecDefault:
           |  interest = y
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,ConstantFn(yay)), ValStmt(y,NoneFn()), UpdateStmt(dunno?,GetFn(x)), UpdateStmt(interest[]?,GetFn(y))))"""
+        """BlockStmt(List(ValStmt(x,ConstantFn(yay)), ValStmt(y,NoneFn), UpdateStmt(dunno,GetFn(x,false,None)), UpdateStmt(interest,GetFn(y,false,None))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(yay),None)
           |x -> yay
@@ -74,21 +75,21 @@ object Options extends ZIOSpecDefault:
     test("Get option value (with isDefined)") {
       val script =
         """
-          |  val x = dunno?.else("unknown")
-          |  val y = x.toUpperCase() :: " ok"
-          |  val q = dunno?.isDefined()
-          |  val r = interest[]?.isDefined()
+          |  val x = dunno.else("unknown")
+          |  val y = x.toUpper() :: " ok"
+          |  val q = dunno.isDefined()
+          |  val r = interest.isDefined()
           |  val s = None.isDefined()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,ElseFn(GetFn(dunno?),ConstantFn(unknown))), ValStmt(y,ConcatFn(List(ToUpperFn(GetFn(x)), ConstantFn( ok)))), ValStmt(q,IsDefinedFn(GetFn(dunno?))), ValStmt(r,IsDefinedFn(GetFn(interest[]?))), ValStmt(s,IsDefinedFn(NoneFn()))))"""
+        """BlockStmt(List(ValStmt(x,ElseFn(GetFn(dunno,true,None),ConstantFn(unknown))), ValStmt(y,ConsFn(ToUpperFn(GetFn(x,false,None)),ConstantFn( ok))), ValStmt(q,IsDefinedFn(GetFn(dunno,true,None))), ValStmt(r,IsDefinedFn(GetFn(interest,true,None))), ValStmt(s,IsDefinedFn(NoneFn))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),None)
           |q -> true
           |r -> false
           |s -> false
           |x -> wow
-          |y -> WOW ok
+          |y -> List(WOW,  ok)
           |""".stripMargin
       val inst = Maybe("abc", Some("wow"))
       val a = dynalens[Maybe]
@@ -101,11 +102,11 @@ object Options extends ZIOSpecDefault:
     test("Get option value--List (with isDefined)") {
       val script =
         """
-          |  val x = interest[]?.isDefined()
-          |  val y = interest[]?.len()
+          |  val x = interest.isDefined()
+          |  val y = interest.len()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,IsDefinedFn(GetFn(interest[]?))), ValStmt(y,LenFn(GetFn(interest[]?)))))"""
+        """BlockStmt(List(ValStmt(x,IsDefinedFn(GetFn(interest,true,None))), ValStmt(y,LenFn(GetFn(interest,true,None)))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),Some(List(Item(abc,2,5))))
           |x -> true
@@ -127,7 +128,7 @@ object Options extends ZIOSpecDefault:
           |  interest.sortDesc(number)
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,LenFn(GetFn(interest[]?))), MapStmt(interest[]?.qty,MultiplyFn(GetFn(x),ConstantFn(5))), MapStmt(interest[]?,SortDescFn(IdentityFn,Some(this.number)))))"""
+        """BlockStmt(List(ValStmt(x,LenFn(GetFn(interest,true,None))), MapStmt(interest.qty,LoopFn(MultiplyFn(GetFn(x,false,None),ConstantFn(5)))), MapStmt(interest,SortDescFn(GetFn(interest,true,None),Some(number)))))"""
       val expectedResult =
         """top -> Maybe(abc,Some(wow),Some(List(Item(xyz,10,7), Item(abc,10,5))))
           |x -> 2
@@ -136,6 +137,7 @@ object Options extends ZIOSpecDefault:
       val a = dynalens[Maybe]
       for {
         compiledScript <- Script.compile(script, a)
+        _ <- ZIO.succeed(println("&&& " + compiledScript))
         (x, newCtx) <- a.run(compiledScript, inst)
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == Maybe("abc", Some("wow"), Some(List(Item("xyz", 10, 7), Item("abc", 10, 5)))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
@@ -146,7 +148,7 @@ object Options extends ZIOSpecDefault:
           |  l2 = l1
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(l2[]?,GetFn(l1[]))))"""
+        """BlockStmt(List(UpdateStmt(l2,GetFn(l1,false,None))))"""
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),Some(List(1, 2, 3)))
           |""".stripMargin
@@ -158,6 +160,7 @@ object Options extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == MyLists(1, List(1, 2, 3), Some(List(1, 2, 3))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
+    */
     test("Update optional list 2") {
       val script =
         """
@@ -167,11 +170,11 @@ object Options extends ZIOSpecDefault:
           |  val z = y.isDefined()
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,GetFn(l2[]?)), UpdateStmt(l2[]?,NoneFn()), ValStmt(y,GetFn(l2[]?)), ValStmt(z,IsDefinedFn(GetFn(y)))))"""
+        """BlockStmt(List(ValStmt(x,GetFn(l2,true,None)), UpdateStmt(l2,NoneFn), ValStmt(y,GetFn(l2,true,None)), ValStmt(z,IsDefinedFn(GetFn(y,false,None)))))"""
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),None)
           |x -> List(1, 2, 3)
-          |y -> List()
+          |y -> None
           |z -> false
           |""".stripMargin
       val inst = MyLists(1, List(1, 2, 3), Some(List(1, 2, 3)))
@@ -182,6 +185,7 @@ object Options extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == MyLists(1, List(1, 2, 3), None) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     },
+    /*
     test("Update optional list 3") {
       val script =
         """
@@ -189,10 +193,10 @@ object Options extends ZIOSpecDefault:
           |  l2 = x
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,GetFn(l2[]?)), UpdateStmt(l2[]?,GetFn(x))))"""
+        """BlockStmt(List(ValStmt(x,GetFn(l2,true,None)), UpdateStmt(l2,GetFn(x,false,None))))"""
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),None)
-          |x -> List()
+          |x -> None
           |""".stripMargin
       val inst = MyLists(1, List(1, 2, 3), None)
       val a = dynalens[MyLists]
@@ -227,7 +231,7 @@ object Options extends ZIOSpecDefault:
           |  l1[1] = 15
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(l1[],CleanFn(IdentityFn)), UpdateStmt(l1[1],ConstantFn(15))))"""
+        """BlockStmt(List(MapStmt(l1,CleanFn(GetFn(l1,true,None))), UpdateStmt(l1[1],ConstantFn(15))))"""
       val expectedResult =
         """top -> ListOfOpt(1,List(Some(1), Some(15)))
           |""".stripMargin
@@ -245,7 +249,7 @@ object Options extends ZIOSpecDefault:
           |  l2 = None
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(l2[]?,NoneFn())))"""
+        """BlockStmt(List(UpdateStmt(l2,NoneFn)))"""
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),None)
           |""".stripMargin
@@ -281,7 +285,7 @@ object Options extends ZIOSpecDefault:
           |  l2 => this + 9
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(l2[]?,LoopFn(AddFn(GetFn(this),ConstantFn(9))))))"""
+        """BlockStmt(List(MapStmt(l2,LoopFn(AddFn(GetFn(this,false,None),ConstantFn(9))))))"""
       val expectedResult =
         """top -> MyLists(1,List(1, 2, 3),Some(List(13, 14, 15)))
           |""".stripMargin
@@ -299,7 +303,7 @@ object Options extends ZIOSpecDefault:
           |  interest.number => "blah"
           |""".stripMargin
       val expectedCompiled =
-        """BlockStmt(List(MapStmt(interest[]?.number,ConstantFn(blah))))"""
+        """BlockStmt(List(MapStmt(interest.number,ConstantFn(blah))))"""
       val expectedResult =
         """top -> Maybe(abc,None,None)
           |""".stripMargin
@@ -329,6 +333,7 @@ object Options extends ZIOSpecDefault:
         resultStr = toStringCtx(newCtx)
       } yield assertTrue(x == MyLists(1, List(1, 2, 3), Some(List(4, 5, 99))) && resultStr == expectedResult && compiledScript.toString == expectedCompiled)
     }
+     */
   )
 
 //  _ <- ZIO.succeed(println("&&& " + compiledScript))

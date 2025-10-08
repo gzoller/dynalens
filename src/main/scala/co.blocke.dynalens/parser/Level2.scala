@@ -678,16 +678,10 @@ trait Level2 extends Level1 with ValueExprModule:
                     case OptionType(_, inner: ListType, _) => true
                     case _ => false
                   }
-
-                  val normalizedLhs =
-                    if isListLike then Utility.addWildcardToListLike(cleanPath)
-                    else cleanPath
-
                   val body: Fn[?] =
                     if isListLike then LoopFn(vfn)
                     else vfn
-
-                  Right((ctx, MapStmt(normalizedLhs, body)))
+                  Right((ctx, MapStmt(cleanPath, body)))
               }
     }
 

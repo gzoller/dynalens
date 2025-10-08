@@ -58,17 +58,38 @@ object CompileFn:
           s"$name cannot determine operand type"))
 
   /** Ensure both args are numeric at compile time. */
-  def requireNumeric2(args: List[Fn[Any]], name: String, off: Int)
+//  def requireNumeric2(args: List[Fn[Any]], name: String, off: Int)
+//                     (using ctx: ExprContext): Either[DLCompileError, Unit] =
+//    (Utility.rhsType(args.head), Utility.rhsType(args(1))) match
+//      case (Some(lt), Some(rt)) if lt.isNumeric && rt.isNumeric =>
+//        Right(())
+//      case (Some(lt), Some(rt)) =>
+//        Left(DLCompileError(off,
+//          s"$name requires numeric operands, found ${lt.typeName} and ${rt.typeName}"))
+//      case _ =>
+//        Left(DLCompileError(off,
+//          s"$name cannot determine operand types"))
+
+  def requireNumeric2(args: List[Fn[?]], method: String, offset: Int)
                      (using ctx: ExprContext): Either[DLCompileError, Unit] =
-    (Utility.rhsType(args.head), Utility.rhsType(args(1))) match
-      case (Some(lt), Some(rt)) if lt.isNumeric && rt.isNumeric =>
+    val types = args.map(a => Utility.rhsType(a))
+    println(s"[requireNumeric2] method=$method")
+    types.zipWithIndex.foreach { case (opt, i) =>
+      println(s"  arg$i -> ${opt.map(_.typeName).getOrElse("<?>")}")
+      println(s"  arg$i full: ${opt}")
+      println(s"  arg$i numeric? ${opt.exists(_.isNumeric)}")
+    }
+
+    (types.headOption, types.lift(1)) match
+      case (Some(Some(l)), Some(Some(r))) if l.isNumeric && r.isNumeric =>
+        println(s"[requireNumeric2] ✅ numeric pair: ${l.typeName}, ${r.typeName}")
         Right(())
-      case (Some(lt), Some(rt)) =>
-        Left(DLCompileError(off,
-          s"$name requires numeric operands, found ${lt.typeName} and ${rt.typeName}"))
-      case _ =>
-        Left(DLCompileError(off,
-          s"$name cannot determine operand types"))
+      case (Some(Some(l)), Some(Some(r))) =>
+        println(s"[requireNumeric2] ❌ non-numeric pair: ${l.typeName}, ${r.typeName}")
+        Left(DLCompileError(offset, s"$method requires numeric operands, found ${l.typeName} and ${r.typeName}"))
+      case other =>
+        println(s"[requireNumeric2] ❌ insufficient args or unresolved types: $other")
+        Left(DLCompileError(offset, s"$method requires numeric operands"))
 
   /** Ensure neither argument is an Option type. */
   def requireNonOptional2(args: List[Fn[Any]], name: String, off: Int)

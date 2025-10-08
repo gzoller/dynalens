@@ -223,6 +223,19 @@ object Utility:
   def rhsType(fn: Fn[?])(using ctx: ExprContext): Option[FieldType] =
     fn match
 
+      case bf: BooleanFn if bf.recv.nonEmpty =>
+        val r = bf.recv.get
+        val ftOpt0 = receiverFieldTypeOf(r)  // <-- NEW
+        val ftOpt = ftOpt0.map {
+          case vt: ValType  => vt.valueType
+          case ft: FieldType => ft
+        }
+        println(s"[rhsType/recv] ${bf.getClass.getSimpleName} resolved recv FieldType = $ftOpt")
+        ftOpt.orElse {
+          // your previous fallback logic, if any
+          Utility.rhsType(r)
+        }
+
       case f: BlockFn[?] =>
         // return type of the last expression in the block
         rhsType(f.finalFn)
@@ -313,7 +326,13 @@ object Utility:
               ctx.symbols.collectFirst { case scope if scope.contains(normalized) => scope(normalized) } match
                 case Some(vt: ValType) => Some(vt)
                 case Some(ft)          => Some(ft)
-                case None              => None
+                case None =>
+                  // --- NEW FALLBACK ---
+                  if f.isOptional then
+                    println(s"[DEBUG rhsType:GetFn] inferred OptionType for unresolved optional path: $normalized")
+                    Some(OptionType(normalized, ScalarType("", "scala.Any"), "scala.Option"))
+                  else
+                    None
         }
 
       case v: ValType =>
@@ -337,9 +356,7 @@ object Utility:
             if !cfn.accepts(recvType)(using ctx) then
               println(s"[rhsType Fn] receiver ${recvType.typeName} not accepted by ${cfn.name}")
               // Better human-facing error message
-              throw DynaLensError(
-                s"Method '$methodName' cannot be applied to receiver of type ${recvType.typeName}"
-              )
+              return None
 
             // --- Instrumentation: check accepts before args ---
             val accepts = cfn.accepts(recvType)(using ctx)
@@ -431,6 +448,22 @@ object Utility:
       case Some(ft) => ft
       case None => ScalarType("this", "scala.Any")
 
+  def receiverFieldTypeOf(r: Fn[?])(using ctx: ExprContext): Option[FieldType] = {
+    r match {
+      case g: GetFn =>
+        // 1) prefer bound symbol/val
+        val fromCtx = ctx.symbols.collectFirst {
+          case scope if scope.contains(g.path) => scope(g.path)
+        }
+        // 2) fallback to schema (top-level fields)
+        fromCtx.orElse(Utility.elementSchemaFor(g.path, ctx.schema))
+
+      case _ =>
+        // If the receiver is itself a method chain or something, ask rhsType
+        Utility.rhsType(r)
+    }
+  }
+
   def containsThis(fn: Fn[?]): Boolean =
     fn match
       case GetFn("this", _, _) => true
@@ -495,6 +528,10 @@ object Utility:
     (lhs, rhs) match {
       // ----- identical types quickly short-circuit -----
       case _ if lhs == rhs => true
+
+      // Allow assigning NoneFn (Option[Any]) to any OptionType
+      case (OptionType(_, _, _), OptionType(_, ScalarType(_, "scala.Any"), _)) =>
+        true
 
       // ----- simple scalars -----
       case (ScalarType(_, lt), ScalarType(_, rt)) =>
@@ -757,24 +794,6 @@ object Utility:
       fieldType = entrySchema,
       parentFn = Some(GetFn(recvPath, isOptional = false))
     )
-
-  /** Ensure the final segment of a list-like LHS has an explicit [] (or []? for OptionalList). */
-  def addWildcardToListLike(path: String)(using ctx: ExprContext): String =
-    val alreadyIndexed = path.matches(""".*\[(\d+)?\]\??$""")
-    if alreadyIndexed then
-      path
-    else
-      def appendSuffix(suffix: String): String =
-        val i = path.lastIndexOf('.')
-        if i >= 0 then
-          path.substring(0, i + 1) + path.substring(i + 1) + suffix
-        else
-          path + suffix
-
-      getPathType(path) match
-        case OptionType(_, inner: ListType, _) => appendSuffix("[]?")
-        case _: ListType                       => appendSuffix("[]")
-        case _                                  => path
 
   def hasListSegment(path: String): Boolean =
     path.split("\\.").exists(_.matches(""".*\[(\d+)?\]\??$"""))

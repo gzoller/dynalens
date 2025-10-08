@@ -146,27 +146,61 @@ object CNotFn extends CompileFn[NotFn]:
 
 
 object CIsDefinedFn extends CompileFn[IsDefinedFn]:
-  val name: String = "isDefined"
-  override val builtIn: Boolean = false
+  val name = "isDefined"
+  override val builtIn = false
+  val minArgs = 0
+  override val maxArgs = 0
 
-  val minArgs: Int = 0
-  override val maxArgs: Int = 0
+  private def asTarget(recv: Option[Fn[Any]], args: List[Fn[Any]]): Either[DLCompileError, Fn[Any]] =
+    recv.orElse(args.headOption)
+      .toRight(DLCompileError(0, "isDefined() has no receiver"))
 
   def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean =
+    println("ZZZ: "+receiver)
     receiver match
-      case _: OptionType => true
-      case _             => false
+      case OptionType(_, inner, _) =>
+        // Allow isDefined on Option[List] or Option[Map]
+        inner match
+          case _: ListType | _: MapType => true
+          case _ => true // also allow plain Option
+      case _: ListType => true
+      case _: MapType => true
+      case _ => false
 
-  def resultType(receiver: FieldType, args: List[FieldType])
-                (using ctx: ExprContext): FieldType =
+//  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean =
+//    receiver.isInstanceOf[OptionType] // keep this strict; build() will find the real recv
+
+  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
     ScalarType("", "scala.Boolean")
 
   def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    Right(IsDefinedFn(recv))
+    asTarget(Option(recv), args).map(IsDefinedFn.apply)
 
-  override def validate(fn: Fn[?])(using ctx: ExprContext)
-  : Either[DLCompileError, Unit] =
-    Right(()) // could add extra checks, but `accepts` guards already
+  // in CIsDefinedFn (CompileFn for isDefined)
+  override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] = {
+    println("[VALIDATE: isDefined] entering validate() --------------------")
+    println(s"[VALIDATE: isDefined] ctx.symbols depth=${ctx.symbols.size}")
+    fn.recv match {
+      case Some(r) =>
+        println(s"[VALIDATE: isDefined] recv class = ${r.getClass.getName}")
+        r match {
+          case g: GetFn =>
+            println(s"[VALIDATE: isDefined] GetFn path = ${g.path}")
+            val fromCtx = ctx.symbols.collectFirst {
+              case scope if scope.contains(g.path) => scope(g.path)
+            }
+            println(s"[VALIDATE: isDefined] lookup from ctx = $fromCtx")
+            val fromSchema = Utility.elementSchemaFor(g.path, ctx.schema)
+            println(s"[VALIDATE: isDefined] lookup from schema = $fromSchema")
+          case _ =>
+            println(s"[VALIDATE: isDefined] recv not GetFn, class=${r.getClass.getSimpleName}")
+        }
+      case None =>
+        println("[VALIDATE: isDefined] recv is None!")
+    }
+    // then your existing logic here
+    super.validate(fn)
+  }
 
 
 object CStartsWithFn extends CompileFn[StartsWithFn]:

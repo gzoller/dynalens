@@ -14,20 +14,86 @@ object CConsFn extends CompileFn[ConsFn]:
 
   override def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
     (args.headOption, args.lift(1)) match
-      // elem :: list
-      case (Some(elem: ScalarType), Some(list@ListType(_, e, container))) =>
-        val outElem =
-          if e.typeName == "scala.Any" then elem else e
+      case (Some(elem: ScalarType), Some(list @ ListType(_, e, container))) =>
+        val outElem = if e.typeName == "scala.Any" then elem else e
         ListType("", outElem, container)
 
-      // list1 :: list2  (concatenate) – prefer a concrete element if either side is Any
-      case (Some(list1@ListType(_, e1, c1)), Some(list2@ListType(_, e2, c2))) =>
+      case (Some(list1 @ ListType(_, e1, c1)), Some(list2 @ ListType(_, e2, c2))) =>
         val outElem =
           if e1.typeName == "scala.Any" then e2
           else if e2.typeName == "scala.Any" then e1
           else e2
         ListType("", outElem, c2)
 
+      // 👇 NEW CASE: allow elem :: elem (promote rhs)
+      case (Some(_: ScalarType), Some(_: ScalarType)) =>
+        ListType("", ScalarType("", "scala.Any"), "scala.collection.immutable.List")
+
+      case _ =>
+        ListType("", ScalarType("", "scala.Any"), "scala.collection.immutable.List")
+
+  override def validate(fn: Fn[?])(using ctx: ExprContext) =
+    fn match
+      case c: ConsFn =>
+        (Utility.rhsType(c.left), Utility.rhsType(c.right)) match
+          case (Some(elem: ScalarType), Some(ListType(_, e, _))) =>
+            if e.typeName == "scala.Any" || e.typeName == elem.typeName then Right(())
+            else Left(DLCompileError(0, s":: requires matching element/list types, found ${elem.typeName} and List[${e.typeName}]"))
+
+          case (Some(ListType(_, e1, _)), Some(ListType(_, e2, _))) =>
+            if e1.typeName == "scala.Any" || e2.typeName == "scala.Any" || e1.typeName == e2.typeName then Right(())
+            else Left(DLCompileError(0, s":: requires lists of same element type, found List[${e1.typeName}] and List[${e2.typeName}]"))
+
+          case (Some(_: ScalarType), Some(_: ScalarType)) =>
+            Right(())
+
+          case (Some(lt), Some(rt)) =>
+            Left(DLCompileError(0, s":: requires element :: list or list :: list, found ${lt.typeName} and ${rt.typeName}"))
+
+          case _ =>
+            Left(DLCompileError(0, ":: cannot determine operand types"))
+      case _ => Right(())
+
+  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, ConsFn] =
+    (args.headOption, args.lift(1)) match
+      // 👇 promote scalar :: scalar → scalar :: List(scalar)
+      case (Some(left), Some(right)) =>
+        val rightType = Utility.rhsType(right)
+        rightType match
+          case Some(_: ListType) =>
+            Right(ConsFn(left, right))
+          case Some(_: ScalarType) =>
+            Right(ConsFn(left, ConstantFn(List(right)))) // promote to list
+          case _ =>
+            Right(ConsFn(left, right))
+      case _ =>
+        Left(DLCompileError(0, s"$name missing right arg"))
+
+        /*
+object CConsFn extends CompileFn[ConsFn]:
+  val name = "::"
+  val minArgs = 2
+  override val builtIn = true
+
+  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
+
+  override def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
+    (args.headOption, args.lift(1)) match
+      // elem :: list
+      case (Some(elem: ScalarType), Some(list @ ListType(_, e, container))) =>
+        val outElem =
+          if e.typeName == "scala.Any" then elem else e
+        ListType("", outElem, container)
+
+      // list1 :: list2 (concatenate)
+      case (Some(list1 @ ListType(_, e1, c1)), Some(list2 @ ListType(_, e2, c2))) =>
+        val outElem =
+          if e1.typeName == "scala.Any" then e2
+          else if e2.typeName == "scala.Any" then e1
+          else e2
+        ListType("", outElem, c2)
+
+      // fallback
       case _ =>
         ListType("", ScalarType("", "scala.Any"), "scala.collection.immutable.List")
 
@@ -40,13 +106,14 @@ object CConsFn extends CompileFn[ConsFn]:
             if e.typeName == "scala.Any" || e.typeName == elem.typeName then Right(())
             else Left(DLCompileError(0, s":: requires matching element/list types, found ${elem.typeName} and List[${e.typeName}]"))
 
-          // list :: list – allow Any as a wildcard on either side
+          // list :: list
           case (Some(ListType(_, e1, _)), Some(ListType(_, e2, _))) =>
             if e1.typeName == "scala.Any" || e2.typeName == "scala.Any" || e1.typeName == e2.typeName then Right(())
             else Left(DLCompileError(0, s":: requires lists of same element type, found List[${e1.typeName}] and List[${e2.typeName}]"))
 
-          case (Some(lt), Some(rt)) =>
-            Left(DLCompileError(0, s":: requires element :: list or list :: list, found ${lt.typeName} and ${rt.typeName}"))
+          // promote when RHS isn't list
+          case (Some(lt), Some(rt)) if !rt.isInstanceOf[ListType] =>
+            Right(())
 
           case _ =>
             Left(DLCompileError(0, ":: cannot determine operand types"))
@@ -57,8 +124,25 @@ object CConsFn extends CompileFn[ConsFn]:
              args: List[Fn[Any]]
            )(using ctx: ExprContext): Either[DLCompileError, ConsFn] =
     (args.headOption, args.lift(1)) match
-      case (Some(left), Some(right)) => Right(ConsFn(left, right))
-      case _ => Left(DLCompileError(0, s"$name missing right arg"))
+      // Normal case: elem :: list
+      case (Some(left), Some(right)) =>
+        Right(ConsFn(left, right))
+
+      // Single right operand (e.g. "a" :: "b") – promote to singleton list
+      case (Some(left), None) =>
+        val promoted = promoteToList(left).asInstanceOf[Fn[Any]]
+        Right(ConsFn(left, promoted))
+
+      case _ =>
+        Left(DLCompileError(0, s"$name missing right arg"))
+
+  private def promoteToList(fn: Fn[Any]): ConstantFn[List[Any]] =
+    fn match
+      case const: ConstantFn[_] =>
+        ConstantFn(List(const.out.asInstanceOf[Any]))
+      case other =>
+        ConstantFn(List(other.asInstanceOf[Any]))
+        */
 
 
 object CKeysFn extends CompileFn[KeysFn]:

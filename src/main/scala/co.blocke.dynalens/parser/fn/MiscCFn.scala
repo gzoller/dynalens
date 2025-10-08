@@ -17,36 +17,36 @@ object CUuidFn extends CompileFn[UUIDFn]:
     Right(UUIDFn())
 
 
-  object CElseFn extends CompileFn[ElseFn]:
-    val name = "else"
-    val minArgs = 1
-    override val maxArgs = 1
+object CElseFn extends CompileFn[ElseFn]:
+  val name = "else"
+  val minArgs = 1
+  override val maxArgs = 1
 
-    def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean =
-      receiver.isInstanceOf[OptionType]
+  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean =
+    receiver.isInstanceOf[OptionType]
 
-    def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
-      receiver match
-        case OptionType(_, inner, _) => inner
-        case _ => ScalarType("", "scala.Any")
+  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
+    receiver match
+      case OptionType(_, inner, _) => inner
+      case _ => ScalarType("", "scala.Any")
 
-    def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-      args.headOption.toRight(DLCompileError(0, "else() requires a default value"))
-        .map(default => ElseFn(recv, default))
+  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
+    args.headOption.toRight(DLCompileError(0, "else() requires a default value"))
+      .map(default => ElseFn(recv, default))
 
-    override def validate(fn: Fn[?])(using ctx: ExprContext) =
-      fn match
-        case e: ElseFn =>
-          (e.recv.flatMap(Utility.rhsType), Utility.rhsType(e.right)) match
-            case (Some(OptionType(_, inner, _)), Some(d)) if inner.typeName == d.typeName =>
-              Right(())
-            case (Some(OptionType(_, inner, _)), Some(d)) =>
-              Left(DLCompileError(0, s"else() type mismatch: expected ${inner.typeName}, got ${d.typeName}"))
-            case (Some(_), _) =>
-              Left(DLCompileError(0, "else() requires an Option receiver"))
-            case _ =>
-              Left(DLCompileError(0, "else() could not resolve types"))
-        case _ => Right(())
+  override def validate(fn: Fn[?])(using ctx: ExprContext) =
+    fn match
+      case e: ElseFn =>
+        (e.recv.flatMap(Utility.rhsType), Utility.rhsType(e.right)) match
+          case (Some(OptionType(_, inner, _)), Some(d)) if inner.typeName == d.typeName =>
+            Right(())
+          case (Some(OptionType(_, inner, _)), Some(d)) =>
+            Left(DLCompileError(0, s"else() type mismatch: expected ${inner.typeName}, got ${d.typeName}"))
+          case (Some(_), _) =>
+            Left(DLCompileError(0, "else() requires an Option receiver"))
+          case _ =>
+            Left(DLCompileError(0, "else() could not resolve types"))
+      case _ => Right(())
 
 
 object CBlockFn extends CompileFn[BlockFn[?]]:
