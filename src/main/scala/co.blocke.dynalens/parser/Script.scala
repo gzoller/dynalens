@@ -28,18 +28,18 @@ import zio.*
 object Script {
 
   def compile(script: String, lens: DynaLens[?]): zio.Task[BlockStmt] =
-    given ExprContext = ExprContext(lens._schema)
+    given ctx: ExprContext = ExprContext(script, lens._schema)
     zio.ZIO
       .fromEither(parseScript(script))
-      .mapError(err => DynaLensError(err.render(script)))
+      .mapError(err => DynaLensError(ctx.posStr, err.render(script)))
 
   def compileNoZIO(script: String, lens: DynaLens[?]): Either[DynaLensError, BlockStmt] =
-    given ExprContext = ExprContext(lens._schema)
-    parseScript(script).left.map(err => DynaLensError(err.render(script)))
+    given ctx: ExprContext = ExprContext(script, lens._schema)
+    parseScript(script).left.map(err => DynaLensError(ctx.posStr, err.render(script)))
 
-  private def parseScript(script: String)(using ExprContext): Either[DLCompileError, BlockStmt] =
+  private def parseScript(script: String)(using exp: ExprContext): Either[DLCompileError, BlockStmt] =
     parse(script, s => Grammar.topLevelBlock(using s)) match {
       case Parsed.Success(astEither, _) => astEither // Either[DLCompileError, BlockStmt]
-      case f: Parsed.Failure            => Left(DLCompileError(f.index, f.trace().longMsg))
+      case f: Parsed.Failure            => Left(DLCompileError(exp.posStr, f.trace().longMsg))
     }
 }

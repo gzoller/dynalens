@@ -16,36 +16,42 @@ trait CompileFn[R <: Fn[?]] {
   /** DSL keyword or symbol (e.g. "filter", "<", "+", "abs") */
   def name: String
 
-  /** True for core language built-ins (like +, <, ::) */
-  def builtIn: Boolean = false
-
   /** True for functions that don't have a receiver, eg now() or uuid() */
   def standalone: Boolean = false
 
   /** Arity requirement. */
   def minArgs: Int
-
   def maxArgs: Int = minArgs // default: exact arity
 
   /** Check if the receiver’s type is acceptable. */
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean
+  def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean
 
   /** The resulting type after applying this function. */
-  def resultType(receiver: FieldType, args: List[FieldType])
+  def resultType(receiver: Receiver, args: List[FieldType])
                 (using ctx: ExprContext): FieldType
 
   /** Phase 1: Build the AST node from argument Fns. */
-  def build(recv: Fn[Any], args: List[Fn[Any]])
+  def build(recv: Receiver, args: List[Fn[Any]])
            (using ctx: ExprContext): Either[DLCompileError, R]
 
   /** Phase 2: Validate semantics and argument types (may refine error messages). */
-  def validate(fn: Fn[?])(using ctx: ExprContext)
-  : Either[DLCompileError, Unit] = Right(())
+  def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit]
 }
 
 
 object CompileFn:
-  def requireNumeric1(arg: Fn[Any], name: String, off: Int)
+
+  private[parser] inline def isOptionalType(ft: FieldType): Boolean =
+    ft match {
+      case OptionType(_, _, _) => true
+      case _ => false
+    }
+
+
+
+  //------------------------ Old
+    /*
+  def requireNumeric1(arg: Fn[?], name: String, off: Int)
                      (using ctx: ExprContext): Either[DLCompileError, Unit] =
     Utility.rhsType(arg) match
       case Some(t) if t.isNumeric =>
@@ -105,30 +111,7 @@ object CompileFn:
         Left(DLCompileError(off,
           s"$name cannot determine operand types"))
 
-  /** Ensure both args are boolean at compile time (for &&, ||). */
-  def requireBoolean2(args: List[Fn[Any]], name: String, off: Int)
-                     (using ctx: ExprContext): Either[DLCompileError, Unit] =
-    (Utility.rhsType(args.head), Utility.rhsType(args(1))) match
-      case (Some(lt), Some(rt)) if lt.typeName == "scala.Boolean" && rt.typeName == "scala.Boolean" =>
-        Right(())
-      case (Some(lt), Some(rt)) =>
-        Left(DLCompileError(off,
-          s"$name requires boolean operands, found ${lt.typeName} and ${rt.typeName}"))
-      case _ =>
-        Left(DLCompileError(off,
-          s"$name cannot determine operand types"))
 
-  /** Ensure a single arg is boolean (for unary !). */
-  def requireBoolean1(arg: Fn[Any], name: String, off: Int)
-                     (using ctx: ExprContext): Either[DLCompileError, Unit] =
-    Utility.rhsType(arg) match
-      case Some(ft) if ft.typeName == "scala.Boolean" => Right(())
-      case Some(ft) =>
-        Left(DLCompileError(off,
-          s"$name requires a boolean operand, found ${ft.typeName}"))
-      case None =>
-        Left(DLCompileError(off,
-          s"$name cannot determine operand type"))
 
   inline def isNum(ft: FieldType): Boolean = ft match
     case ScalarType(_, t) =>
@@ -140,9 +123,5 @@ object CompileFn:
         case _ => false
     case _ => false
 
-  def expectBoolean1(arg: Fn[Any], name: String, off: Int)
-    : Either[DLCompileError, BooleanFn] =
-      arg match
-        case b: BooleanFn => Right(b)
-        case _ =>
-          Left(DLCompileError(off, s"$name requires a boolean operand"))
+
+    */

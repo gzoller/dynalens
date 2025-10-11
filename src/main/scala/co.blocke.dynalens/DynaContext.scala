@@ -93,7 +93,7 @@ def withKeyScoped[R](
   // ── IMPORTANT: defend against a null body ────────────────────────────────
   val safeBody: ZIO[_BiMapRegistry, DynaLensError, R] =
     Option(body).getOrElse(
-      ZIO.fail(DynaLensError("Internal: null body passed to withKeyScoped"))
+      ZIO.fail(DynaLensError("","Internal: null body passed to withKeyScoped"))
     )
 
   safeBody.ensuring(

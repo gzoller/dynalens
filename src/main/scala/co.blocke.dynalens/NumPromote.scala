@@ -46,13 +46,13 @@ object NumPromote {
 
   /** Collect an Iterable[Any] into typed buckets + overall promoted kind. */
   @tailrec
-  def collect(raw: Any, op: String): Either[DynaLensError, Box] = raw match {
+  def collect(raw: Any, op: String, posStr: String): Either[DynaLensError, Box] = raw match {
     case null => Right(Box()) // treat null/None as empty
     case o: Option[?] =>
       o match {
         case None                  => Right(Box())
-        case Some(it: Iterable[?]) => collect(it, op)
-        case Some(x)               => Left(DynaLensError(s"$op() expects a list, got ${x.getClass.getSimpleName} in Some(...)"))
+        case Some(it: Iterable[?]) => collect(it, op, posStr)
+        case Some(x)               => Left(DynaLensError(posStr, s"$op() expects a list, got ${x.getClass.getSimpleName} in Some(...)"))
       }
     case it: Iterable[?] =>
       var hasDouble = false
@@ -69,7 +69,7 @@ object NumPromote {
         val v = iter.next()
         kindOf(v) match {
           case None =>
-            return Left(DynaLensError(s"$op() expects numeric elements; got ${v.getClass.getSimpleName} at index $idx"))
+            return Left(DynaLensError(posStr, s"$op() expects numeric elements; got ${v.getClass.getSimpleName} at index $idx"))
           case Some(KDouble) =>
             hasDouble = true; dbls += v.asInstanceOf[Double]
           case Some(KFloat) =>
@@ -94,7 +94,7 @@ object NumPromote {
       Right(Box(ints.result(), longs.result(), dbls.result(), promoted))
 
     case other =>
-      Left(DynaLensError(s"$op() may only be applied to Iterable types, got ${other.getClass.getSimpleName}"))
+      Left(DynaLensError(posStr, s"$op() may only be applied to Iterable types, got ${other.getClass.getSimpleName}"))
   }
 
   /** Convert the Box to a single homogenous Vector in the promoted kind. */

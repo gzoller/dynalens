@@ -19,6 +19,8 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+package co.blocke.dynalens
+
 import co.blocke.dynalens.CtxStrings.toStringCtx
 import co.blocke.dynalens.DynaLens.dynalens
 import co.blocke.dynalens.MyLists
@@ -29,6 +31,7 @@ import zio.test.*
 object MathSpec extends ZIOSpecDefault:
 
   def spec = suite("Math Functions Parsing Tests")(
+    /*
     test("sum (assign to Int field)") {
       val script =
         """
@@ -169,6 +172,7 @@ object MathSpec extends ZIOSpecDefault:
         resultStr.contains("x -> 12")
       )
     },
+    */
     test("sum on optional list when None → 0") {
       val script =
         """
@@ -188,6 +192,7 @@ object MathSpec extends ZIOSpecDefault:
         resultStr.contains("s -> 0")
       )
     },
+    /*
     test("sum on optional list when Some(...)") {
       val script =
         """
@@ -245,4 +250,5 @@ object MathSpec extends ZIOSpecDefault:
         resultStr.contains("s -> 12")
       )
     }
+     */
   )

@@ -1,0 +1,312 @@
+/*
+ * Copyright (c) 2025 Greg Zoller
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+package co.blocke.dynalens
+
+import zio.*
+
+import java.util.Locale
+import NumPromote.*
+import FnUtils.*
+
+import scala.annotation.tailrec
+
+
+
+case class GetFn(
+                  path: String,
+                  override val isOptional: Boolean,
+                  override val recv: Option[Fn[?]] = None) extends Fn[Any] {
+
+  import Path.* // for parsePath/PathElement/Field/IndexedField/partialPath
+
+  override def withReceiver(r: Fn[?]): Fn[Any] =
+    copy(recv = Some(r)).asInstanceOf[Fn[Any]]
+  override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
+
+  // soften only "missing" style failures when this path is optional
+  private inline def softMissing[A](zio: ZIO[_BiMapRegistry, DynaLensError, A]): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    if (isOptional)
+      zio.either.flatMap {
+        case Right(v) => ZIO.succeed(v)
+        case Left(_) => ZIO.succeed(None) // return None for missing optional
+      }
+    else zio.asInstanceOf[ZIO[_BiMapRegistry, DynaLensError, Any]]
+
+  // Generic walker that can traverse case classes, Maps and (indexed) collections
+  @tailrec
+  private def walk(obj: Any, parts: List[PathElement]): Either[DynaLensError, Any] = {
+    def fieldOf(p: Product, name: String): Option[Any] = {
+      val names = p.productElementNames.iterator
+      var i = 0
+      while (names.hasNext) {
+        if (names.next() == name) return Some(p.productElement(i))
+        i += 1
+      }
+      None
+    }
+
+    parts match {
+      case Nil => Right(obj)
+
+      case Field(name, _) :: tail =>
+        val nextOpt =
+          obj match {
+            case m: Map[?, ?] => m.asInstanceOf[Map[String, Any]].get(name)
+            case p: Product => fieldOf(p, name)
+            case _ => None
+          }
+        nextOpt match {
+          case Some(next) => walk(next, tail)
+          case None => Left(DynaLensError(s"Field not found: '$name'"))
+        }
+
+      case IndexedField(name, idxOpt, _) :: tail =>
+        val collOpt =
+          obj match {
+            case m: Map[?, ?] => m.asInstanceOf[Map[String, Any]].get(name)
+            case p: Product => fieldOf(p, name)
+            case _ => None
+          }
+
+        collOpt match {
+          case None =>
+            Left(DynaLensError(s"Field not found: '$name'"))
+
+          case Some(coll) =>
+            (coll, idxOpt) match {
+              case (xs: Seq[?], Some(i)) =>
+                val s = xs.asInstanceOf[Seq[Any]]
+                if (i >= 0 && i < s.length) walk(s(i), tail)
+                else Left(DynaLensError(s"Index $i out of bounds for field '$name'"))
+
+              case (_: Seq[?], None) =>
+                Left(DynaLensError(s"Wildcard index not allowed in value context for '$name[]'"))
+
+              case _ =>
+                Left(DynaLensError(s"Field '$name' is not indexable"))
+            }
+        }
+    }
+  }
+
+  private def getFromTop(fullPath: String, ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] = {
+    val parts = parsePath(fullPath)
+    parts match {
+      case Path.IndexedField(base, None, _) :: rest if ctx.contains(base) || ctx.contains(base + "[]") =>
+        if (rest.isEmpty) {
+          ctx.get(base + "[]") match {
+            case Some((coll, _)) => ZIO.succeed(coll)
+            case None =>
+              ctx.get(base) match {
+                case Some((v, _)) => ZIO.succeed(v)
+                case None => if (isOptional) ZIO.succeed(None) else ZIO.fail(DynaLensError(s"Symbol '$base' not found in context"))
+              }
+          }
+        } else {
+          ctx.get(base) match {
+            case Some((v, Some(bl))) => softMissing(bl.get(Path.partialPath(rest), v.asInstanceOf[bl.ThisT])) // soften missing
+            case Some((v, None)) => softMissing(ZIO.fromEither(walk(v, rest))) // soften missing
+            case None => if (isOptional) ZIO.succeed(None) else ZIO.fail(DynaLensError(s"Symbol '$base' not found in context"))
+          }
+        }
+
+      case _ =>
+        ctx.get("top") match {
+          case Some((obj, Some(dynalens))) =>
+            // soften missing from lens
+            softMissing(dynalens.get(fullPath, obj.asInstanceOf[dynalens.ThisT]))
+
+          case Some((obj, None)) =>
+            // soften missing from raw walk
+            softMissing(ZIO.fromEither(walk(obj, parts)))
+
+          case _ =>
+            if (isOptional) ZIO.succeed(None)
+            else ZIO.fail(DynaLensError(s"Missing 'top' in context for path '$fullPath'"))
+        }
+    }
+  }
+
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] = {
+    if (!path.contains('.') && path.endsWith("[]")) {
+      val k = path // exactly "items[]", "orders[]", ...
+      if (ctx.contains(k)) {
+        val v = ctx(k)._1
+        return ZIO.succeed(v)
+      }
+    }
+
+    val parts = parsePath(path)
+
+    parts match {
+      // this.key  (first try "key", then derive from this=(k,v))
+      case Field("this", _) :: Field("key", _) :: Nil =>
+        ctx.valueOf("key").map(ZIO.succeed(_)).getOrElse {
+          ctx.valueOf("this") match {
+            case Some(t: (Any, Any)) => ZIO.succeed(t._1)
+            case Some(me: java.util.Map.Entry[?, ?]) => ZIO.succeed(me.getKey)
+            case _ => if (isOptional) ZIO.succeed(None) else ZIO.fail(DynaLensError("Field not found: 'key'"))
+          }
+        }
+
+      // this.value  (first try "value", then derive from this=(k,v))
+      case Field("this", _) :: Field("value", _) :: Nil =>
+        ctx.valueOf("value").map(ZIO.succeed(_)).getOrElse {
+          ctx.valueOf("this") match {
+            case Some(t: (Any, Any)) => ZIO.succeed(t._2)
+            case Some(me: java.util.Map.Entry[?, ?]) => ZIO.succeed(me.getValue)
+            case _ => if (isOptional) ZIO.succeed(None) else ZIO.fail(DynaLensError("Field not found: 'value'"))
+          }
+        }
+
+      // generic `this.xxx`
+      case Field("this", _) :: rest =>
+        ctx.get("this") match {
+          case Some((root, Some(l))) if rest.nonEmpty =>
+            softMissing(l.get(partialPath(rest), root.asInstanceOf[l.ThisT])) // soften missing
+
+          case Some((root, _)) =>
+            softMissing(ZIO.fromEither(walk(root, rest))) // soften missing
+
+          case None =>
+            // "this" missing is a programming/scope error → hard fail
+            ZIO.fail(DynaLensError("Use of 'this' with no receiver in scope"))
+        }
+
+      case (first@IndexedField(name, idxOpt, _)) :: rest if ctx.contains(name) =>
+        ctx.get(name) match {
+          case Some((v, _)) =>
+            v match {
+              case seq: Seq[?] =>
+                val s = seq.asInstanceOf[Seq[Any]]
+                idxOpt match {
+                  case Some(i) =>
+                    if (i >= 0 && i < s.length) {
+                      val elem = s(i)
+                      if (rest.isEmpty) ZIO.succeed(elem)
+                      else softMissing(ZIO.fromEither(walk(elem, rest))) // soften missing on tail
+                    } else ZIO.fail(DynaLensError(s"Index $i out of bounds for '$name'"))
+                  case None =>
+                    if (rest.isEmpty) ZIO.succeed(s)
+                    else softMissing(ZIO.fromEither(walk(s, rest))) // soften missing on tail
+                }
+
+              case it: Iterable[?] =>
+                val s = it.asInstanceOf[Iterable[Any]].toList
+                idxOpt match {
+                  case Some(i) =>
+                    if (i >= 0 && i < s.length) {
+                      val elem = s(i)
+                      if (rest.isEmpty) ZIO.succeed(elem)
+                      else softMissing(ZIO.fromEither(walk(elem, rest))) // soften missing on tail
+                    } else ZIO.fail(DynaLensError(s"Index $i out of bounds for '$name'"))
+                  case None =>
+                    if (rest.isEmpty) ZIO.succeed(s)
+                    else softMissing(ZIO.fromEither(walk(s, rest))) // soften missing on tail
+                }
+
+              case other =>
+                idxOpt match {
+                  case Some(i) =>
+                    ZIO.fail(DynaLensError(s"Value bound to '$name' is not indexable (${other.getClass.getSimpleName}); cannot use [$i]"))
+                  case None =>
+                    getFromTop(path, ctx) // this already softens appropriately
+                }
+            }
+
+          case None =>
+            getFromTop(path, ctx) // already softens
+        }
+
+      case Path.IndexedField(name, None, _) :: rest if ctx.contains(name + "[]") =>
+        ctx.get(name + "[]") match {
+          case Some((coll: Iterable[?] @unchecked, _)) =>
+            if (rest.isEmpty) ZIO.succeed(coll)
+            else ZIO.fail(
+              DynaLensError(
+                s"Internal: wildcard index for '$name[]' with a remaining path ('${Path.partialPath(rest)}'); " +
+                  s"this should be resolved via an element context, not the top lens."
+              )
+            )
+          case Some((other, _)) =>
+            ZIO.fail(DynaLensError(s"Expected iterable bound at '$name[]', found: ${other.getClass.getSimpleName}"))
+          case None =>
+            ZIO.fail(DynaLensError(s"Missing collection binding for '$name[]'"))
+        }
+
+      case first :: rest if ctx.contains(first.name) =>
+        ctx.get(first.name) match {
+          case Some((v, None)) =>
+            first match {
+              case IndexedField(_, Some(i), _) =>
+                v match {
+                  case seq: Seq[?] =>
+                    if (i >= 0 && i < seq.length) {
+                      val elem = seq(i)
+                      if (rest.isEmpty) ZIO.succeed(elem)
+                      else softMissing(ZIO.fromEither(walk(elem, rest)))
+                    } else ZIO.fail(DynaLensError(s"Index $i out of bounds for '${first.name}'"))
+                  case other =>
+                    ZIO.fail(DynaLensError(s"Value bound to '${first.name}' is not indexable (${other.getClass.getSimpleName})"))
+                }
+
+              case IndexedField(_, None, _) =>
+                ZIO.fail(DynaLensError(s"Wildcard index not allowed for '${first.name}[]' in value context"))
+
+              case Field(_, _) =>
+                if (rest.isEmpty) ZIO.succeed(v)
+                else softMissing(ZIO.fromEither(walk(v, rest)))
+            }
+
+          case Some((v, Some(boundLens))) =>
+            if (rest.isEmpty) ZIO.succeed(v)
+            else softMissing(boundLens.get(partialPath(rest), v.asInstanceOf[boundLens.ThisT]))
+
+          case None =>
+            ZIO.fail(DynaLensError(s"Field ${first.name} not found in context"))
+        }
+
+      //
+      // fallback to current element (`this`) when present <<<<<<
+      // If no top-level hit for the first segment but we *do* have a `this`
+      // (i.e., we’re inside a per-element context like filter/map),
+      // then resolve the whole path relative to that element, with soft-missing.
+      case segs @ (first :: _)
+        if ctx.get("this").nonEmpty &&
+          this.recv.nonEmpty &&
+          !ctx.contains(first.name) =>
+        println(s"--> In new segs case (relative-only): $segs")
+        ctx.get("this") match {
+          case Some((root, Some(lens))) =>
+            softMissing(lens.get(Path.partialPath(segs), root.asInstanceOf[lens.ThisT]))
+          case Some((root, None)) =>
+            softMissing(ZIO.fromEither(walk(root, segs)))
+          case None =>
+            ZIO.fail(DynaLensError("Use of element-relative path but no 'this' in context"))
+        }
+
+      case _ =>
+        getFromTop(path, ctx)
+    }
+  }
+}
+

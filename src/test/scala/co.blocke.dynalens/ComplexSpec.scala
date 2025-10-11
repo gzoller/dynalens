@@ -19,6 +19,8 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+package co.blocke.dynalens
+
 import co.blocke.dynalens.DynaLens.dynalens
 import co.blocke.dynalens.*
 import zio.*

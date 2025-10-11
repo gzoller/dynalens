@@ -6,15 +6,19 @@ import co.blocke.scala_reflection.RTypeRef
 
 
 sealed trait FieldType {
-  def name: String
+  def fieldName: String
   def typeName: String
   def isNumeric: Boolean = false
   def isStringLike: Boolean = this match
     case ScalarType(_, "java.lang.String")                   => true
-    case ListType(_, ScalarType(_, "java.lang.String"), _)   => true
-    case OptionType(_, ListType(_, ScalarType(_, "java.lang.String"), _), _) => true
+    case ListType(_, ScalarType(_, "java.lang.String"), _, _)   => true
+    case OptionType(_, ListType(_, ScalarType(_, "java.lang.String"), _, _), _) => true
     case ValType(_, inner, _) => inner.isStringLike
     case _                                                   => false
+  def isOptional: Boolean = this match
+    case _: OptionType => true
+    case ValType(_, inner, _) => inner.isOptional
+    case _ => false
 
   /** True if this type can be assigned from that type (e.g. Int <- Int, Option[Int] <- Int, etc.) */
   def conformsTo(other: FieldType): Boolean = (this, other) match
@@ -32,18 +36,18 @@ sealed trait FieldType {
     case (ft, OptionType(_, inner, _))    => ft.conformsTo(inner)
 
     // List element match
-    case (ListType(_, elem, _), ListType(_, otherElem, _)) =>
+    case (ListType(_, elem, _, _), ListType(_, otherElem, _, _)) =>
       elem.conformsTo(otherElem)
 
     // Map key/value match
-    case (MapType(_, k1, v1, _), MapType(_, k2, v2, _)) =>
+    case (MapType(_, k1, v1, _, _), MapType(_, k2, v2, _, _)) =>
       k1.conformsTo(k2) && v1.conformsTo(v2)
 
     // fallback
     case _ => false
 }
 
-case class ScalarType(name: String, typeName: String) extends FieldType:
+case class ScalarType(fieldName: String, typeName: String) extends FieldType:
   override def isNumeric: Boolean =
     Set(
       "scala.Byte", "scala.Short", "scala.Int", "scala.Long",
@@ -53,22 +57,22 @@ case class ScalarType(name: String, typeName: String) extends FieldType:
       "scala.math.BigDecimal", "scala.math.BigInt"
     ).contains(typeName)
 
-case class OptionType(name: String, valueType: FieldType, typeName: String) extends FieldType
-case class ListType(name: String, elementType: FieldType, typeName: String) extends FieldType
-case class MapType(name: String, keyType: FieldType, valueType: FieldType, typeName: String) extends FieldType
+case class OptionType(fieldName: String, valueType: FieldType, typeName: String) extends FieldType
+case class ListType(fieldName: String, elementType: FieldType, typeName: String, override val isOptional: Boolean = false) extends FieldType
+case class MapType(fieldName: String, keyType: FieldType, valueType: FieldType, typeName: String, override val isOptional: Boolean = false) extends FieldType
 case class ClassType(
-                      name: String,
+                      fieldName: String,
                       typeName: String,
                       fields: List[FieldType]
                     ) extends FieldType
 case class SealedTraitType(
-                            name: String,
+                            fieldName: String,
                             typeName: String,
                             fields: List[FieldType],
                             subTypes: List[String]
                           ) extends FieldType
 
-case class ValType(name: String, valueType: FieldType, typeName: String) extends FieldType:
+case class ValType(fieldName: String, valueType: FieldType, typeName: String) extends FieldType:
   override def isNumeric: Boolean = valueType.isNumeric
   override def isStringLike: Boolean = valueType.isStringLike
 
@@ -92,9 +96,9 @@ object Schema:
   def build(ref: RTypeRef[?]): ClassType = ref match
     case sc: ScalaClassRef[?] =>
       ClassType(
-        name     = "",                      // root has no parent field name
-        typeName = ref.name,
-        fields   = sc.fields.map(f => fieldTypeFromRTypeRef(f.name, f.fieldRef))
+        fieldName = "",                      // root has no parent field name
+        typeName  = ref.name,
+        fields    = sc.fields.map(f => fieldTypeFromRTypeRef(f.name, f.fieldRef))
       )
     case tr: TraitRef[?] if tr.isSealed =>
       val commonFields =
@@ -106,11 +110,11 @@ object Schema:
         }
 
       ClassType(
-        name     = tr.name,
-        typeName = tr.name,
-        fields   = List(
+        fieldName = "",
+        typeName  = tr.name,
+        fields    = List(
           SealedTraitType(
-            name      = tr.name,
+            fieldName = "",
             typeName  = tr.name,
             fields    = commonFields,  // shared fields like `name`
             subTypes  = subTypes
@@ -131,7 +135,7 @@ object Schema:
     segments match
       case Nil => None
       case head :: tail =>
-        node.fields.find(_.name == head) match
+        node.fields.find(_.fieldName == head) match
           case Some(ft) =>
             ft match
               case o: OptionType =>
@@ -155,7 +159,7 @@ object Schema:
       case c: ClassType =>
         // preserve the Option wrapper, but still walk inside
         resolvePath(c, tail, optDepth + 1)
-          .map(r => r.copy(fieldType = OptionType(o.name, r.fieldType, o.typeName)))
+          .map(r => r.copy(fieldType = OptionType(o.fieldName, r.fieldType, o.typeName)))
       case other =>
         if tail.isEmpty then
           // keep the OptionType itself (not just inner type)
@@ -196,7 +200,7 @@ object Schema:
     case o: OptionRef[?] =>
       val inner = fieldTypeFromRTypeRef(fieldName, o.optionParamType)
       OptionType(
-        name = fieldName,
+        fieldName = fieldName,
         valueType = inner,
         typeName = "scala.Option"
       )
@@ -205,9 +209,9 @@ object Schema:
     case s: SeqRef[?] =>
       val elem = fieldTypeFromRTypeRef(fieldName, s.elementRef)
       ListType(
-        name = fieldName,
+        fieldName = fieldName,
         elementType = elem,
-        typeName = s.typedName.toString // "scala.List", "scala.Seq", "scala.Array"
+        typeName = s.typedName.toString // "scala.List", "scala.Seq", "scala.Array",
       )
 
     // --- Map[K,V] ---
@@ -215,7 +219,7 @@ object Schema:
       val key = fieldTypeFromRTypeRef(fieldName, m.elementRef)
       val value = fieldTypeFromRTypeRef(fieldName, m.elementRef2)
       MapType(
-        name = fieldName,
+        fieldName = fieldName,
         keyType = key,
         valueType = value,
         typeName = m.typedName.toString // "scala.collection.immutable.Map", etc.
@@ -241,7 +245,7 @@ object Schema:
         sc.fields.map(f => fieldTypeFromRTypeRef(f.name, f.fieldRef))
 
       ClassType(
-        name     = fieldName,
+        fieldName = fieldName,
         typeName = sc.name,
         fields   = fieldTypes
       )

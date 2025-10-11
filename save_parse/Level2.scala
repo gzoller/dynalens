@@ -19,9 +19,6 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-package co.blocke.dynalens
-package parser
-
 import fastparse.*
 import NoWhitespace.*
 import fn.*

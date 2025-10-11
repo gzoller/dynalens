@@ -3,111 +3,91 @@ package parser
 package fn
 
 
+import co.blocke.dynalens.fn.*
+
+
 /**
  * Base for all comparison-style Boolean CFns (<, >, <=, >=, ==, !=).
  * Handles the two-phase validation pattern (defer until both operand types known),
  * and standard numeric + non-optional enforcement.
  */
-// Base
-abstract class ComparisonCFn[T <: OperandBinaryFn[?]](val op: String)
-  extends CompileFn[T]:
+trait ComparisonCFn[R <: Fn[?]] extends CompileFn[R]:
 
-  override val name: String = op
-  override val builtIn: Boolean = true
-  val minArgs: Int = 2
-  override val maxArgs: Int = 2
+  override val minArgs: Int = 1
+  override val maxArgs: Int = 1
+  override val standalone = false
 
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
+  protected def checkOperand(ft: FieldType)(using ctx: ExprContext): Either[DLCompileError, Unit] =
+    if !Utility.isComparableType(ft) then
+      Left(DLCompileError(ctx.posStr,
+        s"Operator '$name' requires comparable operands, found ${ft.typeName}"
+      ))
+    else if CompileFn.isOptionalType(ft) then
+      Left(DLCompileError(ctx.posStr,
+        s"Operator '$name' cannot be applied to optional values of type ${ft.typeName}. " +
+          "Use `.else(default)` or check `isDefined()` first."
+      ))
+    else Right(())
 
-  def resultType(receiver: FieldType, args: List[FieldType])
-                (using ctx: ExprContext): FieldType =
+  override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
+    Utility.rhsType(receiver.fn) match
+      case Some(ft) => checkOperand(ft).isRight
+      case None => false
+
+  override def resultType(recv: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType =
     ScalarType("", "scala.Boolean")
 
-  override def validate(fn: Fn[?])
-                       (using ctx: ExprContext): Either[DLCompileError, Unit] =
-    fn match
-      case cmp: OperandBinaryFn[?] =>
-        val lhsOpt = Utility.rhsType(cmp.left)
-        val rhsOpt = Utility.rhsType(cmp.right)
-        Validation.deferIfUnknown(lhsOpt, rhsOpt, validatePair)
-      case _ => Right(())
-
-  /** Shared comparison operand validation once both types are known */
-  protected def validatePair(lhs: FieldType, rhs: FieldType)
-                            (using ctx: ExprContext): Either[DLCompileError, Unit] =
-    for
-      // Disallow optional operands
-      _ <- (lhs, rhs) match
-        case (_: OptionType, _) | (_, _: OptionType) =>
-          Left(DLCompileError(0, s"$name operands cannot be optional"))
-        case _ => Right(())
-
-      // Require both numeric
-      _ <- if lhs.isNumeric && rhs.isNumeric then Right(())
-      else Left(DLCompileError(0,
-        s"$name operands must be numeric (found ${lhs.typeName}, ${rhs.typeName})"
-      ))
-    yield ()
+  override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
+    val recvFTOpt = Utility.rhsType(fn.recv)
+    val argFTOpts = fn.args.map(Utility.rhsType)
+    if recvFTOpt.isEmpty || argFTOpts.exists(_.isEmpty) then
+      Left(DLCompileError(ctx.posStr, s"Cannot determine operand type(s) for '$name'"))
+    else
+      for {
+        _ <- checkOperand(recvFTOpt.get)
+        _ <- argFTOpts.foldLeft[Either[DLCompileError, Unit]](Right(()))((acc, opt) =>
+          acc.flatMap(_ => checkOperand(opt.get))
+        )
+      } yield ()
 
 
-abstract class EqualityCFn[T <: OperandBinaryFn[?]](val opName: String)
-  extends ComparisonCFn[T](opName):
-
-  override protected def validatePair(lhs: FieldType, rhs: FieldType)
-                                     (using ctx: ExprContext): Either[DLCompileError, Unit] =
-    // Non-optional only; equality can compare any compatible scalar types
-    (lhs, rhs) match
-      case (_: OptionType, _) | (_, _: OptionType) =>
-        Left(DLCompileError(0, s"$opName operands cannot be optional"))
-      case _ =>
-        Right(())
+object CLessThanFn extends ComparisonCFn[LessThanFn]:
+  val name = "<"
+  def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
+    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
+    else Right(LessThanFn(recv.fn, args.head, ctx.posStr))
 
 
-//--------------------------------------------------------------------------
-
-object CLessThanFn extends ComparisonCFn[LessThanFn]("<"):
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left  <- args.headOption.toRight(DLCompileError(0, "< missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "< missing right arg"))
-    yield LessThanFn(left, right)
+object CLessEqualFn extends ComparisonCFn[LessThanOrEqualFn]:
+  val name = "<="
+  def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
+    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
+    else Right(LessThanOrEqualFn(recv.fn, args.head, ctx.posStr))
 
 
-object CLessThanOrEqualFn extends ComparisonCFn[LessThanOrEqualFn]("<="):
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, "<= missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "<= missing right arg"))
-    yield LessThanOrEqualFn(left, right)
+object CGreaterThanFn extends ComparisonCFn[GreaterThanFn]:
+  val name = ">"
+  def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
+    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
+    else Right(GreaterThanFn(recv.fn, args.head, ctx.posStr))
 
 
-object CGreaterThanFn extends ComparisonCFn[GreaterThanFn](">"):
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, "> missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "> missing right arg"))
-    yield GreaterThanFn(left, right)
+object CGreaterEqualFn extends ComparisonCFn[GreaterThanOrEqualFn]:
+  val name = ">="
+  def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
+    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
+    else Right(GreaterThanOrEqualFn(recv.fn, args.head, ctx.posStr))
 
 
-object CGreaterThanOrEqualFn extends ComparisonCFn[GreaterThanOrEqualFn](">="):
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, ">= missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, ">= missing right arg"))
-    yield GreaterThanOrEqualFn(left, right)
+object CEqualFn extends ComparisonCFn[EqualFn]:
+  val name = "=="
+  def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
+    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
+    else Right(EqualFn(recv.fn, args.head, ctx.posStr))
 
 
-object CEqualFn extends EqualityCFn[EqualFn]("=="):
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left  <- args.headOption.toRight(DLCompileError(0, "== missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "== missing right arg"))
-    yield EqualFn(left, right)
-
-
-object CNotEqualFn extends EqualityCFn[NotEqualFn]("!="):
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left  <- args.headOption.toRight(DLCompileError(0, "!= missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "!= missing right arg"))
-    yield NotEqualFn(left, right)
+object CNotEqualFn extends ComparisonCFn[NotEqualFn]:
+  val name = "!="
+  def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
+    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
+    else Right(NotEqualFn(recv.fn, args.head, ctx.posStr))

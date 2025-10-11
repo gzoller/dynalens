@@ -22,22 +22,18 @@
 package co.blocke.dynalens
 package parser
 
-case class Receiver(
-                     name: String = "this",
-                     fields: Map[String, FieldType], // element schema for the receiver
-                     fieldType: FieldType,           // full FieldType for this receiver
-                     parentFn: Option[Fn[Any]] = None
-                   ):
-  def asFn: Option[Fn[Any]] = parentFn
+import co.blocke.dynalens.fn.GetFn
 
 case class ExprContext(
+                        scriptText: String,
                         schema: ClassType,
                         symbols: List[Map[String, FieldType]] = Nil,
-                        receiver: Option[Receiver] = None
+                        receiver: Option[Receiver] = None,
+                        pos: Int = 0
                       ) {
 
   def pushScope(fields: List[FieldType]): ExprContext =
-    copy(symbols = fields.map(ft => ft.name -> ft).toMap :: symbols)
+    copy(symbols = fields.map(ft => ft.fieldName -> ft).toMap :: symbols)
 
   def resolveSymbol(name: String): Option[FieldType] =
     symbols.collectFirst { case m if m.contains(name) => m(name) }
@@ -47,24 +43,18 @@ case class ExprContext(
     val updatedHead = symbols.headOption.getOrElse(Map.empty) ++ newVals
     copy(symbols = updatedHead :: symbols.drop(1))
 
+  // For error messages
+  def posStr: String =
+    val lines = scriptText.take(pos).split('\n')
+    val line = lines.length
+    val col = lines.lastOption.map(_.length).getOrElse(0) + 1
+    s"[$line,$col]"
+
   /** Install a new receiver from a given schema path. */
   def withReceiverFromPath(path: String): ExprContext =
-    // `getPathType` already returns the exact FieldType, never Option
     val targetField: FieldType = Utility.getPathType(path)(using this)
-
-    // `elementSchemaFor` already returns a List[FieldType]
-    val elemSchema: List[FieldType] =
-      Utility.elementSchemaFor(path, schema).map {
-        case c: ClassType => c.fields                    // class: list its fields
-        case f           => List(f)                      // scalar or other: wrap in list
-      }.getOrElse(Nil)
-
-    val recv = Receiver(
-      name      = "this",
-      fields    = elemSchema.map(ft => ft.name -> ft).toMap,
-      fieldType = targetField
-    )
-    copy(receiver = Some(recv))
+    val fn = GetFn(path, targetField.isOptional, co.blocke.dynalens.fn.RootFn, posStr)
+    copy(receiver = Some(NamedReceiver(path, targetField, fn)))
 
   /** Directly set a receiver object. */
   def withReceiver(recv: Receiver): ExprContext =
@@ -87,5 +77,6 @@ case class ExprContext(
        |  schema   = $schemaStr
        |  symbols  = $symsStr
        |  receiver = $recvStr
+       |  pos      = $pos
        |)""".stripMargin
 }

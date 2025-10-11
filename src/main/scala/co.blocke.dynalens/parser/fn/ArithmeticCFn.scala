@@ -2,209 +2,187 @@ package co.blocke.dynalens
 package parser
 package fn
 
+import co.blocke.dynalens.fn.*
 
-// ---------------------------------
-// Addition (+)
-// ---------------------------------
-object CPlusFn extends CompileFn[Fn[Any]]:
-  val name     = "+"
-  override val builtIn = true
-  val minArgs  = 2
-  override val maxArgs = 2
+/** Shared logic for numeric binary / unary operators. */
+trait ArithmeticCFn[R <: Fn[?]] extends CompileFn[R]:
 
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean =
-    true // '+' doesn't depend on the receiver
+  override val minArgs: Int = 1
+  override val maxArgs: Int = 1
 
-  def resultType(receiver: FieldType, args: List[FieldType])
-                (using ctx: ExprContext): FieldType =
-    (args.headOption, args.lift(1)) match
-      case (Some(l), Some(r)) if l.isNumeric && r.isNumeric =>
-        ScalarType("", Utility.numericPromote(l.typeName, r.typeName))
-      case (Some(l), Some(r)) if l.isStringLike || r.isStringLike =>
-        ScalarType("", "java.lang.String")
-      case _ =>
-        ScalarType("", "scala.Any")
+  /** Strong, user-facing errors for arithmetic operands. */
+  protected def checkOperand(ft: FieldType)(using ctx: ExprContext): Either[DLCompileError, Unit] =
+    if !Validation.isNumericType(ft) then
+      Left(DLCompileError(ctx.posStr, s"Operator '$name' requires numeric operand(s), found ${ft.typeName}"))
+    else if CompileFn.isOptionalType(ft) then
+      Left(DLCompileError(ctx.posStr, s"Operator '$name' cannot be applied to optional value of type ${ft.typeName}. Use `.else(default)` or check `isDefined()` first."))
+    else
+      Right(())
 
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left  <- args.headOption.toRight(DLCompileError(0, "+ missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "+ missing right arg"))
-    yield {
-      (Utility.rhsType(left), Utility.rhsType(right)) match
-        case (Some(lt), Some(rt)) if lt.isStringLike || rt.isStringLike =>
-          ConcatFn(List(left, right)).asInstanceOf[Fn[Any]]   // string concat
+  /** Phase 0/1 accept check using Receiver context. */
+  override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
+    Validation.isNumericType(receiver.ftype)
+
+  /** Numeric promotion always via receiver + args. */
+  override def resultType(recv: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType =
+    val typeNames = recv.ftype.typeName :: argTypes.map(_.typeName)
+    ScalarType("", Utility.numericPromote(typeNames*))
+
+  /** Phase 2 semantic verification. */
+  override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
+    val recvFTOpt = Utility.receiverFieldTypeOf(fn.recv)
+    val argFTOpts = fn.args.map(Utility.receiverFieldTypeOf(_))
+    if recvFTOpt.isEmpty || argFTOpts.exists(_.isEmpty) then
+      Left(DLCompileError(ctx.posStr, s"Cannot determine operand type(s) used with operator '$name'"))
+    else
+      val recvFT = recvFTOpt.get
+      val argFTs = argFTOpts.flatten
+      argFTs.foldLeft(checkOperand(recvFT))((acc, ft) => acc.flatMap(_ => checkOperand(ft)))
+
+
+/** ---------------------------------
+ *  Addition (+)
+ *  ---------------------------------
+ */
+object CPlusFn extends CompileFn[Fn[?]]:
+  val name = "+"
+  // builtIn intentionally omitted per API update
+  override val minArgs = 1
+  override val maxArgs = 1
+
+  def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
+    receiver.ftype.isStringLike || Validation.isNumericType(receiver.ftype)
+
+  override def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
+    if recv.ftype.isStringLike then ScalarType("", "java.lang.String")
+    else
+      val names = recv.ftype.typeName :: args.map(_.typeName)
+      ScalarType("", Utility.numericPromote(names*))
+
+  override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, Fn[?]] =
+    if args.size != 1 then
+      Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
+    else
+      val recvType  = receiver.ftype
+      val argFn     = args.head
+      val argTypeOp = Utility.receiverFieldTypeOf(argFn)
+
+      (recvType.isStringLike, argTypeOp.exists(_.isStringLike)) match
+        case (true, _) | (_, true) =>
+          Right(ConcatFn(receiver.fn, args, ctx.posStr).asInstanceOf[Fn[?]])
+        case _ if recvType.isNumeric && argTypeOp.exists(_.isNumeric) =>
+          Right(AddFn(receiver.fn, args, ctx.posStr))
         case _ =>
-          AddFn(left, right)      // numeric (default)
-    }
+          Left(DLCompileError(ctx.posStr,
+            s"Operator '+' not valid between ${recvType.typeName} and ${argTypeOp.map(_.typeName).getOrElse("unknown")}"))
 
   override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
     fn match
-      case AddFn(l, r) =>
-        println(s"[validate +] AST=($l , $r)")
-        (Utility.rhsType(l), Utility.rhsType(r)) match
-          case (Some(lt), Some(rt)) if lt.isNumeric && rt.isNumeric =>
-            Right(())
+      case a: AddFn =>
+        (Utility.rhsType(a.recv), Utility.rhsType(a.args.head)) match
+          case (Some(lt), Some(rt)) if lt.isNumeric && rt.isNumeric => Right(())
           case (Some(lt), Some(rt)) =>
-            Left(DLCompileError(0,
-              s"+ requires numeric operands, found ${lt.typeName} and ${rt.typeName}"))
-          case _ =>
-            Left(DLCompileError(0, "+ cannot determine operand types"))
-
-      case ConcatFn(List(l, r)) =>
-        (Utility.rhsType(l), Utility.rhsType(r)) match
-          case (Some(lt), Some(rt)) if lt.isStringLike || rt.isStringLike =>
-            Right(())
+            Left(DLCompileError(ctx.posStr, s"+ requires numeric operands, found ${lt.typeName} and ${rt.typeName}"))
+          case _ => Left(DLCompileError(ctx.posStr, "+ cannot determine operand types"))
+      case c: ConcatFn =>
+        (Utility.rhsType(c.recv), Utility.rhsType(c.args.head)) match
+          case (Some(lt), Some(rt)) if lt.isStringLike || rt.isStringLike => Right(())
           case (Some(lt), Some(rt)) =>
-            Left(DLCompileError(0,
-              s"+ requires string-like operands for concat, found ${lt.typeName} and ${rt.typeName}"))
-          case _ =>
-            Left(DLCompileError(0, "+ cannot determine operand types"))
-
+            Left(DLCompileError(ctx.posStr, s"+ requires string-like operands for concat, found ${lt.typeName} and ${rt.typeName}"))
+          case _ => Left(DLCompileError(ctx.posStr, "+ cannot determine operand types"))
       case _ =>
-        Left(DLCompileError(0, "Unexpected Fn type in +"))
+        Left(DLCompileError(ctx.posStr, "Unexpected Fn type in +"))
 
 
-// ---------------------------------
-// Subtraction (-)
-// ---------------------------------
-object CMinusFn extends CompileFn[Fn[Any]]:
+/** ---------------------------------
+ *  Subtraction (-)
+ *  ---------------------------------
+ */
+object CMinusFn extends CompileFn[Fn[?]]:
   val name = "-"
-  override val builtIn = true
+  // builtIn intentionally omitted per API update
+  override val minArgs = 0
+  override val maxArgs = 1
 
-  val minArgs = 1
-  override val maxArgs = 2
+  def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
+    Validation.isNumericType(receiver.ftype)
 
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
-
-  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
+  override def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
     args match
-      case a :: Nil if a.isNumeric => a
-      case l :: r :: Nil if l.isNumeric && r.isNumeric =>
-        ScalarType("", Utility.numericPromote(l.typeName, r.typeName))
+      case Nil =>
+        ScalarType("", recv.ftype.typeName)
       case _ =>
-        ScalarType("", "scala.Any")
+        val names = recv.ftype.typeName :: args.map(_.typeName)
+        ScalarType("", Utility.numericPromote(names*))
 
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
+  override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, Fn[?]] =
     args match
-      case a :: Nil         => Right(NegateFn(a))
-      case l :: r :: Nil    => Right(SubtractFn(l, r))
-      case _                => Left(DLCompileError(0, s"- requires 1 or 2 args, found ${args.size}"))
+      case Nil      => Right(NegateFn(receiver.fn, ctx.posStr))
+      case _ :: Nil => Right(SubtractFn(receiver.fn, args, ctx.posStr))
+      case _        => Left(DLCompileError(ctx.posStr, "Operator '-' expects 0 or 1 argument(s)"))
 
   override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
     fn match
-      case NegateFn(inner) =>
-        CompileFn.requireNumeric1(inner, "-", 0)
+      case n: NegateFn =>
+        Utility.receiverFieldTypeOf(n.recv) match
+          case Some(ft) if ft.isNumeric && !CompileFn.isOptionalType(ft) =>
+            Right(())
+          case Some(ft) if !ft.isNumeric =>
+            Left(DLCompileError(ctx.posStr, "Unary '-' requires numeric receiver"))
+          case Some(ft) =>
+            Left(DLCompileError(ctx.posStr, "Unary '-' cannot apply to optional"))
+          case None =>
+            Left(DLCompileError(ctx.posStr, "Cannot determine receiver type for unary '-'"))
 
-      case SubtractFn(left, right) =>
-        CompileFn.requireNumeric2(List(left, right), "-", 0)
+      case s: SubtractFn =>
+        (Utility.rhsType(s.recv), Utility.rhsType(s.args.head)) match
+          case (Some(l), Some(r))
+            if l.isNumeric && r.isNumeric &&
+              !CompileFn.isOptionalType(l) && !CompileFn.isOptionalType(r) =>
+            Right(())
+          case (Some(_), Some(_)) =>
+            Left(DLCompileError(ctx.posStr, "Binary '-' requires non-optional numeric operands"))
+          case _ =>
+            Left(DLCompileError(ctx.posStr, "Binary '-' cannot determine operand types"))
 
       case _ =>
-        Left(DLCompileError(0, "Invalid fn passed to CMinusFn"))
+        Left(DLCompileError(ctx.posStr, "Invalid Fn for '-'"))
 
 
-// ---------------------------------
-// Multiplication (*)
-// ---------------------------------
-object CMultiplyFn extends CompileFn[MultiplyFn]:
+/** ---------------------------------
+ *  Multiplication (*)
+ *  ---------------------------------
+ */
+object CMultiplyFn extends ArithmeticCFn[MultiplyFn]:
+  override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
+    Validation.isNumericType(receiver.ftype)
   val name = "*"
-  override val builtIn = true
-
-  val minArgs = 2
-  override val maxArgs = 2
-
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
-
-  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    (args.headOption, args.lift(1)) match
-      case (Some(l), Some(r)) if l.isNumeric && r.isNumeric =>
-        ScalarType("", Utility.numericPromote(l.typeName, r.typeName))
-      case _ =>
-        ScalarType("", "scala.Any")
-
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left  <- args.headOption.toRight(DLCompileError(0, "* missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "* missing right arg"))
-    yield MultiplyFn(left, right)
+  override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, MultiplyFn] =
+    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
+    else Right(MultiplyFn(receiver.fn, args, ctx.posStr))
 
 
-  override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
-    fn match
-      case m: MultiplyFn =>
-        for
-          _ <- CompileFn.requireNonOptional2(List(m.left, m.right), "*", 0)
-          _ <- CompileFn.requireNumeric2(List(m.left, m.right), "*", 0)
-        yield ()
-      case _ =>
-        Right(()) // not my responsibility
-
-// ---------------------------------
-// Division (/)
-// ---------------------------------
-object CDivideFn extends CompileFn[DivideFn]:
+/** ---------------------------------
+ *  Division (/)
+ *  ---------------------------------
+ */
+object CDivideFn extends ArithmeticCFn[DivideFn]:
+  override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
+    Validation.isNumericType(receiver.ftype)
   val name = "/"
-  override val builtIn = true
+  override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, DivideFn] =
+    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
+    else Right(DivideFn(receiver.fn, args, ctx.posStr))
 
-  val minArgs = 2
-  override val maxArgs = 2
 
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
-
-  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    (args.headOption, args.lift(1)) match
-      case (Some(l), Some(r)) if l.isNumeric && r.isNumeric =>
-        // division always promotes to widest numeric type
-        ScalarType("", Utility.numericPromote(l.typeName, r.typeName))
-      case _ =>
-        ScalarType("", "scala.Any")
-
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left  <- args.headOption.toRight(DLCompileError(0, "/ missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "/ missing right arg"))
-    yield DivideFn(left, right)
-
-  override def validate(fn: Fn[?])(using ctx: ExprContext) =
-    fn match
-      case d: DivideFn =>
-        for
-          _ <- CompileFn.requireNonOptional2(List(d.left, d.right), "/", 0)
-          _ <- CompileFn.requireNumeric2(List(d.left, d.right), "/", 0)
-        yield ()
-      case _ => Right(())
-
-// ---------------------------------
-// Modulus (%)
-// ---------------------------------
-object CModulusFn extends CompileFn[ModuloFn]:
+/** ---------------------------------
+ *  Modulus (%)
+ *  ---------------------------------
+ */
+object CModulusFn extends ArithmeticCFn[ModuloFn]:
   val name = "%"
-  override val builtIn = true
-
-  val minArgs = 2
-  override val maxArgs = 2
-
-  def accepts(receiver: FieldType)(using ctx: ExprContext): Boolean = true
-
-  def resultType(receiver: FieldType, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    (args.headOption, args.lift(1)) match
-      case (Some(l), Some(r)) if l.isNumeric && r.isNumeric =>
-        // Modulus keeps the "narrowest" numeric type normally,
-        // but we can stay consistent with DivideFn and promote.
-        ScalarType("", Utility.numericPromote(l.typeName, r.typeName))
-      case _ =>
-        ScalarType("", "scala.Any")
-
-  def build(recv: Fn[Any], args: List[Fn[Any]])(using ctx: ExprContext) =
-    for
-      left <- args.headOption.toRight(DLCompileError(0, "% missing left arg"))
-      right <- args.lift(1).toRight(DLCompileError(0, "% missing right arg"))
-    yield ModuloFn(left, right)
-
-  override def validate(fn: Fn[?])(using ctx: ExprContext) =
-    fn match
-      case m: ModuloFn =>
-        for
-          _ <- CompileFn.requireNonOptional2(List(m.left, m.right), "%", 0)
-          _ <- CompileFn.requireNumeric2(List(m.left, m.right), "%", 0)
-        yield ()
-      case _ => Right(())
+  override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, ModuloFn] =
+    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
+    else Right(ModuloFn(receiver.fn, args, ctx.posStr))
+  override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
+    Validation.isNumericType(receiver.ftype)
