@@ -87,6 +87,6 @@ object Validation:
 
   def isNumericType(ft: FieldType): Boolean =
     ft match {
-      case ScalarType(_, t) if numericTypeNames.contains(t) => true
+      case ScalarType(_, t, isOpt) if numericTypeNames.contains(t) && !isOpt => true
       case _ => false
     }

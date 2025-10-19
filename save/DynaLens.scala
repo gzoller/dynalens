@@ -588,6 +588,7 @@ case class DynaLens[T](
                         }
 
                       // ---------- Option[Map] field ----------
+                      // TODO: This seems to be a dupe of the previous case--not something special for Option[Map]
                       case Some(mm: scala.collection.Map[?, ?] @unchecked) =>
                         val m = mm.asInstanceOf[scala.collection.Map[Any, Any]]
                         println(s"[LEAF/one] Detected Option[Map] field '$lastName' with ${m.size} entries (Some)")

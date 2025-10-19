@@ -7,16 +7,10 @@ import co.blocke.dynalens.fn.*
 trait MathCFn[F <: Fn[Any]] extends CompileFn[F]:
   override val minArgs = 0
 
-  /** Determines if the receiver is acceptable (List or Option[List] of numeric) */
+  /** Determines if the receiver is acceptable (List of numeric) */
   override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
-    receiver match
-      // Plain List of numeric elements
+    receiver.ftype match
       case ListType(_, elem: FieldType, _, _) if Validation.isNumericType(elem) => true
-
-      // Optional[List] of numeric elements
-      case OptionType(_, ListType(_, elem: FieldType, _, _), _) if Validation.isNumericType(elem) => true
-
-      // Anything else — reject
       case _ => false
 
   /** Build boilerplate: all math fns take no args */
@@ -29,28 +23,24 @@ trait MathCFn[F <: Fn[Any]] extends CompileFn[F]:
 
   /** Determines the resulting scalar type (list element or numeric fallback) */
   private def resultElemType(receiver: Receiver)(using ctx: ExprContext): FieldType =
-    receiver match
+    receiver.ftype match
       case ListType(_, elem: FieldType, _, _) => elem
-      case OptionType(_, ListType(_, elem: FieldType, _, _), _) => elem
-      case other => Utility.rhsType(other.fn)(using ctx).getOrElse(ScalarType("", "scala.Double"))
+      case _ => Utility.rhsType(receiver.fn)(using ctx).getOrElse(ScalarType("", "scala.Double"))
 
   /** Default resultType: subclasses can override if needed */
   override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
     resultElemType(receiver)
 
-  /** Default validate: numeric List or Option[List] only */
+  /** Default validate: numeric List only */
   override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
-    fn match
-      case f: F =>
-        val recvFT = Utility.rhsType(f.recv)(using ctx)
-        recvFT match
-          case Some(ListType(_, elem: FieldType, _, _)) if Validation.isNumericType(elem) => Right(())
-          case Some(OptionType(_, ListType(_, elem: FieldType, _, _), _)) if Validation.isNumericType(elem) => Right(())
-          case Some(ft) =>
-            Left(DLCompileError(ctx.posStr, s"$name() requires a List of numeric type, got ${ft.typeName}"))
-          case None =>
-            Left(DLCompileError(ctx.posStr, s"$name() cannot determine receiver type"))
-      case _ => Right(())
+    val recvFT = Utility.rhsType(fn.recv)(using ctx)
+    recvFT match
+      case Some(ListType(_, elem: FieldType, _, _)) if Validation.isNumericType(elem) => Right(())
+      case Some(ft) if ft.isOptional && Validation.isNumericType(ft) => Right(())
+      case Some(ft) =>
+        Left(DLCompileError(ctx.posStr, s"$name() requires a List of numeric type, got ${ft.typeName}"))
+      case None =>
+        Left(DLCompileError(ctx.posStr, s"$name() cannot determine receiver type"))
 
 
 object CMinFn extends MathCFn[MinFn]:
@@ -89,10 +79,8 @@ object CAbsFn extends CompileFn[AbsFn]:
   val minArgs = 0
 
   override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
-    receiver match
-      case ft: FieldType if Validation.isNumericType(ft) => true
-      case OptionType(_, inner: FieldType, _) if Validation.isNumericType(inner) => true
-      case _ => false
+    Validation.isNumericType(receiver.ftype) ||
+      (receiver.ftype.isOptional && Validation.isNumericType(receiver.ftype))
 
   override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
     Utility.rhsType(receiver.fn)(using ctx).getOrElse(ScalarType("", "scala.Double"))
@@ -105,9 +93,7 @@ object CAbsFn extends CompileFn[AbsFn]:
     fn match
       case a: AbsFn =>
         Utility.rhsType(a.recv)(using ctx) match
-          case Some(ft) if Validation.isNumericType(ft) =>
-            Right(())
-          case Some(OptionType(_, inner: FieldType, _)) if Validation.isNumericType(inner) =>
+          case Some(ft) if Validation.isNumericType(ft) || (ft.isOptional && Validation.isNumericType(ft)) =>
             Right(())
           case Some(ft) =>
             Left(DLCompileError(ctx.posStr, s"abs() requires a numeric type, got ${ft.typeName}"))

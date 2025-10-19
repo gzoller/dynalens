@@ -40,19 +40,12 @@ import scala.quoted.*
 
 given ToExpr[ClassType] with
   def apply(ct: ClassType)(using Quotes): Expr[ClassType] =
-    '{ ClassType(${ Expr(ct.fieldName) }, ${ Expr(ct.typeName) }, ${ Expr(ct.fields) }) }
-
-given ToExpr[SealedTraitType] with
-  def apply(st: SealedTraitType)(using Quotes): Expr[SealedTraitType] =
-    '{ SealedTraitType(${ Expr(st.fieldName) }, ${ Expr(st.typeName) }, ${ Expr(st.fields) }, ${ Expr(st.subTypes) }) }
+    '{ ClassType(${ Expr(ct.fieldName) }, ${ Expr(ct.typeName) }, ${ Expr(ct.fields) }, ${ Expr(ct.isOptional) }) }
 
 given ToExpr[FieldType] with
   def apply(ft: FieldType)(using Quotes): Expr[FieldType] = ft match
-    case ScalarType(fieldName, typeName) =>
-      '{ ScalarType(${ Expr(fieldName) }, ${ Expr(typeName) }) }
-
-    case OptionType(fieldName, valueType, typeName) =>
-      '{ OptionType(${ Expr(fieldName) }, ${ Expr(valueType) }, ${ Expr(typeName) }) }
+    case ScalarType(fieldName, typeName, isOptional) =>
+      '{ ScalarType(${ Expr(fieldName) }, ${ Expr(typeName) }, ${ Expr(isOptional) }) }
 
     case ListType(fieldName, elementType, typeName, isOptional) =>
       '{ ListType(${ Expr(fieldName) }, ${ Expr(elementType) }, ${ Expr(typeName) }, ${ Expr(isOptional) }) }
@@ -60,27 +53,40 @@ given ToExpr[FieldType] with
     case MapType(fieldName, keyType, valueType, typeName, isOptional) =>
       '{ MapType(${ Expr(fieldName) }, ${ Expr(keyType) }, ${ Expr(valueType) }, ${ Expr(typeName) }, ${ Expr(isOptional) }) }
 
-    case ct: ClassType =>
-      Expr(ct)
+    case ClassType(fieldName, typeName, fields, isOptional) =>
+      '{ ClassType(${ Expr(fieldName) }, ${ Expr(typeName) }, ${ Expr(fields) }, ${ Expr(isOptional) }) }
 
-    case st: SealedTraitType =>
-      Expr(st)
-
-
+    case ValType(fieldName, valueType, typeName) =>
+      '{ ValType(${ Expr(fieldName) }, ${ Expr(valueType) }, ${ Expr(typeName) }) }
 
 
 //============= JUNK PLACEHOLDERS ==========
 import zio.*
 import fastparse.*
-case class DynaLens[T](_schema: ClassType):
+case class DynaLens[T](_schema: ClassType, _registry: Map[String, DynaLens[?]]):
   type ThisT = T
   def get(path: String, obj: T): ZIO[Any, DynaLensError, Any] =
     ZIO.succeed("boom")
+  private[dynalens] def walkPath(
+        path: List[Path.PathElement],
+        current: Any
+      ): ZIO[Any, DynaLensError, DynaContext] = ZIO.succeed(DynaContext.empty)
+  private[dynalens] def getValue(
+                                  pathElements: List[Path.PathElement],
+                                  obj: T
+                                ): ZIO[Any, DynaLensError, Any] = ZIO.succeed("yay")
+  def update(path: String, value: Any, obj: T): ZIO[_BiMapRegistry, DynaLensError, T] = ZIO.succeed(obj)
+  private[dynalens] def updateValue(pathElements: List[Path.PathElement], value: Any, obj: T): ZIO[_BiMapRegistry, DynaLensError, T] = ZIO.succeed(obj)
+  private[dynalens] def lensForPathPrefix(root: DynaLens[?], parts: List[Path.PathElement]): Option[DynaLens[?]] = None
+
 
 case class BlockStmt()
 
-case class Statement()
+trait Statement():
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] = ZIO.fail(DynaLensError("boom","ugh"))
 
 object Grammar:
   def topLevelBlock[$: P](using exprCtx: parser.ExprContext): P[Either[parser.DLCompileError, BlockStmt]] =
     Fail.opaque("Boom")
+
+case class ValStmt[R](name: String, fn: Fn[R]) extends Statement

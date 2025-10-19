@@ -69,11 +69,12 @@ lazy val root = project
     Compile / doc / sources := Nil,
     libraryDependencies ++= Seq(
       "co.blocke" %% "scala-reflection" % "2.0.16",
-      "dev.zio" %% "zio" % "2.1.21",
+      "dev.zio" %% "zio" % "2.1.22",
       "com.lihaoyi" %% "fastparse" % "3.1.1",
-      "dev.zio" %% "zio-test" % "2.1.21" % Test,
-      "dev.zio" %% "zio-test-sbt" % "2.1.21" % Test,
-      "dev.zio" %% "zio-test-magnolia" % "2.1.21" % Test
+      "dev.zio" %% "zio-test" % "2.1.22" % Test,
+      "dev.zio" %% "zio-test-sbt" % "2.1.22" % Test,
+      "dev.zio" %% "zio-test-magnolia" % "2.1.22" % Test,
+      "co.blocke" %% "testkit" % "1.0.4" % Test
     )
   )
 

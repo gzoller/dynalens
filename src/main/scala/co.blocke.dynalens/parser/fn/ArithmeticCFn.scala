@@ -14,7 +14,7 @@ trait ArithmeticCFn[R <: Fn[?]] extends CompileFn[R]:
   protected def checkOperand(ft: FieldType)(using ctx: ExprContext): Either[DLCompileError, Unit] =
     if !Validation.isNumericType(ft) then
       Left(DLCompileError(ctx.posStr, s"Operator '$name' requires numeric operand(s), found ${ft.typeName}"))
-    else if CompileFn.isOptionalType(ft) then
+    else if ft.isOptional then
       Left(DLCompileError(ctx.posStr, s"Operator '$name' cannot be applied to optional value of type ${ft.typeName}. Use `.else(default)` or check `isDefined()` first."))
     else
       Right(())
@@ -54,10 +54,16 @@ object CPlusFn extends CompileFn[Fn[?]]:
     receiver.ftype.isStringLike || Validation.isNumericType(receiver.ftype)
 
   override def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    if recv.ftype.isStringLike then ScalarType("", "java.lang.String")
+    val recvType = recv.ftype
+    val argTypeOpt = args.headOption
+
+    if recvType.isNumeric && argTypeOpt.exists(_.isNumeric) then
+      val names = recvType.typeName :: args.map(_.typeName)
+      ScalarType("", Utility.numericPromote(names *))
+    else if recvType.isStringLike || argTypeOpt.exists(_.isStringLike) then
+      ScalarType("", "java.lang.String")
     else
-      val names = recv.ftype.typeName :: args.map(_.typeName)
-      ScalarType("", Utility.numericPromote(names*))
+      ScalarType("", "java.lang.Object") // fallback for mixed/unknown types
 
   override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, Fn[?]] =
     if args.size != 1 then
@@ -67,14 +73,13 @@ object CPlusFn extends CompileFn[Fn[?]]:
       val argFn     = args.head
       val argTypeOp = Utility.receiverFieldTypeOf(argFn)
 
-      (recvType.isStringLike, argTypeOp.exists(_.isStringLike)) match
-        case (true, _) | (_, true) =>
-          Right(ConcatFn(receiver.fn, args, ctx.posStr).asInstanceOf[Fn[?]])
-        case _ if recvType.isNumeric && argTypeOp.exists(_.isNumeric) =>
-          Right(AddFn(receiver.fn, args, ctx.posStr))
-        case _ =>
-          Left(DLCompileError(ctx.posStr,
-            s"Operator '+' not valid between ${recvType.typeName} and ${argTypeOp.map(_.typeName).getOrElse("unknown")}"))
+      if recvType.isNumeric && argTypeOp.exists(_.isNumeric) then
+        Right(AddFn(receiver.fn, args, ctx.posStr))
+      else if recvType.isStringLike || argTypeOp.exists(_.isStringLike) then
+        Right(ConcatFn(receiver.fn, args, ctx.posStr).asInstanceOf[Fn[?]])
+      else
+        Left(DLCompileError(ctx.posStr,
+          s"Operator '+' not valid between ${recvType.typeName} and ${argTypeOp.map(_.typeName).getOrElse("unknown")}"))
 
   override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
     fn match
@@ -125,7 +130,7 @@ object CMinusFn extends CompileFn[Fn[?]]:
     fn match
       case n: NegateFn =>
         Utility.receiverFieldTypeOf(n.recv) match
-          case Some(ft) if ft.isNumeric && !CompileFn.isOptionalType(ft) =>
+          case Some(ft) if ft.isNumeric && !ft.isOptional =>
             Right(())
           case Some(ft) if !ft.isNumeric =>
             Left(DLCompileError(ctx.posStr, "Unary '-' requires numeric receiver"))
@@ -138,7 +143,7 @@ object CMinusFn extends CompileFn[Fn[?]]:
         (Utility.rhsType(s.recv), Utility.rhsType(s.args.head)) match
           case (Some(l), Some(r))
             if l.isNumeric && r.isNumeric &&
-              !CompileFn.isOptionalType(l) && !CompileFn.isOptionalType(r) =>
+              !l.isOptional && !r.isOptional =>
             Right(())
           case (Some(_), Some(_)) =>
             Left(DLCompileError(ctx.posStr, "Binary '-' requires non-optional numeric operands"))

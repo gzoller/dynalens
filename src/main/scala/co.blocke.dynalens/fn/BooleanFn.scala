@@ -116,8 +116,8 @@ case class IsDefinedFn(recv: Fn[Any], posStr: String)
       case null       => false
       case None       => false
       case Some(v)    => true
-      case i: Iterable[?] => i.nonEmpty
       case m: Map[?, ?]   => m.nonEmpty
+      case i: Iterable[?] => i.nonEmpty
       case _          => true
     }
 

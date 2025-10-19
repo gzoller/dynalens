@@ -5,7 +5,6 @@ package fn
 
 import co.blocke.dynalens.fn.*
 
-
 object CUuidFn extends CompileFn[UUIDFn]:
   val name = "uuid"
   val minArgs = 0
@@ -24,19 +23,17 @@ object CUuidFn extends CompileFn[UUIDFn]:
   override def validate(fn: Fn[?])(using ctx: ExprContext) = Right(())
 
 
-
 object CElseFn extends CompileFn[ElseFn]:
   val name = "else"
   val minArgs = 1
   override val maxArgs = 1
 
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
-    receiver.ftype.isInstanceOf[OptionType]
+    receiver.ftype.isOptional
 
   def resultType(receiver: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType =
-    receiver.ftype match
-      case OptionType(_, inner, _) => inner
-      case _                       => ScalarType("", "scala.Any")
+    if receiver.ftype.isOptional then receiver.ftype.cloneWithOptional(false)
+    else ScalarType("", "scala.Any")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args.headOption match
@@ -47,36 +44,41 @@ object CElseFn extends CompileFn[ElseFn]:
     fn match
       case e: ElseFn =>
         (Utility.rhsType(e.recv), Utility.rhsType(e.default)) match
-          case (Some(OptionType(_, inner, _)), Some(d)) if inner.typeName == d.typeName =>
-            Right(())
-          case (Some(OptionType(_, inner, _)), Some(d)) =>
-            Left(DLCompileError(ctx.posStr, s"else() type mismatch: expected ${inner.typeName}, got ${d.typeName}"))
+          case (Some(recvType), Some(d)) if recvType.isOptional =>
+            val innerType = recvType.cloneWithOptional(false)
+            if innerType.typeName == d.typeName then Right(())
+            else Left(DLCompileError(ctx.posStr, s"else() type mismatch: expected ${innerType.typeName}, got ${d.typeName}"))
           case (Some(_), _) =>
-            Left(DLCompileError(ctx.posStr, "else() requires an Option receiver"))
+            Left(DLCompileError(ctx.posStr, "else() requires an Optional receiver"))
           case _ =>
             Left(DLCompileError(ctx.posStr, "else() could not resolve types"))
       case _ => Right(())
 
 
-object CBlockFn extends CompileFn[BlockFn[?]]:
-  val name = "{block}" // synthetic placeholder
+object CBlockFn extends CompileFn[BlockFn[Any]]:
+  val name = "block"
   val minArgs = 1
-  override val maxArgs = Int.MaxValue
 
-  def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean = true
+  override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean = true
 
-  def resultType(receiver: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType =
-    argTypes.lastOption.getOrElse(ScalarType("", "scala.Unit"))
+  override def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, BlockFn[Any]] =
+    args match
+      case Nil => Left(DLCompileError(ctx.posStr, s"$name() requires at least one argument"))
+      case _ =>
+        val statements = args.init.collect { case s: Statement => s }
+        val finalFn = args.last
+        Right(BlockFn(statements, finalFn, ctx.posStr))
 
-  def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
-    Left(DLCompileError(ctx.posStr, "BlockFn is parser-constructed only"))
+  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
+    if args.nonEmpty then args.last else ScalarType("", "scala.Any")
 
-  override def validate(fn: Fn[?])(using ctx: ExprContext) =
+  override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
     fn match
       case b: BlockFn[?] =>
-        b.finalFn match
-          case inner: Fn[?] => Right(()) // Parser ensures correctness
-          case _             => Right(())
+        val allStatementsValid = b.statements.forall(_.isInstanceOf[Statement])
+        val finalFnValid = b.finalFn != null
+        if allStatementsValid && finalFnValid then Right(())
+        else Left(DLCompileError(ctx.posStr, s"$name() contains invalid elements"))
       case _ => Right(())
 
 
@@ -129,39 +131,35 @@ object CIndexFn extends CompileFn[IndexFn]:
   val minArgs: Int = 1
   override val maxArgs: Int = 1
 
-  /** Allow indexing on:
-   *   - ListType(_, elem, _)
-   *   - OptionType(_, ListType(...), _)
-   *   - MapType(_, keyType, valueType, _)
-   *   - OptionType(_, MapType(...), _)
-   */
-  override def accepts(recv: Receiver)(using ctx: ExprContext): Boolean = true
+  override def accepts(recv: Receiver)(using ctx: ExprContext): Boolean =
+    recv.ftype match
+      case lt: ListType => true
+      case mt: MapType => true
+      case _ => false
 
   /** Result type rules:
    *   - List[T]                [i:Int] -> T
-   *   - Option[List[T]]        [i:Int] -> Option[T]
-   *   - Map[K,V]               [k:K]   -> Option[V]
-   *   - Option[Map[K,V]]       [k:K]   -> Option[Option[V]]  (nested)
+   *   - Optional List[T]       [i:Int] -> Optional T
+   *   - Map[K,V]               [k:K]   -> Optional V
+   *   - Optional Map[K,V]      [k:K]   -> Optional V (optional propagated)
    */
-  override def resultType(recv: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType = {
-    recv.ftype match {
-      case ListType(_, elem, _, _) =>
-        elem
+  override def resultType(recv: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType =
+    recv.ftype match
+      // List[T]            [i:Int] -> T
+      case lt: ListType if !lt.isOptional =>
+        lt.elementType
 
-      case OptionType(_, inner: ListType, opt) =>
-        OptionType("", inner.elementType, "scala.Option")
+      // Optional List[T]   [i:Int] -> Optional T  (propagate optionality from the list)
+      case lt: ListType /* lt.isOptional == true */ =>
+        lt.elementType.cloneWithOptional(true)
 
-      case MapType(_, _, value, _, _) =>
-        OptionType("", value, "scala.Option")
-
-      case OptionType(_, inner: MapType, opt) =>
-        OptionType("", OptionType("", inner.valueType, "scala.Option"), "scala.Option")
+      // Map[K,V]           [k:K]   -> Optional V
+      case mt: MapType =>
+        mt.valueType.cloneWithOptional(true)
 
       case _ =>
         // Defensive; accepts() should have rejected
         ScalarType("", "scala.Any")
-    }
-  }
 
   override def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, IndexFn] =
     args.headOption match
@@ -177,28 +175,22 @@ object CIndexFn extends CompileFn[IndexFn]:
         val argT   = Utility.rhsType(i.index)
 
         (recvT, argT) match
-          // ---- List / Option[List] + numeric index ----
-          case (Some(ListType(_, _, _, _)), Some(a)) if Validation.isNumericType(a) =>
+          // ---- List / Optional List + numeric index ----
+          case (Some(rt: ListType), Some(a)) if Validation.isNumericType(a) && !rt.isOptional =>
             Right(())
-          case (Some(OptionType(_, inner: ListType, _)), Some(a)) if Validation.isNumericType(a) =>
+          case (Some(rt: ListType), Some(a)) if Validation.isNumericType(a) && rt.isOptional =>
             Right(())
 
-          // ---- Map / Option[Map] + key type check ----
-          case (Some(MapType(_, keyT, value, _, _)), Some(a)) if keyT.conformsTo(a) || a.conformsTo(keyT) =>
-            Right(())
-          case (Some(OptionType(_, inner: MapType, _)), Some(a)) if inner.keyType.conformsTo(a) || a.conformsTo(inner.keyType) =>
+          // ---- Map / Optional Map + key type check ----
+          case (Some(rt: MapType), Some(a)) if rt.keyType.canAssignTo(a) || a.canAssignTo(rt.keyType) =>
             Right(())
 
           // ---- Specific, more helpful error messages ----
-          case (Some(ListType(_, _, _, _)), Some(a)) =>
-            Left(DLCompileError(ctx.posStr, s"index requires numeric index, found ${a.typeName}"))
-          case (Some(OptionType(_, _: ListType, _)), Some(a)) =>
+          case (Some(rt: ListType), Some(a)) =>
             Left(DLCompileError(ctx.posStr, s"index requires numeric index, found ${a.typeName}"))
 
-          case (Some(MapType(_, keyT, value, _, _)), Some(a)) =>
-            Left(DLCompileError(ctx.posStr, s"map index key type mismatch: expected ${keyT.typeName}, got ${a.typeName}"))
-          case (Some(OptionType(_, inner: MapType, _)), Some(a)) =>
-            Left(DLCompileError(ctx.posStr, s"map index key type mismatch: expected ${inner.keyType.typeName}, got ${a.typeName}"))
+          case (Some(rt: MapType), Some(a)) =>
+            Left(DLCompileError(ctx.posStr, s"map index key type mismatch: expected ${rt.keyType.typeName}, got ${a.typeName}"))
 
           case (Some(other), _) =>
             Left(DLCompileError(ctx.posStr, s"indexing not supported on receiver type ${other.typeName}"))

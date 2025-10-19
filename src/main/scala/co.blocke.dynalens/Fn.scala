@@ -40,26 +40,9 @@ trait Fn[R]:
   def rebuild(kids: List[Fn[?]]): Fn[R]
 
   /** Walk the tree and patch every `GetFn("this")` with the given receiver. */
-  def withReceiver(r: Fn[?]): Fn[R] =
-    this match
-      case g: fn.GetFn =>
-        val willAttach = g.path.startsWith("this") || g.path.startsWith("_")
-        println(s"[withReceiver:GetFn] path='${g.path}', existingRecv=${g.recv}, attach?=$willAttach, recvNode=${r.getClass.getSimpleName}")
-        val out =
-          if willAttach then g.copy(recv = r).asInstanceOf[Fn[R]]
-          else this
-        println(s"[withReceiver:GetFn] result=${out}")
-        out
-
-      case other if other.children.nonEmpty =>
-        println(s"[withReceiver:${other.getClass.getSimpleName}] descend into children (n=${other.children.size})")
-        val out = other.rebuild(other.children.map(_.withReceiver(r)))
-        println(s"[withReceiver:${other.getClass.getSimpleName}] rebuilt=${out}")
-        out
-
-      case other =>
-        println(s"[withReceiver:${other.getClass.getSimpleName}] leaf, unchanged")
-        other
+  def withReceiver(newRecv: Fn[?]): Fn[R] =
+    val kids: List[Fn[Any]] = newRecv.asInstanceOf[Fn[Any]] :: args
+    rebuild(kids).asInstanceOf[Fn[R]]
 
 
 trait UnaryFn[R] extends Fn[R] {
@@ -80,6 +63,4 @@ trait MethodFn[R] extends Fn[R] {
 }
 
 // Marker trait for boolean-returning functions
-trait BooleanFn extends Fn[Boolean]:
-  override def withReceiver(r: Fn[?]): BooleanFn =
-    super.withReceiver(r).asInstanceOf[BooleanFn]
+trait BooleanFn extends Fn[Boolean]

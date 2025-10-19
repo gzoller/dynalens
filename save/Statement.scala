@@ -35,18 +35,24 @@ case class ValStmt[R](name: String, fn: Fn[R]) extends Statement:
 
 case class MapStmt(path: String, fn: Fn[?]) extends Statement:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
-    ctx.get("top") match {
+    ctx.get("top") match
       case Some((root, topLens)) =>
-        topLens
-          .map(lens =>
-            for {
-              mapped <- lens.map(path, fn, root.asInstanceOf[lens.ThisT], ctx) // <-- pass ctx here
-            } yield ctx.clone.addOne("top", (mapped, topLens))
-          )
-          .getOrElse(ZIO.succeed(ctx))
+        topLens match
+          case Some(lens) =>
+            for
+              mapped <- MapRuntime.mapOver(
+                lens = lens.asInstanceOf[DynaLens[Any]],
+                root = root,
+                path = path,
+                fn = fn.asInstanceOf[Fn[Any]],
+                outerCtx = ctx
+              )
+            yield ctx.clone.addOne("top", (mapped, topLens))
+          case None =>
+            ZIO.fail(DynaLensError("<stmt>", "MapStmt requires top lens in context"))
       case None =>
-        ZIO.fail(DynaLensError("Missing 'top' in context for map operation"))
-    }
+        ZIO.fail(DynaLensError("<stmt>", "Missing 'top' in context for map statement"))
+
 
 case class IfStmt(
     condition: Fn[Boolean],

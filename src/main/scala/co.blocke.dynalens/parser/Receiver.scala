@@ -30,6 +30,11 @@ case class NamedReceiver(path: String, ftype: FieldType, fn: Fn[Any]) extends Re
     case _ => None
 
 
+case class ConstantReceiver(ftype: FieldType, fn: Fn[Any]) extends Receiver:
+  def pathName: Option[String] = None
+  def elementTypeOpt: Option[FieldType] = None
+
+
 case class MethodReceiver(
                            parent: Receiver,
                            ftype: FieldType,
@@ -55,6 +60,15 @@ case class MethodReceiver(
 
 case object SystemReceiver extends Receiver:
   def ftype: FieldType = ScalarType("AnyRoot", "scala.Any")
-  def fn: Fn[Any] = throw new IllegalStateException("SystemReceiver has no runtime Fn")
+  def fn: Fn[Any] = co.blocke.dynalens.fn.NoOpFn //throw new IllegalStateException("SystemReceiver has no runtime Fn")
   def pathName: Option[String] = None
   def elementTypeOpt: Option[FieldType] = None
+
+
+case class ElementReceiver(parent: Receiver, ftype: FieldType) extends Receiver:
+  def fn: Fn[Any] = parent.fn
+  def pathName: Option[String] = parent.pathName
+  def elementTypeOpt: Option[FieldType] = ftype match
+    case lt: ListType => Some(lt.elementType)
+    case mt: MapType  => Some(mt.valueType)
+    case _            => None

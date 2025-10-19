@@ -70,31 +70,6 @@ case class ValuesFn(recv: Fn[Any], posStr: String)
 
 
 /*---------------------------------------------
-  get()
----------------------------------------------*/
-case class MapGetFn(recv: Fn[Any], other: Fn[Any], posStr: String)
-  extends BinaryFn[Option[Any]]:
-
-  override val args: List[Fn[Any]] = List(other)
-  def rebuild(kids: List[Fn[?]]): Fn[Option[Any]] =
-    copy(recv = kids.head.asInstanceOf[Fn[Any]], other = kids(1).asInstanceOf[Fn[Any]])
-
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Option[Any]] =
-    for
-      container <- recv.resolve(ctx)
-      keyVal    <- other.resolve(ctx)
-      result <- ZIO.attempt {
-        container match
-          case null | None => None
-          case Some(m: Map[?, ?]) => m.asInstanceOf[Map[Any, Any]].get(keyVal)
-          case m: Map[?, ?] => m.asInstanceOf[Map[Any, Any]].get(keyVal)
-          case Some(inner) => throw new RuntimeException(s"get() requires Map, got ${inner.getClass.getSimpleName}")
-          case other => throw new RuntimeException(s"get() requires Map, got ${other.getClass.getSimpleName}")
-      }.catchAll(e => ZIO.fail(DynaLensError(posStr, s"get() failed: ${e.getMessage}")))
-    yield result
-
-
-/*---------------------------------------------
   filter()
 ---------------------------------------------*/
 case class FilterFn(recv: Fn[Any], other: Fn[Any], posStr: String)
@@ -282,10 +257,10 @@ case class LenFn(recv: Fn[Any], posStr: String)
       case None | null => ZIO.succeed(0)
       case Some(s: String) => ZIO.succeed(s.length)
       case s: String       => ZIO.succeed(s.length)
-      case Some(xs: Iterable[?]) => ZIO.succeed(xs.size)
-      case xs: Iterable[?]       => ZIO.succeed(xs.size)
       case Some(m: Map[?, ?])    => ZIO.succeed(m.size)
       case m: Map[?, ?]          => ZIO.succeed(m.size)
+      case Some(xs: Iterable[?]) => ZIO.succeed(xs.size)
+      case xs: Iterable[?]       => ZIO.succeed(xs.size)
       case other => ZIO.fail(DynaLensError(posStr, s"len() requires String, List, or Map receiver, got ${other.getClass.getSimpleName}"))
     }
 
@@ -377,3 +352,69 @@ case class MapFromFn(mapName: String, recv: Fn[Any], posStr: String)
             else ZIO.fail(DynaLensError(posStr, s"BiMap '$mapName' not registered"))
       }
     } yield res
+
+
+/*---------------------------------------------
+    => (map)
+---------------------------------------------*/
+case class MapFn(recv: Fn[Any], fn: Fn[Any], posStr: String)
+  extends MethodFn[Any]:
+
+  override val methodName = "=>"
+
+  override def args: List[Fn[Any]] = List(fn)
+
+  override def rebuild(kids: List[Fn[?]]): Fn[Any] =
+    kids match
+      case r :: f :: Nil => copy(recv = r.asInstanceOf[Fn[Any]], fn = f.asInstanceOf[Fn[Any]])
+      case _             => this
+
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    for
+      recvVal <- recv.resolve(ctx)
+      result <- recvVal match
+        // ---------- None or null ----------
+        case null | None =>
+          ZIO.succeed(Nil)
+
+        // ---------- Map ----------
+        case Some(m: Map[?, ?]) =>
+          mapMap(m.asInstanceOf[Map[Any, Any]], ctx)
+
+        case m: Map[?, ?] =>
+          mapMap(m.asInstanceOf[Map[Any, Any]], ctx)
+
+        // ---------- List or Iterable ----------
+        case Some(xs: Iterable[?]) =>
+          mapList(xs.asInstanceOf[Iterable[Any]], ctx)
+
+        case xs: Iterable[?] =>
+          mapList(xs.asInstanceOf[Iterable[Any]], ctx)
+
+        // ---------- Invalid receiver ----------
+        case other =>
+          ZIO.fail(
+            DynaLensError(posStr, s"Receiver for => must be List or Map, got ${other.getClass.getSimpleName}")
+          )
+    yield result
+
+  // ---------- Helpers ----------
+
+  private def mapList(xs: Iterable[Any], ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, List[Any]] =
+    ZIO.foreach(xs.toList) { elem =>
+      withThisScoped(ctx, elem) {
+        fn.resolve(ctx)
+      }
+    }
+
+  private def mapMap(m: Map[Any, Any], ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, List[Any]] =
+    ZIO.foreach(m.toList) { case (k, v) =>
+      // Bind both key/value for map iteration
+      withKeyScoped(ctx, "key", (k, None)) {
+        withKeyScoped(ctx, "value", (v, None)) {
+          withThisScoped(ctx, (k, v)) {
+            fn.resolve(ctx)
+          }
+        }
+      }
+    }

@@ -36,20 +36,34 @@ case class ElseFn(recv: Fn[Any], default: Fn[Any], posStr: String) extends Metho
     yield res
 
 
-case class BlockFn[R](steps: List[Fn[Any]], finalFn: Fn[R], posStr: String) extends Fn[R]:
-  override val methodName = "{block}"
-  override def recv: Fn[Any] = steps.headOption.getOrElse(finalFn.asInstanceOf[Fn[Any]])
-  override def args: List[Fn[Any]] = steps
-  override def isOptional: Boolean = false
+case class BlockFn[R](statements: Seq[Statement], finalFn: Fn[R], posStr: String) extends Fn[R]:
+  override val methodName: String = "{block}"
 
+  // A block doesn't have a meaningful runtime receiver; it's a sequence of statements
+  // culminating in a final expression. Treat the root as the receiver.
+  override def recv: Fn[Any] = RootFn
+
+  // Only the final function is a child argument in the expression tree.
+  override def args: List[Fn[Any]] = List(finalFn.asInstanceOf[Fn[Any]])
+
+  override def children: List[Fn[?]] = List(finalFn)
+
+  // Rebuild with a (single) final function child.
   override def rebuild(kids: List[Fn[?]]): Fn[R] =
-    copy(steps = kids.init.asInstanceOf[List[Fn[Any]]], finalFn = kids.last.asInstanceOf[Fn[R]])
+    kids match
+      case f :: Nil => copy(finalFn = f.asInstanceOf[Fn[R]])
+      case _        => this
 
+  // Block optionality mirrors the final expression's optionality.
+  override val isOptional: Boolean = finalFn.isOptional
+
+  // Execute statements in order, threading the DynaContext; return the value of the final Fn.
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, R] =
-    for
-      _ <- ZIO.foreachDiscard(steps.dropRight(1))(_.resolve(ctx))
-      result <- finalFn.resolve(ctx).asInstanceOf[ZIO[_BiMapRegistry, DynaLensError, R]]
-    yield result
+    val staged: ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
+      statements.foldLeft(ZIO.succeed(ctx): ZIO[_BiMapRegistry, DynaLensError, DynaContext]) {
+        (acc, stmt) => acc.flatMap(ctx2 => stmt.resolve(ctx2))
+      }
+    staged.flatMap(finalFn.resolve)
 
 
 case class CaseWhenFn(
@@ -188,7 +202,7 @@ case object RootFn extends Fn[Any]:
     ZIO.succeed(())
 
 
-case class NoneFn() extends Fn[Any]:
+case object NoneFn extends Fn[Any]:
   override val recv: Fn[Any] = RootFn
   override val args: List[Fn[Any]] = Nil
   override val methodName: String = "<none>"
@@ -338,6 +352,10 @@ case class GetFn(
     val parts = parsePath(path)
 
     recv match
+      // --- Treat NoOpFn as root-level / implicit context (unanchored)
+      case NoOpFn =>
+        resolveUnanchored(parts, ctx)
+
       // --- Root-level / implicit context
       case RootFn =>
         resolveUnanchored(parts, ctx)
@@ -370,7 +388,7 @@ case class GetFn(
   : ZIO[_BiMapRegistry, DynaLensError, Any] = parts match
 
     // --- this.xxx
-    case Field("this", _) :: rest =>
+    case Field("this") :: rest =>
       ctx.get("this") match
         case Some((root, Some(l: DynaLens[?]))) if rest.nonEmpty =>
           val lens = l.asInstanceOf[DynaLens[Any]]
@@ -434,7 +452,7 @@ case class GetFn(
     parts match
       case Nil => Right(obj)
 
-      case Field(name, _) :: tail =>
+      case Field(name) :: tail =>
         val nextOpt = obj match
           case m: Map[?, ?] => m.asInstanceOf[Map[String, Any]].get(name)
           case p: Product   => fieldOf(p, name)
@@ -443,7 +461,7 @@ case class GetFn(
           case Some(next) => walk(next, tail)
           case None       => Left(DynaLensError(posStr, s"Field not found: '$name'"))
 
-      case IndexedField(name, idxOpt, _) :: tail =>
+      case IndexedField(name, idxOpt) :: tail =>
         val collOpt = obj match
           case m: Map[?, ?] => m.asInstanceOf[Map[String, Any]].get(name)
           case p: Product   => fieldOf(p, name)
@@ -453,11 +471,46 @@ case class GetFn(
           case None => Left(DynaLensError(posStr, s"Field not found: '$name'"))
           case Some(coll) =>
             (coll, idxOpt) match
-              case (xs: Seq[?], Some(i)) =>
+              // ---- Indexed sequence ----
+              case (xs: Seq[?], Some(idxStr)) =>
                 val s = xs.asInstanceOf[Seq[Any]]
-                if i >= 0 && i < s.length then walk(s(i), tail)
-                else Left(DynaLensError(posStr, s"Index $i out of bounds for field '$name'"))
+                idxStr.toIntOption match
+                  case Some(i) if i >= 0 && i < s.length =>
+                    walk(s(i), tail)
+                  case Some(i) =>
+                    Left(DynaLensError(posStr, s"Index $i out of bounds for field '$name'"))
+                  case None =>
+                    Left(DynaLensError(posStr, s"Non-numeric index '$idxStr' used on sequence field '$name'"))
+
+              // ---- Map key access ----
+              case (m: Map[?, ?], Some(keyStr)) =>
+                val mm = m.asInstanceOf[Map[Any, Any]]
+                mm.get(keyStr) match
+                  case Some(v) => walk(v, tail)
+                  case None => Left(DynaLensError(posStr, s"Key '$keyStr' not found in Map '$name'"))
+
+              // ---- Wildcard access (no specific index) ----
               case (_: Seq[?], None) =>
-                Left(DynaLensError(posStr, s"Wildcard index not allowed for '$name[]'"))
+                Left(DynaLensError(posStr, s"Wildcard index not allowed for '$name'"))
+
+              case (_: Map[?, ?], None) =>
+                Left(DynaLensError(posStr, s"Wildcard key access not allowed for '$name'"))
+
+              // ---- Fallback ----
               case _ =>
                 Left(DynaLensError(posStr, s"Field '$name' is not indexable"))
+
+
+object NoOpFn extends Fn[Any]:
+  override val methodName: String = "<noop>"
+  override val recv: Fn[Any] = this
+  override val args: List[Fn[Any]] = Nil
+  override val posStr: String = "<noop>"
+
+  override def children: List[Fn[?]] = Nil
+
+  override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
+
+  override def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ZIO.fail(DynaLensError(posStr, "NoOpFn should never be resolved"))
+

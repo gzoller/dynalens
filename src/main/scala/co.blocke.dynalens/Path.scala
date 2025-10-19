@@ -25,37 +25,41 @@ object Path:
 
   sealed trait PathElement {
     def name: String
-    def isOptional: Boolean
   }
-  case class Field(name: String, override val isOptional: Boolean = false) extends PathElement
-  case class IndexedField(name: String, index: Option[Int], override val isOptional: Boolean = false) extends PathElement
+  case class Field(name: String) extends PathElement
+  case class IndexedField(name: String, index: Option[String]) extends PathElement:
+    def listIndex(): Option[Int] =
+      index.flatMap(i => scala.util.Try(i.toInt).toOption)
 
   def parsePath(path: String): List[PathElement] =
     path.split("\\.").toList.map { segment =>
-      val isOptional = segment.endsWith("?")
-      val clean = if isOptional then segment.dropRight(1) else segment
+      val clean = segment
 
-      if clean.matches(""".+\[\d+\]""") then
-        val name = clean.takeWhile(_ != '[')
-        val index = clean.dropWhile(_ != '[').drop(1).dropRight(1).toInt
-        IndexedField(name, Some(index), isOptional)
-      else if clean.endsWith("[]") then
-        val name = clean.dropRight(2)
-        IndexedField(name, None, isOptional)
-      else Field(clean, isOptional)
+      val re = """^([^\[]+)(?:\[(?:(\d+)|"([^"]+)")\])?$""".r
+      clean match {
+        case re(name, numIdx, strIdx) if numIdx != null =>
+          IndexedField(name, Some(numIdx))
+        case re(name, numIdx, strIdx) if strIdx != null =>
+          IndexedField(name, Some(strIdx))
+        case re(name, _, _) =>
+          Field(name)
+      }
     }
 
-  private val re = """^([^\[]+)(?:\[(\d+)\])?$""".r
-  def segmentAndIndex(seg: String): (String, Option[Int]) = seg match
-    case re(name, idx) => (name, Option(idx).map(_.toInt))
-    case _             => (seg, None)
+  private val re = """^([^\[]+)(?:\[(?:(\d+)|"([^"]+)")\])?$""".r
+  def segmentAndIndex(seg: String): (String, Option[String]) = seg match
+    case re(name, numIdx, strIdx) =>
+      val idx = if numIdx != null then Some(numIdx) else Option(strIdx)
+      (name, idx)
+    case _ =>
+      (seg, None)
 
   // Strip all "noise" out of path--just raw path--for DynaLens low-level operations
   def partialPath(pathParts: List[PathElement]): String =
     pathParts
       .map {
-        case IndexedField(name, Some(i), _) => s"$name[$i]"
-        case Field(name, _)                 => name
-        case IndexedField(name, _, _)       => name
+        case IndexedField(name, Some(i)) => s"$name[$i]"
+        case Field(name)                 => name
+        case IndexedField(name, None)   => name
       }
       .mkString(".")

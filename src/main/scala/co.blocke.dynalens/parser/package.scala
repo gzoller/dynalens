@@ -36,16 +36,3 @@ type ParseFnListResult = ParseResult[List[Fn[Any]]]
 case class DLCompileError(posStr: String, msg: String):
   def render(input: String): String =
     s"(compile) $posStr Error: $msg"
-
-case object NoOpFn extends Fn[Any]:
-  override val methodName: String = "<noop>"
-  override val recv: Fn[Any] = this
-  override val args: List[Fn[Any]] = Nil
-  override val posStr: String = "<noop>"
-
-  override def children: List[Fn[?]] = Nil
-  override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
-
-  override def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
-    ZIO.fail(DynaLensError(posStr, "NoOpFn should never be resolved"))
-

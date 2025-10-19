@@ -38,10 +38,9 @@ object CAndFn extends CompileFn[AndFn]:
 
   def accepts(recv: Receiver)(using ctx: ExprContext): Boolean =
     recv.ftype match
-      case ScalarType(_, "scala.Boolean") => true
-      case OptionType(_, inner, _) => inner match
-        case ScalarType(_, "scala.Boolean") => true
-        case _ => false
+      case ScalarType(_, "scala.Boolean", _) => true
+      case ft if ft.isOptional && ft.isInstanceOf[ScalarType] =>
+        ft.asInstanceOf[ScalarType].typeName == "scala.Boolean"
       case _ => false
 
   def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
@@ -72,10 +71,9 @@ object COrFn extends CompileFn[OrFn]:
 
   def accepts(recv: Receiver)(using ctx: ExprContext): Boolean =
     recv.ftype match
-      case ScalarType(_, "scala.Boolean") => true
-      case OptionType(_, inner, _) => inner match
-        case ScalarType(_, "scala.Boolean") => true
-        case _ => false
+      case ScalarType(_, "scala.Boolean", _) => true
+      case ft if ft.isOptional && ft.isInstanceOf[ScalarType] =>
+        ft.asInstanceOf[ScalarType].typeName == "scala.Boolean"
       case _ => false
 
   def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
@@ -106,10 +104,9 @@ object CNotFn extends CompileFn[NotFn]:
 
   def accepts(recv: Receiver)(using ctx: ExprContext): Boolean =
     recv.ftype match
-      case ScalarType(_, "scala.Boolean") => true
-      case OptionType(_, inner, _) => inner match
-        case ScalarType(_, "scala.Boolean") => true
-        case _ => false
+      case ScalarType(_, "scala.Boolean", _) => true
+      case ft if ft.isOptional && ft.isInstanceOf[ScalarType] =>
+        ft.asInstanceOf[ScalarType].typeName == "scala.Boolean"
       case _ => false
 
   def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext) =
@@ -135,7 +132,7 @@ object CIsDefinedFn extends CompileFn[IsDefinedFn]:
 
   def accepts(recv: Receiver)(using ctx: ExprContext): Boolean =
     recv.ftype match
-      case OptionType(_, _, _) => true
+      case ft if ft.isOptional => true
       case ListType(_, _, _, _)   => true
       case MapType(_, _, _, _, _) => true
       case _                   => false
@@ -212,13 +209,13 @@ object CContainsFn extends CompileFn[ContainsFn]:
   @tailrec
   def accepts(recv: co.blocke.dynalens.parser.Receiver)(using ctx: ExprContext): Boolean =
     recv.ftype match
-      case ScalarType(_, "java.lang.String") => true
+      case ScalarType(_, "java.lang.String", _) => true
       case ListType(_, _, _, _)                 => true
       case MapType(_, _, _, _, _)               => true
-      case OptionType(_, inner, _)           =>
-        // Recursively check the inner type, but build a new receiver context for the inner type
-        accepts(MethodReceiver(SystemReceiver, inner, recv.fn))
-      case _                                 => false
+      case ft if ft.isOptional =>
+        // Recursively check the inner non-optional type by cloning it
+        accepts(MethodReceiver(SystemReceiver, ft.cloneWithOptional(false), recv.fn))
+      case _                                    => false
 
   def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext) =
     ScalarType("", "scala.Boolean")
@@ -232,9 +229,9 @@ object CContainsFn extends CompileFn[ContainsFn]:
     fn match
       case c: ContainsFn =>
         (Utility.rhsType(c.recv), Utility.rhsType(c.other)) match
-          case (Some(ScalarType(_, "java.lang.String")), Some(ScalarType(_, "java.lang.String"))) => Right(())
-          case (Some(ListType(_, elem, _, _)), Some(argT)) if elem.conformsTo(argT) => Right(())
-          case (Some(MapType(_, keyType, _, _, _)), Some(argT)) if keyType.conformsTo(argT) => Right(())
+          case (Some(ScalarType(_, "java.lang.String", _)), Some(ScalarType(_, "java.lang.String", _))) => Right(())
+          case (Some(ListType(_, elem, _, _)), Some(argT)) if elem.canAssignTo(argT) => Right(())
+          case (Some(MapType(_, keyType, _, _, _)), Some(argT)) if keyType.canAssignTo(argT) => Right(())
           case (Some(recvT), Some(argT)) =>
             Left(DLCompileError(ctx.posStr, s"contains not applicable: receiver ${recvT.typeName} with argument ${argT.typeName}"))
           case _ =>

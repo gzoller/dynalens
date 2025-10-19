@@ -9,14 +9,13 @@ object Main:
       "foo",
       "foo.bar",
       "foo[0]",
-      "foo[]",
-      "foo?.bar",
+      "foo.bar",
       "foo.bar[3]",
-      "foo.bar[3]?.baz",
-      "outer.inner[2].deep[].value?",
+      "foo.bar[3].baz",
+      "outer.inner[foom].deep.value",
       "list[12]",
-      "optList?[0]",
-      "nested?.field[9].more[]"
+      "optList[0]",
+      "nested.field[9].more"
     )
 
     tests.foreach { path =>
@@ -28,7 +27,7 @@ object Main:
 
     // Also test segmentAndIndex helper
     println("=== segmentAndIndex tests ===")
-    val segTests = Seq("foo[3]", "foo[]", "foo", "bar[99]")
+    val segTests = Seq("foo[3]", "foo", "bar[false]")
     segTests.foreach { seg =>
       val (name, idx) = Path.segmentAndIndex(seg)
       println(s"Segment: '$seg'  ->  name='$name', index=$idx")
@@ -37,7 +36,7 @@ object Main:
     println("=== partialPath tests ===")
     val example = List(
       Path.Field("outer"),
-      Path.IndexedField("inner", Some(2)),
+      Path.IndexedField("inner", Some("2")),
       Path.Field("deep"),
       Path.IndexedField("stuff", None)
     )

@@ -71,6 +71,9 @@ object BiMapRegistry:
   def layer(registry: _BiMapRegistry): ULayer[_BiMapRegistry] =
     ZLayer.succeed(registry)
 
+  def empty: ULayer[_BiMapRegistry] =
+    ZLayer.succeed(EmptyBiMapRegistry)
+
 object EmptyBiMapRegistry extends _BiMapRegistry {
   def get(name: String): Option[BiMap[String, String]] = None
   def register(name: String, bimap: BiMap[String, String]): _BiMapRegistry = this

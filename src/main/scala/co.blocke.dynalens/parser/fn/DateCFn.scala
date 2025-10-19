@@ -27,7 +27,7 @@ object CFormatDateFn extends CompileFn[FormatDateFn]:
     fn match
       case f: FormatDateFn =>
         Utility.rhsType(f.pattern) match
-          case Some(ScalarType(_, "java.lang.String")) => Right(())
+          case Some(ScalarType(_, "java.lang.String", _)) => Right(())
           case Some(ft) =>
             Left(DLCompileError(ctx.posStr, s"formatDate pattern must be string, found ${ft.typeName}"))
           case None =>
@@ -57,7 +57,7 @@ object CParseDateFn extends CompileFn[ParseDateFn]:
     fn match
       case p: ParseDateFn =>
         Utility.rhsType(p.recv) match
-          case Some(ScalarType(_, "java.lang.String")) => Right(())
+          case Some(ScalarType(_, "java.lang.String", _)) => Right(())
           case Some(ft) =>
             Left(DLCompileError(ctx.posStr, s"parseDate requires string source, found ${ft.typeName}"))
           case None =>

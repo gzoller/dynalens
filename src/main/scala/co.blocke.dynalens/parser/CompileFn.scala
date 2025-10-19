@@ -39,16 +39,6 @@ trait CompileFn[R <: Fn[?]] {
 }
 
 
-object CompileFn:
-
-  private[parser] inline def isOptionalType(ft: FieldType): Boolean =
-    ft match {
-      case OptionType(_, _, _) => true
-      case _ => false
-    }
-
-
-
   //------------------------ Old
     /*
   def requireNumeric1(arg: Fn[?], name: String, off: Int)

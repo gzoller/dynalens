@@ -6,3 +6,8 @@ Features for 1.2.0:
 * Pluggable function definition
 
 * lens pairs (assign A->B)
+
+Q: Can we do this?
+
+val x = myClassField
+val y = x.field1

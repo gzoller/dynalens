@@ -22,9 +22,7 @@
 package co.blocke.dynalens
 package parser
 
-import Path.*
 import co.blocke.dynalens.fn.*
-import scala.annotation.tailrec
 
 object Utility:
 
@@ -116,11 +114,8 @@ object Utility:
   def elementSchemaFor(basePath: String, schema: ClassType): Option[FieldType] =
     Schema.resolvePath(schema, basePath).map(_.fieldType) match
       case Some(ListType(_, elem, _, _)) => Some(elem)
-      case Some(OptionType(_, inner: ListType, _)) => Some(inner.elementType)
       case Some(MapType(_, _, valueType, _, _)) => Some(valueType)
-      case Some(OptionType(_, inner: MapType, _)) => Some(inner.valueType)
       case Some(ct: ClassType) => Some(ct) // whole class itself
-      case Some(OptionType(_, inner: ClassType, _)) => Some(inner)
       case _ => None
 
 
@@ -139,15 +134,18 @@ object Utility:
       case Some(v: ValType) =>
         val base = v.valueType
         val resolved =
-          if segments.tail.nonEmpty then walkType(base, segments.tail).getOrElse(ScalarType("", "scala.Any"))
+          if base.isInstanceOf[ClassType] && segments.tail.nonEmpty then
+            walkType(base, segments.tail).getOrElse(ScalarType("", "scala.Any"))
+          else if segments.tail.nonEmpty then
+            walkType(base, segments.tail).getOrElse(ScalarType("", "scala.Any"))
           else base
-        return postProcessIndexed(resolved, indexed, basePath)
+        return postProcessIndexed(resolved, indexed)
 
       case Some(ft) =>
         val resolved =
           if segments.tail.nonEmpty then walkType(ft, segments.tail).getOrElse(ScalarType("", "scala.Any"))
           else ft
-        return postProcessIndexed(resolved, indexed, basePath)
+        return postProcessIndexed(resolved, indexed)
 
       case None => // fall through
 
@@ -158,7 +156,7 @@ object Utility:
           val resolved =
             if segments.tail.nonEmpty then walkType(ft, segments.tail).getOrElse(ScalarType("", "scala.Any"))
             else ft
-          postProcessIndexed(resolved, indexed, basePath)
+          postProcessIndexed(resolved, indexed)
 
         case None =>
           ScalarType("", "scala.Any")
@@ -171,7 +169,7 @@ object Utility:
    * collection to its element/value type.
    * Wildcard hints like [] are no longer supported.
    */
-  private def postProcessIndexed(ft: FieldType, indexed: Boolean, basePath: String): FieldType =
+  private def postProcessIndexed(ft: FieldType, indexed: Boolean): FieldType =
     if !indexed then ft
     else
       ft match
@@ -179,17 +177,9 @@ object Utility:
           // foo[3] → element type
           elemType
 
-        case OptionType(_, inner: ListType, _) =>
-          // maybeList[3] → element type
-          inner.elementType
-
         case MapType(_, _, valueType, _, _) =>
           // foo["key"] → value type
           valueType
-
-        case OptionType(_, inner: MapType, _) =>
-          // maybeMap["key"] → value type
-          inner.valueType
 
         case other =>
           // Not indexable — leave unchanged (safe fallback)
@@ -215,10 +205,11 @@ object Utility:
           case c: ClassType =>
             c.fields.find(_.fieldName == seg).flatMap(f => walkType(f, tail))
 
-          // ---- 2. OptionType: unwrap once, but preserve Option wrapper at leaf ----
-          case o: OptionType =>
-            if tail.nonEmpty then walkType(o.valueType, segs)
-            else Some(o)
+          // ---- 2. Optional wrapper (isOptional == true) ----
+          case ft if ft.isOptional =>
+            val inner = ft.cloneWithOptional(false)
+            if tail.nonEmpty then walkType(inner, segs)
+            else Some(ft)
 
           // ---- 3. ListType: treat as container, go into element type ----
           case l: ListType =>
@@ -234,32 +225,6 @@ object Utility:
           // ---- 5. Any other type: stop ----
           case _ =>
             None
-
-
-  /** Return true if the given FieldType represents a type that supports <, >, <=, >=, ==, != */
-  def isComparableType(ft: FieldType): Boolean = ft match
-    case ScalarType(_, t) =>
-      val norm = normalizeNumeric(t)
-      // numeric types, strings, booleans, and dates are comparable
-      norm.startsWith("scala.") && (
-        Set(
-          "scala.Byte",
-          "scala.Short",
-          "scala.Int",
-          "scala.Long",
-          "scala.Float",
-          "scala.Double",
-          "scala.math.BigInt",
-          "scala.math.BigDecimal",
-          "scala.Boolean",
-          "java.lang.String",
-          "java.util.Date"
-        ).contains(norm)
-        )
-    case OptionType(_, inner, _) =>
-      isComparableType(inner)
-    case _ =>
-      false
 
 
   private def constantToFieldType(v: Any): Option[FieldType] = v match {
@@ -292,6 +257,7 @@ object Utility:
 
   // Placeholder
   def rhsType(fn: Fn[?])(using ctx: ExprContext): Option[FieldType] =
+    println(s"[DEBUG] rhsType called with fn=${fn.getClass.getSimpleName}")
     fn match
       // ---------- Blocks: type = last expression ----------
       case b: BlockFn[?] =>
@@ -299,71 +265,113 @@ object Utility:
 
       // ---------- Constants ----------
       case NoneFn =>
-        Some(OptionType("", ScalarType("", "scala.Any"), "scala.Option"))
+        Some(NoneFieldType)
 
       case ConstantFn(v) =>
         Utility.constantToFieldType(v)
 
       // ---------- GetFn ----------
       case g: GetFn =>
-        // If GetFn has an explicit receiver → walk relative to receiver type; else use schema+symbols.
         g.recv match
-          case r if r == RootFn =>
-            // Unanchored — use global path resolution (vals/schema/symbols)
-            Some(Utility.getPathType(g.path)) // already strips numeric indices and handles val lookup
-
+          case r if r == RootFn || r == NoOpFn =>
+            Some(Utility.getPathType(g.path))
           case r =>
-            // Anchored — compute relative to the receiver’s type
             for
               baseT <- rhsType(r)
               ft    <- Utility.walkType(baseT, g.path.split("\\.").toList)
             yield ft
 
+      // ---------- Tuple2Fn ----------  (hack--create artificial ClassType that is unpacked in CMapFn.resultType()
+      case t2: Tuple2Fn =>
+        for
+          leftT  <- rhsType(t2.recv)
+          rightT <- t2.args.headOption.flatMap(rhsType)
+        yield ClassType(
+          fieldName = "",
+          typeName = "scala.Tuple2",
+          fields = List(leftT, rightT)
+        )
+
+      // ---------- MapFn ----------
+      case f: MapFn =>
+        val recvType = rhsType(f.recv)
+        val transformType = f.args.headOption.flatMap(rhsType)
+        (recvType, transformType) match
+          // List.map() → List
+          case (Some(ListType(name, _, collType, isOpt)), Some(elemType)) =>
+            Some(ListType(name, elemType, collType, isOpt))
+
+          // Map.map(), where transform returns a Tuple ⇒ stays a Map
+          case (Some(MapType(name, _, _, collType, isOpt)), Some(ClassType(_, "scala.Tuple2", fields, _))) if fields.size == 2 =>
+            Some(MapType(name, fields.head, fields(1), collType, isOpt))
+
+          // Map.map(), where transform returns a scalar ⇒ becomes List
+          case (Some(MapType(name, _, _, collType, isOpt)), Some(elemType)) =>
+            Some(ListType(name, elemType, "scala.collection.immutable.List", isOpt))
+
+          case _ => None
+
       // ---------- IndexFn (indexing at runtime) ----------
       case i: IndexFn =>
-        // Index over List[T] or Option[List[T]] → element type
         rhsType(i.recv).flatMap {
-          case ListType(_, elem, _, _)                => Some(elem)
-          case OptionType(_, inner: ListType, _)      => Some(inner.elementType)
-          case MapType(_, _, valueType, _, _)         => Some(valueType) // map indexing yields value type
-          case OptionType(_, inner: MapType, _)       => Some(inner.valueType)
-          case _                                      => None
+          case l: ListType =>
+            // unwrap list element
+            val elem = l.elementType
+            Some(elem.cloneWithOptional(l.isOptional))
+
+          case m: MapType =>
+            // map lookup is safe → return Option[valueType]
+            val v = m.valueType.cloneWithOptional(true)
+            Some(v)
+
+          case ft if ft.isOptional =>
+            // if the container itself is optional, unwrap one level
+            val inner = ft.cloneWithOptional(false)
+            Some(inner)
+          case _ =>
+            None
         }
+
+      // ---------- CaseWhenFn ----------
+      case cw: CaseWhenFn =>
+        val branchTypes = cw.cases.map(_._2).flatMap(rhsType(_)(using ctx))
+        val defaultType = cw.default.flatMap(rhsType(_)(using ctx))
+        val allTypes = branchTypes ++ defaultType.toList
+
+        if allTypes.isEmpty then None
+        else if allTypes.map(_.typeName).distinct.size == 1 then Some(allTypes.head)
+        else Some(ScalarType("", "scala.Any"))
 
       // ---------- Generic Fn nodes ----------
       case f: Fn[?] =>
-        // If this is a known DSL function, ask its CompileFn for result type.
+        println(s"[DEBUG] rhsType(f.recv)=${f.recv.getClass.getSimpleName}")
         CompileFnRegistry.lookup(f.methodName) match
-        case Some(cfn) =>
-          // receiver type: get its FieldType if resolvable, else default
-          val recvType =
-            rhsType(f.recv)
-              .orElse(ctx.receiver.map(_.ftype)) // fallback to ambient receiver
-              .getOrElse(ScalarType("", "scala.Any"))
+          case Some(cfn) =>
+            val recvType =
+              rhsType(f.recv)
+                .orElse(ctx.receiver.map(_.ftype))
+                .getOrElse(ScalarType("", "scala.Any"))
 
-          // argument types
-          val argTypeOpts = f.args.map(rhsType)
-          if argTypeOpts.exists(_.isEmpty) then None
-          else
-            val argTypes = argTypeOpts.flatten
-            val recvName =
-              if f.recv == RootFn then "<anon>"
-              else f.recv.toString
+            val argTypeOpts = f.args.map(rhsType)
+            if argTypeOpts.exists(_.isEmpty) then None
+            else
+              val argTypes = argTypeOpts.flatten
+              val recvName =
+                if f.recv == RootFn then "<anon>"
+                else f.recv.toString
 
-            Some(
-              cfn.resultType(
-                // we need a concrete NamedReceiver
-                NamedReceiver(recvName, recvType, f.recv),
-                argTypes
+              Some(
+                cfn.resultType(
+                  NamedReceiver(recvName, recvType, f.recv),
+                  argTypes
+                )
               )
-            )
 
-        // Unknown Fn type with no registered CompileFn
-        case None =>
-          f match
-            case _: BooleanConstantFn => Some(ScalarType("", "scala.Boolean"))
-            case _: ConstantFn[?]     => Some(ScalarType("", "scala.Any"))
-            case _                    => None
+          case None =>
+            f match
+              case _: BooleanConstantFn => Some(ScalarType("", "scala.Boolean"))
+              case _: ConstantFn[?]     => Some(ScalarType("", "scala.Any"))
+              case _                    => None
 
 
   //--------------- OLD
