@@ -34,7 +34,7 @@ trait Fn[R]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, R]
 
   /** Default: no sub-nodes. Override in composite nodes. */
-  def children: List[Fn[?]] = args
+  def children: List[Fn[?]] = recv :: args
 
   /** Rebuild with new children (in the same order as `children`). */
   def rebuild(kids: List[Fn[?]]): Fn[R]

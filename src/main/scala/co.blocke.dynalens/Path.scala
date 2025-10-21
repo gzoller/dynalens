@@ -35,22 +35,27 @@ object Path:
     path.split("\\.").toList.map { segment =>
       val clean = segment
 
-      val re = """^([^\[]+)(?:\[(?:(\d+)|"([^"]+)")\])?$""".r
+      val re = """^([^\[]+)(?:\[(\w+|"(?:[^"\\]|\\.)*")\])?$""".r
       clean match {
-        case re(name, numIdx, strIdx) if numIdx != null =>
-          IndexedField(name, Some(numIdx))
-        case re(name, numIdx, strIdx) if strIdx != null =>
-          IndexedField(name, Some(strIdx))
-        case re(name, _, _) =>
+        case re(name, idx) if idx != null =>
+          val unquoted =
+            if idx.startsWith("\"") && idx.endsWith("\"") && idx.length >= 2 then
+              idx.substring(1, idx.length - 1)
+            else idx
+          IndexedField(name, Some(unquoted))
+        case re(name, _) =>
           Field(name)
       }
     }
 
-  private val re = """^([^\[]+)(?:\[(?:(\d+)|"([^"]+)")\])?$""".r
+  private val re = """^([^\[]+)(?:\[(\w+|"(?:[^"\\]|\\.)*")\])?$""".r
   def segmentAndIndex(seg: String): (String, Option[String]) = seg match
-    case re(name, numIdx, strIdx) =>
-      val idx = if numIdx != null then Some(numIdx) else Option(strIdx)
-      (name, idx)
+    case re(name, idx) =>
+      val unquoted =
+        if idx != null && idx.startsWith("\"") && idx.endsWith("\"") && idx.length >= 2 then
+          idx.substring(1, idx.length - 1)
+        else idx
+      (name, Option(unquoted))
     case _ =>
       (seg, None)
 

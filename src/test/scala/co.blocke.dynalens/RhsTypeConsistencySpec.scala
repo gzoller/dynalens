@@ -4,7 +4,7 @@ import zio.*
 import zio.test.*
 import parser.*
 import co.blocke.dynalens.fn.*
-import parser.fn.*
+import parser.cfn.*
 import co.blocke.dynalens._BiMapRegistry
 import co.blocke.testkit.ZioTestKit._
 

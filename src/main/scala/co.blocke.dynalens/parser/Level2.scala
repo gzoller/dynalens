@@ -19,9 +19,14 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+package co.blocke.dynalens
+package parser
+
 import fastparse.*
 import NoWhitespace.*
+import cfn.*
 import fn.*
+import co.blocke.dynalens.ScalarType
 
 //
 // Second level:
@@ -39,30 +44,26 @@ trait Level2 extends Level1 with ValueExprModule:
       case (Left(e), _) => Left(e)
       case (Right(_), Left(e)) => Left(e)
       case (Right(a1), Right(b1)) =>
-        CompileFnRegistry.lookup("&&") match
-          case Some(cfn) =>
-            cfn.build(NoOpFn, List(a1.asInstanceOf[Fn[Any]], b1.asInstanceOf[Fn[Any]])) match
-              case Left(err) => Left(err)
-              case Right(fn) =>
-                cfn.validate(fn)(using ctx).map(_ => fn.asInstanceOf[BooleanFn])
-          case None =>
-            Left(DLCompileError(0, "Missing CompileFn for &&"))
+        CAndFn.build(
+          NamedReceiver("&&", ScalarType("", "scala.Boolean"), NoOpFn),
+          List(a1.asInstanceOf[Fn[Any]], b1.asInstanceOf[Fn[Any]])
+        ) match
+          case Left(err) => Left(err)
+          case Right(fn) =>
+            CAndFn.validate(fn)(using ctx).map(_ => fn.asInstanceOf[BooleanFn])
 
   private inline def orCombine(a: ParseBoolResult, b: ParseBoolResult)(using ctx: ExprContext): ParseBoolResult =
     (a, b) match
       case (Left(e), _) => Left(e)
       case (Right(_), Left(e)) => Left(e)
       case (Right(a1), Right(b1)) =>
-        CompileFnRegistry.lookup("||") match
-          case Some(cfn) =>
-            cfn.build(NoOpFn, List(a1.asInstanceOf[Fn[Any]], b1.asInstanceOf[Fn[Any]])) match
-              case Left(err) => Left(err)
-              case Right(fn) =>
-                cfn.asInstanceOf[CompileFn[Fn[Any]]]
-                  .validate(fn.asInstanceOf[Fn[Any]])(using ctx)
-                  .map(_ => fn.asInstanceOf[BooleanFn])
-          case None =>
-            Left(DLCompileError(0, "Missing CompileFn for ||"))
+        COrFn.build(
+          NamedReceiver("||", ScalarType("", "scala.Boolean"), NoOpFn),
+          List(a1.asInstanceOf[Fn[Any]], b1.asInstanceOf[Fn[Any]])
+        ) match
+          case Left(err) => Left(err)
+          case Right(fn) =>
+            COrFn.validate(fn)(using ctx).map(_ => fn.asInstanceOf[BooleanFn])
 
   /** atom := '(' booleanExpr ')' | comparisonExpr | booleanLiteral | ToBoolean(arithmeticExpr) */
   private def booleanAtom[$: P](using ctx: ExprContext): P[ParseBoolResult] =
@@ -71,7 +72,7 @@ trait Level2 extends Level1 with ValueExprModule:
         "(" ~/ booleanExpr ~ ")" |
           comparisonExpr |
           booleanLiteral.map(b => Right(b): ParseBoolResult) |
-          arithmeticExpr.map(_.map(ToBooleanFn.apply): ParseBoolResult)
+          arithmeticExpr.map(_.map(fn => ToBooleanFn(fn, ctx.posStr)): ParseBoolResult)
       )
     )
 
@@ -82,14 +83,8 @@ trait Level2 extends Level1 with ValueExprModule:
         rest.foldLeft(first) {
           case (Left(e), _) => Left(e)
           case (Right(acc), Right(rhs)) =>
-            // Phase 1: build
-            COrFn.build(NoOpFn, List(acc.asInstanceOf[Fn[Any]], rhs.asInstanceOf[Fn[Any]])) match
-              case Left(err) => Left(err)
-              case Right(fn) =>
-                // Phase 2: validate
-                COrFn.validate(fn)(using ctx).map(_ => fn)
+            orCombine(Right(acc), Right(rhs))
           case (Right(_), Left(e)) => Left(e)
-          case (Left(e), Right(_)) => Left(e)
         }
     }
 
@@ -100,14 +95,8 @@ trait Level2 extends Level1 with ValueExprModule:
         rest.foldLeft(first) {
           case (Left(e), _) => Left(e)
           case (Right(acc), Right(rhs)) =>
-            // Phase 1: build
-            CAndFn.build(NoOpFn, List(acc.asInstanceOf[Fn[Any]], rhs.asInstanceOf[Fn[Any]])) match
-              case Left(err) => Left(err)
-              case Right(fn) =>
-                // Phase 2: validate
-                CAndFn.validate(fn)(using ctx).map(_ => fn)
+            andCombine(Right(acc), Right(rhs))
           case (Right(_), Left(e)) => Left(e)
-          case (Left(e), Right(_)) => Left(e)
         }
     }
 
@@ -116,11 +105,9 @@ trait Level2 extends Level1 with ValueExprModule:
     P(
       ("!" ~ WS0 ~ booleanNot).map {
         case Right(b) =>
-          // Phase 1: build
-          CNotFn.build(NoOpFn, List(b.asInstanceOf[Fn[Any]])) match
-            case Left(err) => Left(err)
+          CNotFn.build(NamedReceiver("!", ScalarType("", "scala.Boolean"), NoOpFn), List(b.asInstanceOf[Fn[Any]])) match
+            case Left(e) => Left(e)
             case Right(fn) =>
-              // Phase 2: validate
               CNotFn.validate(fn)(using ctx).map(_ => fn)
         case Left(e) => Left(e)
       } | booleanAtom
@@ -130,7 +117,6 @@ trait Level2 extends Level1 with ValueExprModule:
   private def comparisonExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
     P(arithmeticExpr ~ WS0 ~ StringIn("==", "!=", ">=", "<=", ">", "<").! ~ WS0 ~ arithmeticExpr)
       .map { case (lE, op, rE) =>
-        // Pick the comparison function first
         val cfn: CompileFn[?] = op match
           case ">"  => CGreaterThanFn
           case ">=" => CGreaterThanOrEqualFn
@@ -143,7 +129,7 @@ trait Level2 extends Level1 with ValueExprModule:
           left  <- lE
           right <- rE
           built <- cfn
-            .build(NoOpFn, List(left, right))
+            .build(NamedReceiver(op, ScalarType("", "scala.Boolean"), NoOpFn), List(left, right))
             .asInstanceOf[Either[DLCompileError, BooleanFn]]
           _     <- cfn.validate(built)(using ctx)
         yield built
@@ -151,115 +137,91 @@ trait Level2 extends Level1 with ValueExprModule:
 
   // ---- Arithmetic ----
 
+  // arithmeticExpr := arithmeticTerm (('+'|'-') arithmeticTerm)*
   private def arithmeticExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    arithmeticTerm
-
-  private def arithmeticTerm[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(Index ~ arithmeticFactor ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticFactor).rep).map {
+    P(Index ~ arithmeticTerm ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticTerm).rep).map {
       case (off, first, rest) =>
-        def containsIllegalThis(fn: Fn[?]): Boolean =
-          fn match
-            case GetFn("this", _, _) if ctx.receiver.isEmpty => true
-            case _ => false
-
-        // Check top-level illegal use immediately
         first match
           case Right(fn) if containsIllegalThis(fn) =>
-            Left(DLCompileError(off, "Use of 'this' with no receiver in scope"))
+            Left(DLCompileError(ctx.posStrFrom(off), "Use of 'this' with no receiver in scope"))
           case _ =>
             rest.foldLeft(first) {
               case (Left(e), _) => Left(e)
               case (Right(acc), (op, rightE)) =>
                 rightE.flatMap { r =>
-                  // Catch illegal RHS
                   if containsIllegalThis(r) then
-                    Left(DLCompileError(off, "Use of 'this' with no receiver in scope"))
+                    Left(DLCompileError(ctx.posStrFrom(off), "Use of 'this' with no receiver in scope"))
                   else
-                    op match
-                      case "+" =>
-                        for
-                          built <- CPlusFn.build(NoOpFn, List(acc, r))
-                          _ <- CPlusFn.validate(built)(using ctx)
-                        yield built
-
-                      case "-" =>
-                        for
-                          built <- CMinusFn.build(NoOpFn, List(acc, r))
-                          _ <- CMinusFn.validate(built)(using ctx)
-                        yield built
+                    val cfn = op match
+                      case "+" => CPlusFn
+                      case "-" => CMinusFn
+                    cfn
+                      .build(NamedReceiver(op, ScalarType("", "scala.Double"), NoOpFn), List(acc, r))
+                      .flatMap(fn => cfn.validate(fn)(using ctx).map(_ => fn.asInstanceOf[Fn[Any]]))
                 }
             }
     }
 
-  private def arithmeticFactor[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(arithmeticAtom ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ arithmeticAtom).rep).map {
-      case (first, rest) =>
-        def containsIllegalThis(fn: Fn[?]): Boolean =
-          fn match
-            case GetFn("this", _, _) if ctx.receiver.isEmpty => true
-            case _ => false
+  // Utility for 'this' enforcement in arithmetic
+  private def containsIllegalThis(fn: Fn[?])(using ctx: ExprContext): Boolean =
+    fn match
+      case GetFn("this", _, _, _) if ctx.receiver.isEmpty => true
+      case _ => false
 
+  // arithmeticTerm := arithmeticFactor (('*'|'/'|'%') arithmeticFactor)*
+  private def arithmeticTerm[$: P](using ctx: ExprContext): P[ParseFnResult] =
+    P(Index ~ arithmeticFactor ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ arithmeticFactor).rep).map {
+      case (off, first, rest) =>
         first match
-          case Right(fn) =>
-            if containsIllegalThis(fn) then
-              println(s"[arithFactor] ❌ Illegal top-level 'this' detected")
-              Left(DLCompileError(0, "Use of 'this' with no receiver in scope"))
-            else
-              rest.foldLeft(Right(fn): ParseFnResult) {
-                case (Left(e), _) => Left(e)
-                case (Right(acc), (op, rightE)) =>
-                  rightE.flatMap { r =>
-                    if containsIllegalThis(r) then
-                      println(s"[arithFactor] ❌ Illegal RHS 'this' detected")
-                      Left(DLCompileError(0, "Use of 'this' with no receiver in scope"))
-                    else
-                      op match
-                        case "*" =>
-                          for
-                            built <- CMultiplyFn.build(NoOpFn, List(acc, r))
-                            _ <- CMultiplyFn.validate(built)(using ctx)
-                          yield built
-                        case "/" =>
-                          for
-                            built <- CDivideFn.build(NoOpFn, List(acc, r))
-                            _ <- CDivideFn.validate(built)(using ctx)
-                          yield built
-                        case "%" =>
-                          for
-                            built <- CModulusFn.build(NoOpFn, List(acc, r))
-                            _ <- CModulusFn.validate(built)(using ctx)
-                          yield built
-                  }
-              }
-
-          case Left(err) =>
-            println(s"[arithFactor] ❌ Early error: $err")
-            Left(err)
+          case Right(fn) if containsIllegalThis(fn) =>
+            Left(DLCompileError(ctx.posStrFrom(off), "Use of 'this' with no receiver in scope"))
+          case _ =>
+            rest.foldLeft(first) {
+              case (Left(e), _) => Left(e)
+              case (Right(acc), (op, rightE)) =>
+                rightE.flatMap { r =>
+                  if containsIllegalThis(r) then
+                    Left(DLCompileError(ctx.posStrFrom(off), "Use of 'this' with no receiver in scope"))
+                  else
+                    val cfn = op match
+                      case "*" => CMultiplyFn
+                      case "/" => CDivideFn
+                      case "%" => CModulusFn
+                    cfn
+                      .build(NamedReceiver(op, ScalarType("", "scala.Double"), NoOpFn), List(acc, r))
+                      .flatMap(fn => cfn.validate(fn)(using ctx).map(_ => fn.asInstanceOf[Fn[Any]]))
+                }
+            }
     }
 
+  // arithmeticFactor := unaryMinus | arithmeticAtom
+  private def arithmeticFactor[$: P](using ctx: ExprContext): P[ParseFnResult] =
+    unaryMinus
+
+  // arithmeticAtom := baseExpr | numberLiteral | stringLiteral | '(' valueExpr ')' [.methodChain]
   private def arithmeticAtom[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(
-      baseExpr | // already P[ParseFnResult]
-        numberLiteral | // P[ParseFnResult]
-        stringLiteral | // P[ParseFnResult]
-        ("(" ~/ valueExpr ~ ")").flatMap {
-          case Right(expr)    => methodChain(expr) // attach trailing .methods to parenthesized expr
-          case left @ Left(_) => P(Pass(left))
-        }
+      baseExpr |
+      numberLiteral |
+      stringLiteral |
+      ("(" ~/ valueExpr ~ ")").flatMap {
+        case Right(expr)    => methodChain(expr)
+        case left @ Left(_) => P(Pass(left))
+      }
     )
 
   // support unary minus: -x
   private def unaryMinus[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P("-" ~/ WS0 ~ arithmeticAtom).flatMap {
-      case Right(fn) =>
-        (for {
-          built <- CMinusFn.build(NoOpFn, List(fn))   // CMinusFn handles unary
-          _     <- CMinusFn.validate(built)(using ctx)
-        } yield built) match
-          case ok @ Right(_) => P(Pass(ok))
-          case err @ Left(_) => P(Pass(err))
-
-      case Left(err) =>
+    P(Index ~ "-" ~/ WS0 ~ arithmeticAtom).flatMap {
+      case (off, Right(fn)) =>
+        given ExprContext = ctx.copy(pos = off)
+        val result: ParseFnResult =
+          for {
+            built <- CMinusFn.build(NamedReceiver("-", ScalarType("", "scala.Double"), NoOpFn), List(fn))
+            _     <- CMinusFn.validate(built)(using ctx)
+          } yield built.asInstanceOf[Fn[Any]]
+        P(Pass(result))
+      case (_, Left(err)) =>
         P(Pass(Left(err)))
     } | arithmeticAtom
 
@@ -267,9 +229,10 @@ trait Level2 extends Level1 with ValueExprModule:
 
   private def consExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(
-      arithmeticExpr ~ (WS0 ~ "::" ~ WS0 ~ arithmeticExpr).rep ~
+      Index ~ arithmeticExpr ~ (WS0 ~ "::" ~ WS0 ~ arithmeticExpr).rep ~
         &(WS0 ~ !CharIn("=<>!")) // prevent mis-parsing into comparison
-    ).map { case (firstE, restE) =>
+    ).map { case (off, firstE, restE) =>
+      given ExprContext = ctx.copy(pos = off)
       // if there was no "::", just return lhs unchanged
       if restE.isEmpty then
         firstE
@@ -280,18 +243,18 @@ trait Level2 extends Level1 with ValueExprModule:
         if errs.nonEmpty then Left(errs.head)
         else {
           val fns: List[Fn[Any]] = oks.map {
-            case GetFn("Nil", _, _) =>
+            case GetFn("Nil", _, _, _) =>
               ConstantFn[List[Any]](Nil).asInstanceOf[Fn[Any]]
             case other => other
           }
 
           val consTree: Fn[Any] =
             fns.reduceRight[Fn[Any]] { (h, t) =>
-              ConsFn(h, t).asInstanceOf[Fn[Any]]
+              ConsFn(h, t, ctx.posStr).asInstanceOf[Fn[Any]]
             }
 
           for {
-            _ <- CConsFn.validate(consTree)(using ctx)
+            _ <- CConsFn.validate(consTree)
           } yield consTree
         }
       }
@@ -353,12 +316,12 @@ trait Level2 extends Level1 with ValueExprModule:
           // Now parse the final expression under the *final* threaded context
           given ExprContext = finalCtx
 
-          P(valueExpr).flatMap {
-            case Left(e) =>
+          P(Index ~ valueExpr).flatMap {
+            case (_, Left(e)) =>
               P(WS0 ~ "}").map(_ => Left(e): ParseFnResult)
 
-            case Right(fn) =>
-              P(WS0 ~ "}").map(_ => Right(BlockFn(stmts, fn): Fn[Any]))
+            case (off, Right(fn)) =>
+              P(WS0 ~ "}").map(_ => Right(BlockFn(stmts, fn, ctx.posStrFrom(off)): Fn[Any]))
           }
     }
 
@@ -401,32 +364,36 @@ trait Level2 extends Level1 with ValueExprModule:
   private def valDecl[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P("val" ~/ WS ~ identifier.! ~ WS0 ~ "=" ~ WS0 ~ Index ~ valueExpr).map {
       case (name, offset, Right(vfn)) =>
-        val maybeFt = Utility.rhsType(vfn)
-
-        maybeFt match
-          case Some(ft: FieldType) =>
+        Utility.rhsType(vfn) match
+          // ---- FieldType found ----
+          case TypeResult.Known(ft: FieldType) =>
             // ensure ScalarType carries the val name, so later assignments match cleanly
             val ftNamed = ft match
-              case s: ScalarType if s.name.isEmpty => s.copy(name = name)
-              case other                           => other
+              case s: ScalarType if s.fieldName.isEmpty => s.copy(fieldName = name)
+              case other                                => other
             val valFt = ValType(name, ftNamed, ftNamed.typeName)
             val newCtx = ctx.withVals(name -> valFt)
             Right((newCtx, ValStmt(name, vfn)))
 
-          case None =>
+          // ---- Explicit type error (propagate) ----
+          case TypeResult.Error(err) =>
+            Left(err.copy(posStr = ctx.posStrFrom(offset)))
+
+          // ---- Unknown type (construct error manually) ----
+          case TypeResult.Unknown =>
             val reason = vfn match
               case g: GetFn =>
                 s"Unknown field path '${g.path}'"
               case m: Fn[?] =>
-                val recvTypeStr =
-                  m.recv.flatMap(Utility.rhsType)
-                    .map(_.typeName)
-                    .getOrElse("unknown")
+                val recvTypeStr = Utility.rhsType(m.recv) match
+                  case TypeResult.Known(ft) => ft.typeName
+                  case _                    => "unknown"
                 s"Method '${m.methodName}' cannot be applied to receiver of type $recvTypeStr"
-              case _ =>
-                vfn.getClass.getSimpleName
-            Left(DLCompileError(offset, reason))
+              case null =>
+                "Unexpected null function"
+            Left(DLCompileError(ctx.posStrFrom(offset), reason))
 
+      // ---- Parse error ----
       case (_, _, Left(err)) =>
         Left(err)
     }
@@ -441,107 +408,119 @@ trait Level2 extends Level1 with ValueExprModule:
     // Find the *first* indexed segment and reconstruct its base path prefix
     val idxPos = parts.indexWhere {
       case _: Path.IndexedField => true
-      case _ => false
+      case _                    => false
     }
 
     if (idxPos < 0) Right(()) // no indexing present
     else {
       val baseParts = parts.take(idxPos) :+ parts(idxPos) // include the indexed field’s name
       val baseName = baseParts.last match {
-        case Path.IndexedField(n, _, _) => n
-        case Path.Field(n, _)           => n
+        case Path.IndexedField(n, __) => n
+        case Path.Field(n)           => n
       }
 
       // Build the dotted prefix up to (and including) the indexed field name
       val basePath = baseParts.map {
-        case Path.Field(n, _)           => n
-        case Path.IndexedField(n, _, _) => n
+        case Path.Field(n)           => n
+        case Path.IndexedField(n, _) => n
       }.mkString(".")
 
-      val rawType = Utility.getPathType(basePath)
-      println(s"[enforceIndexedBaseIsCollection] basePath=$basePath rawType=$rawType (${rawType.getClass.getName})")
-      val effectiveType = rawType match
-        case o: OptionType if o.valueType.isInstanceOf[ListType] =>
-          o.valueType.asInstanceOf[ListType]
-        case other => other
+      Utility.getPathType(basePath)(using ctx) match {
+        case Left(err) =>
+          println(s"[enforceIndexedBaseIsCollection] basePath=$basePath error: ${err.msg}")
+          Left(DLCompileError(ctx.posStrFrom(off), s"Unknown field path '$basePath': ${err.msg}"))
+        case Right(rawType) =>
+          // unwrap Option or other wrappers if you’ve introduced a unified “effectiveTypeOf” helper
+          val effectiveType = rawType match
+            case v: ValType => v.valueType
+            case other      => other
 
-      println(s"[enforceIndexedBaseIsCollection] basePath=$basePath  rawType=$rawType  effective=$effectiveType")
+          println(s"[enforceIndexedBaseIsCollection] basePath=$basePath  rawType=$rawType  effective=$effectiveType")
 
-      effectiveType match {
-        case _: ListType => Right(())
-        case _           => Left(DLCompileError(off, s"Cannot index into non-list field '$baseName'"))
+          effectiveType match {
+            case _: ListType => Right(())
+            case _           => Left(DLCompileError(ctx.posStrFrom(off),
+              s"Cannot index into non-list field '$baseName'"))
+          }
       }
     }
   }
 
   // '=': always assignment
-  private def updateStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
-    P(Index ~ pathBase ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
-      println(s"[updateStmt] starting parse, raw path: $rawPath, rewritten: ${CorrectPath.rewritePath(rawPath, pathOff)}")
+  private def updateStmt[$: P](using ctx0: ExprContext): P[ParseStmtResult] =
+    P(pathBase ~ WS0 ~ "=" ~/ WS0 ~ Index).flatMap { case (rawPath, rhsOff) =>
+      println(s"[updateStmt] starting parse, raw path: $rawPath, type: ${Utility.getPathType(rawPath)}")
 
-      CorrectPath.rewritePath(rawPath, pathOff) match {
+      Utility.getPathType(rawPath) match {
         case Left(err) => P(Pass(Left(err)))
-        case Right(cleanPath) =>
-          enforceIndexedBaseIsCollection(cleanPath, pathOff) match {
+        case Right(lhsFieldType) =>
+          // --- Infer effective LHS type (effLhs is now in scope for compatibility and printlns) ---
+          val effLhs: FieldType = lhsFieldType match {
+            case v: ValType => v.valueType
+            case other      => other
+          }
+          enforceIndexedBaseIsCollection(rawPath, rhsOff)(using ctx0) match {
             case Left(e) => P(Pass(Left(e)))
             case Right(_) =>
-
               // --- enrich context for RHS (so `this` and nested fields are valid) ---
-              val ctxForRhs = Utility.addThisType(cleanPath, ctx)
-
-              given ExprContext = ctxForRhs
-
-              P(valueExpr ~ WS0).map {
-                case Left(e) => Left(e)
-
-                case Right(rhsFn) =>
-                  // --- Check for illegal use of 'this' outside collection/map context ---
-                  if Utility.containsThis(rhsFn) && ctx.receiver.isEmpty then
-                    Left(DLCompileError(rhsOff, "Use of 'this' with no receiver in scope"))
-                  else {
-                    // --- Infer effective LHS type ---
-                    val lhsFieldType: FieldType = Utility.getPathType(cleanPath)
-                    val effLhs: FieldType = Utility.effectiveLhsForAssignment(lhsFieldType, cleanPath)
-
-                    // --- Infer RHS type ---
-                    val effRhsOpt: Option[FieldType] = rhsFn match {
-                      case GetFn(sym, _, _) =>
-                        ctx.symbols.collectFirst {
-                          case scope if scope.contains(sym) =>
-                            scope(sym) match {
-                              case vt: ValType => vt.valueType
-                              case ft: FieldType => ft
+              Utility.addThisType(rawPath, ctx0) match {
+                case Left(err) =>
+                  P(Pass(Left(err)))
+                case Right(ctxForRhs) =>
+                  given ExprContext = ctxForRhs
+                  P(valueExpr ~ WS0).map {
+                    case Left(e) => Left(e)
+                    case Right(rhsFn) =>
+                      // --- Check for illegal use of 'this' outside collection/map context ---
+                      if Utility.containsThis(rhsFn) && ctx0.receiver.isEmpty then
+                        Left(DLCompileError(ctx0.posStrFrom(rhsOff), "Use of 'this' with no receiver in scope"))
+                      else {
+                        // --- Infer RHS type ---
+                        val effRhsResult: Either[DLCompileError, FieldType] = rhsFn match {
+                          case GetFn(sym, _, _, _) =>
+                            ctxForRhs.symbols.collectFirst {
+                              case scope if scope.contains(sym) =>
+                                scope(sym) match {
+                                  case vt: ValType   => vt.valueType
+                                  case ft: FieldType => ft
+                                }
                             }
-                        }.orElse(Utility.rhsType(rhsFn)(using ctx))
-
-                      case _ =>
-                        Utility.rhsType(rhsFn)(using ctx)
-                    }
-
-                    effRhsOpt match {
-                      case None =>
-                        Left(DLCompileError(rhsOff, s"Unable to infer type of RHS: ${rhsFn.getClass.getSimpleName}"))
-
-                      case Some(effRhs) =>
-                        if Utility.areTypesCompatible(effLhs, effRhs) then
-                          Right((ctx, UpdateStmt(cleanPath, rhsFn)))
-                        else {
-                          val lhsMsg = Utility.prettyFieldType(lhsFieldType) // declared type for message
-                          val rhsMsg = Utility.prettyFieldType(effRhs)
-
-                            // If you want a trailing '?' when LHS is optional:
-                          val pathForMsg =
-                            lhsFieldType match
-                              case _: OptionType => s"$cleanPath"
-                              case _             => cleanPath
-                          println(s"[updateStmt] LHS raw type: ${Utility.getPathType(cleanPath)}")
-                          println(s"[updateStmt] LHS effective type: $effLhs")
-                          Left(DLCompileError(
-                            rhsOff,
-                            s"Type mismatch: cannot assign $rhsMsg to $lhsMsg at $pathForMsg"
-                          ))
+                            .map(Right(_))
+                            .getOrElse {
+                              Utility.rhsType(rhsFn)(using ctxForRhs) match
+                                case TypeResult.Known(ft: FieldType)       => Right(ft)
+                                case TypeResult.Error(err: DLCompileError) => Left(err)
+                                case TypeResult.Unknown                    => Left(DLCompileError(ctxForRhs.posStr, "Unknown RHS type"))
+                            }
+                          case _ =>
+                            Utility.rhsType(rhsFn)(using ctxForRhs) match
+                              case TypeResult.Known(ft: FieldType)       => Right(ft)
+                              case TypeResult.Error(err: DLCompileError) => Left(err)
+                              case TypeResult.Unknown                    => Left(DLCompileError(ctxForRhs.posStr, "Unknown RHS type"))
                         }
-                    }
+                        effRhsResult match {
+                          case Left(err) =>
+                            Left(DLCompileError(ctx0.posStrFrom(rhsOff), s"Unable to infer type of RHS: ${err.msg}"))
+                          case Right(effRhs) =>
+                            // Inline type compatibility logic:
+                            val compatible =
+                              (effLhs.typeName == effRhs.typeName) ||
+                              ((effLhs.isInstanceOf[ScalarType] && effRhs.isInstanceOf[ScalarType]) &&
+                                (effLhs.typeName == effRhs.typeName))
+                            if compatible then
+                              Right((ctx0, UpdateStmt(rawPath, rhsFn, ctx0.posStrFrom(rhsOff))))
+                            else {
+                              val lhsMsg = Utility.prettyFieldType(lhsFieldType) // declared type for message
+                              val rhsMsg = Utility.prettyFieldType(effRhs)
+                              println(s"[updateStmt] LHS raw type: $lhsFieldType")
+                              println(s"[updateStmt] LHS effective type: $effLhs")
+                              Left(DLCompileError(
+                                ctx0.posStrFrom(rhsOff),
+                                s"Type mismatch: cannot assign $rhsMsg to $lhsMsg at $rawPath"
+                              ))
+                            }
+                        }
+                      }
                   }
               }
           }
@@ -551,135 +530,111 @@ trait Level2 extends Level1 with ValueExprModule:
   // Parses: ( <expr> , <expr> )
   private def pairExpr[$: P](using ctx: ExprContext)
   : P[Either[DLCompileError, (Fn[Any], Fn[Any])]] =
-    P("(" ~/ WS0 ~ valueExpr ~ WS0 ~ "," ~ WS0 ~ valueExpr ~ WS0 ~ ")").map {
-      case (Left(e1), _) => Left(e1)
-      case (_, Left(e2)) => Left(e2)
-      case (Right(k: Fn[Any] @unchecked), Right(v: Fn[Any] @unchecked)) =>
-        Right((k, v))
+    P(Index ~ "(" ~/ WS0 ~ valueExpr ~ WS0 ~ "," ~ WS0 ~ valueExpr ~ WS0 ~ ")").map {
+      case (_, Left(e1), _) => Left(e1)
+      case (_, _, Left(e2)) => Left(e2)
+      case (off, Right(k: Fn[Any] @unchecked), Right(v: Fn[Any] @unchecked)) =>
+        if Utility.containsThis(k) && ctx.receiver.isEmpty then
+          Left(DLCompileError(ctx.posStrFrom(off), "Use of 'this' with no receiver in scope in pair key"))
+        else if Utility.containsThis(v) && ctx.receiver.isEmpty then
+          Left(DLCompileError(ctx.posStrFrom(off), "Use of 'this' with no receiver in scope in pair value"))
+        else
+          Right((k, v))
     }
 
   // exactly like blockFn but forcing the final expression to be pairExpr
   private def blockPairFn[$: P](using ctx0: ExprContext): P[ParseFnResult] =
     P("{" ~/ WS0).flatMap { _ =>
       given ExprContext = ctx0
-
       statementSeq.flatMap { stmtsE =>
         val folded =
           stmtsE.foldLeft[Either[DLCompileError, (ExprContext, List[Statement])]](Right(ctx0 -> Nil)) {
             case (Left(err), _) => Left(err)
             case (_, Left(err)) => Left(err)
             case (Right((accCtx, ss)), Right((newCtx, stmt))) =>
-              Right(accCtx.merge(newCtx) -> (ss :+ stmt))
+              Right(newCtx -> (ss :+ stmt))
           }
-
         folded match {
           case Left(e) => P(Pass(Left(e)))
-
           case Right((finalCtx, ss)) =>
             given ExprContext = finalCtx
-
             P(pairExpr ~ WS0 ~ "}").map {
               case Left(err) => Left(err)
               case Right((kFn, vFn)) =>
-                Right(BlockFn(ss, Tuple2Fn(kFn, vFn)): Fn[Any])
+                Right(BlockFn(ss, Tuple2Fn(kFn, List(vFn), ctx0.posStr), ctx0.posStr): Fn[Any])
             }
         }
       }
     }
 
-  // '=>': always map
-  private def mapStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
-    P(Index ~ pathBase ~ WS0 ~ "=>" ~/ WS0 ~ Index).flatMap { case (pathOff, rawPath, rhsOff) =>
-      CorrectPath.rewritePath(rawPath, pathOff) match
+  // '=>' map statement (comprehensions)
+  private def mapStmt[$: P](using ctx0: ExprContext): P[ParseStmtResult] =
+    P(pathBase ~ WS0 ~ "=>" ~/ WS0 ~ Index).flatMap { case (rawPath, rhsOff) =>
+      Utility.getPathType(rawPath)(using ctx0) match {
         case Left(err) => P(Pass(Left(err)))
-
-        case Right(cleanPath) =>
-          // new API: returns Option[FieldType]
-          val lhsFt: FieldType = Utility.getPathType(cleanPath)(using ctx)
-          val hasList: Boolean         = Utility.hasListSegment(cleanPath)
-
-          // Start from original ctx and branch on the actual FieldType
-          val baseRhsCtx: ExprContext = lhsFt match
-            case m: MapType =>
-              ctx.withReceiver(Utility.mapEntryReceiverFor(cleanPath)(using ctx))
-
-            case o: OptionType if o.valueType.isInstanceOf[MapType] =>
-              ctx.withReceiver(Utility.mapEntryReceiverFor(cleanPath)(using ctx))
-
-            case l: ListType =>
-              ctx.withReceiverFromPath(cleanPath)
-
-            case o: OptionType if o.valueType.isInstanceOf[ListType] =>
-              ctx.withReceiverFromPath(cleanPath)
-
-            case o: OptionType if o.valueType.isInstanceOf[ScalarType] =>
-              ctx.withVals("this" -> o.valueType)
-
-            case _ =>
-              ctx
-
-          // If you still need container-level fields for completions, implement a new helper
-          // based on ClassType traversal. For now simply:
-          val containerScope: Map[String, FieldType] =
-            Utility.containerFieldsFor(ctx.schema, cleanPath)
-              .map(ft => ft.name -> ft)
-              .toMap
-
-          val ctxForRhs =
-            if containerScope.nonEmpty then
-              baseRhsCtx.pushScope(containerScope.values.toList)
-            else
-              baseRhsCtx
-
-          given ExprContext = ctxForRhs
-
-          lhsFt match
-            // LHS is a Map or an Option[Map]
-            case m: MapType =>
-              val pairAsFn: P[Either[DLCompileError, Fn[Any]]] =
-                P(
-                  blockPairFn |
-                    pairExpr.map {
-                      case Left(e)       => Left(e)
-                      case Right((k, v)) => Right(Tuple2Fn(k, v): Fn[Any])
-                    }
-                )
-
-              P(pairAsFn ~ WS0).map {
-                case Left(e)       => Left(e)
-                case Right(bodyFn) => Right((ctx, MapStmt(cleanPath, bodyFn)))
-              }
-
-            case o: OptionType if o.valueType.isInstanceOf[MapType] =>
-              val pairAsFn: P[Either[DLCompileError, Fn[Any]]] =
-                P(
-                  blockPairFn |
-                    pairExpr.map {
-                      case Left(e)       => Left(e)
-                      case Right((k, v)) => Right(Tuple2Fn(k, v): Fn[Any])
-                    }
-                )
-
-              P(pairAsFn ~ WS0).map {
-                case Left(e)       => Left(e)
-                case Right(bodyFn) => Right((ctx, MapStmt(cleanPath, bodyFn)))
-              }
-
-            case _ =>
-              P(valueExpr ~ WS0).map {
-                case Left(e) => Left(e)
-                case Right(vfn) =>
-                  // true if the LHS is a List or an Option of List
-                  val isListLike = lhsFt match {
-                    case _: ListType => true
-                    case OptionType(_, inner: ListType, _) => true
-                    case _ => false
+        case Right(_) =>
+          Utility.getPathType(rawPath)(using ctx0) match {
+            case Left(err) => P(Pass(Left(err)))
+            case Right(lhsFt) =>
+              // Compute baseRhsCtx depending on the LHS type
+              val baseRhsCtx: ExprContext = lhsFt match {
+                case m: MapType =>
+                  ctx0.withReceiver(Utility.mapEntryReceiverFor(rawPath)(using ctx0))
+                case v: ValType if v.valueType.isInstanceOf[MapType] =>
+                  ctx0.withReceiver(Utility.mapEntryReceiverFor(rawPath)(using ctx0))
+                case l: ListType =>
+                  val ctxWithRecv = ctx0.withReceiverFromPath(rawPath) match {
+                    case Right(newCtx) => newCtx
+                    case Left(_)       => ctx0
                   }
-                  val body: Fn[?] =
-                    if isListLike then LoopFn(vfn)
-                    else vfn
-                  Right((ctx, MapStmt(cleanPath, body)))
+                  ctxWithRecv
+                case v: ValType if v.valueType.isInstanceOf[ListType] =>
+                  val ctxWithRecv = ctx0.withReceiverFromPath(rawPath) match {
+                    case Right(newCtx) => newCtx
+                    case Left(_)       => ctx0
+                  }
+                  ctxWithRecv
+                case v: ValType if v.valueType.isInstanceOf[ScalarType] =>
+                  ctx0.withVals("this" -> v.valueType)
+                case _ =>
+                  ctx0
               }
+              val ctxForRhs = baseRhsCtx
+              given ExprContext = ctxForRhs
+              lhsFt match {
+                // LHS is a Map or ValType wrapping a Map
+                case _: MapType |
+                     (_: ValType) if lhsFt.isInstanceOf[ValType] && lhsFt.asInstanceOf[ValType].valueType.isInstanceOf[MapType] =>
+                  val pairAsFn: P[Either[DLCompileError, Fn[Any]]] =
+                    P(
+                      blockPairFn |
+                        pairExpr.map {
+                          case Left(e)       => Left(e)
+                          case Right((k, v)) => Right(Tuple2Fn(k, List(v), ctx0.posStr): Fn[Any])
+                        }
+                    )
+                  P(pairAsFn ~ WS0).map {
+                    case Left(e)       => Left(e)
+                    case Right(bodyFn) => Right((ctx0, MapStmt(rawPath, bodyFn, ctx0.posStrFrom(rhsOff))))
+                  }
+                case _ =>
+                  P(valueExpr ~ WS0).map {
+                    case Left(e) => Left(e)
+                    case Right(vfn) =>
+                      // true if the LHS is a List or a ValType wrapping a List
+                      val isListLike = lhsFt match {
+                        case _: ListType => true
+                        case v: ValType if v.valueType.isInstanceOf[ListType] => true
+                        case _ => false
+                      }
+                      val body: Fn[?] =
+                        if isListLike then LoopFn(vfn, ctx0.posStrFrom(rhsOff))
+                        else vfn
+                      Right((ctx0, MapStmt(rawPath, body.asInstanceOf[Fn[Any]], ctx0.posStrFrom(rhsOff))))
+                  }
+              }
+          }
+      }
     }
 
   private def ifStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
@@ -693,13 +648,11 @@ trait Level2 extends Level1 with ValueExprModule:
           c <- condRes
           t <- thenRes
         yield (c, t)
-
       elseOptRes match
         case None =>
           base.map { case (c, (_, tStmt)) =>
             (ctx, IfStmt(c, tStmt, None))
           }
-
         case Some(er) =>
           for
             (c, (_, tStmt)) <- base
@@ -722,7 +675,7 @@ trait Level2 extends Level1 with ValueExprModule:
           println(s"[ifFn] then branch: $thenB, rhsType=${Utility.rhsType(thenB)}")
           println(s"[ifFn] else branch: $elseB, rhsType=${Utility.rhsType(elseB)}")
         }
-        built <- CIfFn.build(NoOpFn, List(cond.asInstanceOf[Fn[Any]], thenB, elseB))
+        built <- CIfFn.build(NamedReceiver("if", ScalarType("", "scala.Boolean"), NoOpFn), List(cond.asInstanceOf[Fn[Any]], thenB, elseB))
         _     <- CIfFn.validate(built)(using ctx)
       } yield built.asInstanceOf[Fn[Any]]
     }
@@ -758,7 +711,7 @@ trait Level2 extends Level1 with ValueExprModule:
             Left(e)
           case Some(Right((key, fn))) if key != "__default__" =>
             // Should never happen, but defensive
-            Left(DLCompileError(implicitly[ParsingRun[?]].index, s"Expected 'default', found: $key"))
+            Left(DLCompileError(ctx.posStrFrom(implicitly[ParsingRun[?]].index), s"Expected 'default', found: $key"))
           case Some(Right((_, fn))) =>
             Right((regularCases.toVector, Some(fn)))
           case None =>
@@ -785,9 +738,9 @@ trait Level2 extends Level1 with ValueExprModule:
 
         bad match {
           case Some(msg) =>
-            Left(DLCompileError(implicitly[ParsingRun[?]].index, msg))
+            Left(DLCompileError(ctx.posStrFrom(implicitly[ParsingRun[?]].index), msg))
           case None =>
-            Right(CaseWhenFn(base, pairs, df, permissive))
+            Right(CaseWhenFn(base, pairs, df, permissive, ctx.posStrFrom(implicitly[ParsingRun[?]].index)))
         }
 
       case Some((_, Left(e))) =>

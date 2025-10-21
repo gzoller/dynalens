@@ -211,7 +211,16 @@ case object NoneFn extends Fn[Any]:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, None.type] =
     ZIO.succeed(None)
 
-case class BooleanConstantFn(value: Boolean) extends Fn[Boolean]:
+case object NullFn extends Fn[Any]:
+  override val recv: Fn[Any] = RootFn
+  override val args: List[Fn[Any]] = Nil
+  override val methodName: String = "<null>"
+  val posStr = ""
+  override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Null] =
+    ZIO.succeed(null)
+
+case class BooleanConstantFn(value: Boolean) extends Fn[Boolean] with BooleanFn:
   override val recv: Fn[Any] = RootFn
   override val args: List[Fn[Any]] = Nil
   override val methodName: String = "<bool>"
@@ -514,3 +523,24 @@ object NoOpFn extends Fn[Any]:
   override def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     ZIO.fail(DynaLensError(posStr, "NoOpFn should never be resolved"))
 
+
+// Special converter: Fn[Any]->BooleanFn
+case class ToBooleanFn(inner: Fn[Any], posStr: String) extends BooleanFn:
+
+  override val recv: Fn[Any] = inner
+  override val args: List[Fn[Any]] = Nil
+  override val methodName: String = "<toBoolean>"
+  override val isOptional: Boolean = inner.isOptional
+
+  override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
+    kids match
+      case f :: Nil => copy(inner = f.asInstanceOf[Fn[Any]])
+      case _        => this
+
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
+    for
+      r <- inner.resolve(ctx)
+      typedResult <- r match
+        case b: Boolean => ZIO.succeed(b)
+        case other      => ZIO.fail(DynaLensError(posStr, s"Expected Boolean result at runtime, but got: ${other.getClass.getSimpleName} = $other"))
+    yield typedResult

@@ -31,11 +31,11 @@ object Script {
     given ctx: ExprContext = ExprContext(script, lens._schema)
     zio.ZIO
       .fromEither(parseScript(script))
-      .mapError(err => DynaLensError(ctx.posStr, err.render(script)))
+      .mapError(err => DynaLensError(ctx.posStr, err.render))
 
   def compileNoZIO(script: String, lens: DynaLens[?]): Either[DynaLensError, BlockStmt] =
     given ctx: ExprContext = ExprContext(script, lens._schema)
-    parseScript(script).left.map(err => DynaLensError(ctx.posStr, err.render(script)))
+    parseScript(script).left.map(err => DynaLensError(ctx.posStr, err.render))
 
   private def parseScript(script: String)(using exp: ExprContext): Either[DLCompileError, BlockStmt] =
     parse(script, s => Grammar.topLevelBlock(using s)) match {

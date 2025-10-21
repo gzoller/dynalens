@@ -25,46 +25,54 @@ object Validation:
     val types = args.map(a => Utility.rhsType(a))
     println(s"[requireNumeric2] method=$method")
     types.zipWithIndex.foreach { case (opt, i) =>
-      println(s"  arg$i -> ${opt.map(_.typeName).getOrElse("<?>")}")
-      println(s"  arg$i full: $opt")
-      println(s"  arg$i numeric? ${opt.exists(_.isNumeric)}")
+      opt match
+        case TypeResult.Known(ft) =>
+          println(s"  arg$i -> ${ft.typeName}")
+          println(s"  arg$i full: $ft")
+          println(s"  arg$i numeric? ${ft.isNumeric}")
+        case TypeResult.Unknown =>
+          println(s"  arg$i -> UNKNOWN")
+        case TypeResult.Error(e) =>
+          println(s"  arg$i -> ERROR: ${e.msg}")
     }
 
     (types.headOption, types.lift(1)) match
-      case (Some(Some(l)), Some(Some(r))) if l.isNumeric && r.isNumeric =>
+      case (Some(TypeResult.Known(l)), Some(TypeResult.Known(r))) if l.isNumeric && r.isNumeric =>
         println(s"[requireNumeric2] ✅ numeric pair: ${l.typeName}, ${r.typeName}")
         Right(())
-      case (Some(Some(l)), Some(Some(r))) =>
+      case (Some(TypeResult.Known(l)), Some(TypeResult.Known(r))) =>
         println(s"[requireNumeric2] ❌ non-numeric pair: ${l.typeName}, ${r.typeName}")
         Left(DLCompileError(posStr, s"$method requires numeric operands, found ${l.typeName} and ${r.typeName}"))
-      case other =>
-        println(s"[requireNumeric2] ❌ insufficient args or unresolved types: $other")
+      case (Some(TypeResult.Error(e)), _) => Left(e)
+      case (_, Some(TypeResult.Error(e))) => Left(e)
+      case _ =>
+        println(s"[requireNumeric2] ❌ insufficient args or unresolved types")
         Left(DLCompileError(posStr, s"$method requires numeric operands"))
 
   /** Ensure both args are boolean at compile time (for &&, ||). */
   def requireBoolean2(args: List[Fn[Any]], name: String, posStr: String)
                      (using ctx: ExprContext): Either[DLCompileError, Unit] =
-    (Utility.rhsType(args.head), Utility.rhsType(args(1))) match
-      case (Some(lt), Some(rt)) if lt.typeName == "scala.Boolean" && rt.typeName == "scala.Boolean" =>
+    val leftT = Utility.rhsType(args.head)
+    val rightT = Utility.rhsType(args(1))
+    (leftT, rightT) match
+      case (TypeResult.Known(lt), TypeResult.Known(rt)) if lt.typeName == "scala.Boolean" && rt.typeName == "scala.Boolean" =>
         Right(())
-      case (Some(lt), Some(rt)) =>
-        Left(DLCompileError(posStr,
-          s"$name requires boolean operands, found ${lt.typeName} and ${rt.typeName}"))
+      case (TypeResult.Known(lt), TypeResult.Known(rt)) =>
+        Left(DLCompileError(posStr, s"$name requires boolean operands, found ${lt.typeName} and ${rt.typeName}"))
+      case (TypeResult.Error(e), _) => Left(e)
+      case (_, TypeResult.Error(e)) => Left(e)
       case _ =>
-        Left(DLCompileError(posStr,
-          s"$name cannot determine operand types"))
+        Left(DLCompileError(posStr, s"$name cannot determine operand types"))
 
   /** Ensure a single arg is boolean (for unary !). */
   def requireBoolean1(arg: Fn[Any], name: String, posStr: String)
                      (using ctx: ExprContext): Either[DLCompileError, Unit] =
     Utility.rhsType(arg) match
-      case Some(ft) if ft.typeName == "scala.Boolean" => Right(())
-      case Some(ft) =>
-        Left(DLCompileError(posStr,
-          s"$name requires a boolean operand, found ${ft.typeName}"))
-      case None =>
-        Left(DLCompileError(posStr,
-          s"$name cannot determine operand type"))
+      case TypeResult.Known(ft) if ft.typeName == "scala.Boolean" => Right(())
+      case TypeResult.Known(ft) =>
+        Left(DLCompileError(posStr, s"$name requires a boolean operand, found ${ft.typeName}"))
+      case TypeResult.Error(e) => Left(e)
+      case _ => Left(DLCompileError(posStr, s"$name cannot determine operand type"))
 
   def expectBoolean1(arg: Fn[Any], name: String, posStr: String)
   : Either[DLCompileError, BooleanFn] =

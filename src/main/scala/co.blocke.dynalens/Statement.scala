@@ -33,7 +33,7 @@ case class ValStmt[R](name: String, fn: Fn[R]) extends Statement:
       value <- fn.resolve(ctx)
     } yield ctx.updatedWith(name, (value, None))
 
-case class MapStmt(path: String, fn: Fn[?]) extends Statement:
+case class MapStmt(path: String, fn: Fn[Any], posStr: String) extends Statement:
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
     ctx.get("top") match
       case Some((root, topLens)) =>
@@ -41,17 +41,18 @@ case class MapStmt(path: String, fn: Fn[?]) extends Statement:
           case Some(lens) =>
             for
               mapped <- MapRuntime.mapOver(
-                lens = lens.asInstanceOf[DynaLens[Any]],
-                root = root,
                 path = path,
-                fn = fn.asInstanceOf[Fn[Any]],
+                predicate = fn,
+                root = root,
+                lens = lens.asInstanceOf[DynaLens[Any]],
+                posStr = posStr,
                 outerCtx = ctx
               )
             yield ctx.clone.addOne("top", (mapped, topLens))
           case None =>
-            ZIO.fail(DynaLensError("<stmt>", "MapStmt requires top lens in context"))
+            ZIO.fail(DynaLensError(posStr, "MapStmt requires top lens in context"))
       case None =>
-        ZIO.fail(DynaLensError("<stmt>", "Missing 'top' in context for map statement"))
+        ZIO.fail(DynaLensError(posStr, "Missing 'top' in context for map statement"))
 
 
 case class IfStmt(
@@ -79,18 +80,19 @@ case class BlockStmt(statements: Seq[Statement]) extends Statement:
 
 case class UpdateStmt[R](
     path: String,
-    valueFn: Fn[R]
+    valueFn: Fn[R],
+    posStr: String
 ) extends Statement:
 
   def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
     parsePath(path) match
       case Nil =>
-        ZIO.fail(DynaLensError("update requires a path"))
+        ZIO.fail(DynaLensError(posStr, "update requires a path"))
 
       case pathHead :: rest if ctx.contains(pathHead.name) =>
         ctx(pathHead.name) match
           case (obj, None) =>
-            ZIO.fail(DynaLensError(s"Cannot update val '${pathHead.name}' (no lens)"))
+            ZIO.fail(DynaLensError(posStr, s"Cannot update val '${pathHead.name}' (no lens)"))
           case (obj, dynalens) =>
             dynalens
               .map(lens =>
@@ -117,4 +119,4 @@ case class UpdateStmt[R](
               )
               .getOrElse(ZIO.succeed(ctx))
           case None =>
-            ZIO.fail(DynaLensError(s"Unable to update: no 'top' context found for path $path"))
+            ZIO.fail(DynaLensError(posStr, s"Unable to update: no 'top' context found for path $path"))

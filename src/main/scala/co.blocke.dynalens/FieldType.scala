@@ -66,6 +66,27 @@ sealed trait FieldType:
     case v: ValType         => v.copy(valueType = v.valueType.cloneWithOptional(flag))
 
 
+
+object FieldType:
+  /**
+   * Create a synthetic FieldType to represent a transient or computed receiver.
+   * Keeps structure/type information but clears the name so it won’t collide with schema fields.
+   */
+  def synthetic(base: FieldType): FieldType = base match
+    case v: ValType =>
+      // unwrap the value type and synthesize recursively so `ValType` wrapper stays consistent
+      v.copy(fieldName = "", valueType = synthetic(v.valueType))
+    case s: ScalarType =>
+      s.copy(fieldName = "")
+    case l: ListType =>
+      l.copy(fieldName = "")
+    case m: MapType =>
+      m.copy(fieldName = "")
+    case c: ClassType =>
+      c.copy(fieldName = "")
+
+
+
 case class ScalarType(fieldName: String, typeName: String, isOptional: Boolean = false) extends FieldType:
   override def isNumeric: Boolean =
     Set(
@@ -112,3 +133,5 @@ case class ResolvedType(
 
 
 val NoneFieldType: FieldType = ScalarType("", "scala.Any", isOptional = true)
+
+

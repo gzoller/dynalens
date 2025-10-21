@@ -80,13 +80,6 @@ case class DynaLens[T](_schema: ClassType, _registry: Map[String, DynaLens[?]]):
   private[dynalens] def lensForPathPrefix(root: DynaLens[?], parts: List[Path.PathElement]): Option[DynaLens[?]] = None
 
 
-case class BlockStmt()
-
-trait Statement():
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] = ZIO.fail(DynaLensError("boom","ugh"))
-
 object Grammar:
   def topLevelBlock[$: P](using exprCtx: parser.ExprContext): P[Either[parser.DLCompileError, BlockStmt]] =
     Fail.opaque("Boom")
-
-case class ValStmt[R](name: String, fn: Fn[R]) extends Statement

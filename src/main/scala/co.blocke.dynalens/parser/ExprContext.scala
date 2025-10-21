@@ -44,17 +44,19 @@ case class ExprContext(
     copy(symbols = updatedHead :: symbols.drop(1))
 
   // For error messages
-  def posStr: String =
+  val posStr: String = posStrFrom(pos)
+  def posStrFrom(pos: Int): String =
     val lines = scriptText.take(pos).split('\n')
-    val line = lines.length
-    val col = lines.lastOption.map(_.length).getOrElse(0) + 1
+    val line  = lines.length
+    val col   = lines.lastOption.map(_.length).getOrElse(0) + 1
     s"[$line,$col]"
 
   /** Install a new receiver from a given schema path. */
-  def withReceiverFromPath(path: String): ExprContext =
-    val targetField: FieldType = Utility.getPathType(path)(using this)
-    val fn = GetFn(path, targetField.isOptional, co.blocke.dynalens.fn.RootFn, posStr)
-    copy(receiver = Some(NamedReceiver(path, targetField, fn)))
+  def withReceiverFromPath(path: String): Either[DLCompileError, ExprContext] =
+    Utility.getPathType(path)(using this).map { targetField =>
+      val fn = GetFn(path, targetField.isOptional, co.blocke.dynalens.fn.RootFn, posStr)
+      this.copy(receiver = Some(NamedReceiver(path, targetField, fn)))
+    }
 
   /** Directly set a receiver object. */
   def withReceiver(recv: Receiver): ExprContext =
@@ -62,10 +64,12 @@ case class ExprContext(
 
   /** Merge contexts across sequential statements without leaking receiver. */
   def merge(that: ExprContext): ExprContext =
-    copy(
-      schema   = this.schema,
-      symbols  = that.symbols ++ this.symbols,
-      receiver = this.receiver
+    ExprContext(
+      scriptText = this.scriptText,
+      schema     = this.schema,
+      symbols    = that.symbols ++ this.symbols,
+      receiver   = this.receiver,
+      pos        = this.pos
     )
 
   override def toString: String =

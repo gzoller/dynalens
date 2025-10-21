@@ -1,6 +1,6 @@
 package co.blocke.dynalens
 package parser
-package fn
+package cfn
 
 import scala.annotation.tailrec
 import co.blocke.dynalens.fn.*
@@ -167,9 +167,10 @@ object CStartsWithFn extends CompileFn[StartsWithFn]:
     fn match
       case s: StartsWithFn =>
         Utility.rhsType(s.other) match
-          case Some(ft) if ft.isStringLike => Right(())
-          case Some(ft)                    => Left(DLCompileError(ctx.posStr, s"startsWith requires String argument, found ${ft.typeName}"))
-          case None                        => Left(DLCompileError(ctx.posStr, "startsWith cannot determine argument type"))
+          case TypeResult.Known(ft) if ft.isStringLike => Right(())
+          case TypeResult.Known(ft)                    => Left(DLCompileError(ctx.posStr, s"startsWith requires String argument, found ${ft.typeName}"))
+          case TypeResult.Error(e)                      => Left(e)
+          case _                                       => Left(DLCompileError(ctx.posStr, "startsWith cannot determine argument type"))
       case _ => Right(())
 
 
@@ -194,9 +195,10 @@ object CEndsWithFn extends CompileFn[EndsWithFn]:
     fn match
       case e: EndsWithFn =>
         Utility.rhsType(e.other) match
-          case Some(ft) if ft.isStringLike => Right(())
-          case Some(ft)                    => Left(DLCompileError(ctx.posStr, s"endsWith requires String argument, found ${ft.typeName}"))
-          case None                        => Left(DLCompileError(ctx.posStr, "endsWith cannot determine argument type"))
+          case TypeResult.Known(ft) if ft.isStringLike => Right(())
+          case TypeResult.Known(ft)                    => Left(DLCompileError(ctx.posStr, s"endsWith requires String argument, found ${ft.typeName}"))
+          case TypeResult.Error(e)                      => Left(e)
+          case _                                       => Left(DLCompileError(ctx.posStr, "endsWith cannot determine argument type"))
       case _ => Right(())
 
 
@@ -229,13 +231,14 @@ object CContainsFn extends CompileFn[ContainsFn]:
     fn match
       case c: ContainsFn =>
         (Utility.rhsType(c.recv), Utility.rhsType(c.other)) match
-          case (Some(ScalarType(_, "java.lang.String", _)), Some(ScalarType(_, "java.lang.String", _))) => Right(())
-          case (Some(ListType(_, elem, _, _)), Some(argT)) if elem.canAssignTo(argT) => Right(())
-          case (Some(MapType(_, keyType, _, _, _)), Some(argT)) if keyType.canAssignTo(argT) => Right(())
-          case (Some(recvT), Some(argT)) =>
+          case (TypeResult.Known(ScalarType(_, "java.lang.String", _)), TypeResult.Known(ScalarType(_, "java.lang.String", _))) => Right(())
+          case (TypeResult.Known(ListType(_, elem, _, _)), TypeResult.Known(argT)) if elem.canAssignTo(argT) => Right(())
+          case (TypeResult.Known(MapType(_, keyType, _, _, _)), TypeResult.Known(argT)) if keyType.canAssignTo(argT) => Right(())
+          case (TypeResult.Known(recvT), TypeResult.Known(argT)) =>
             Left(DLCompileError(ctx.posStr, s"contains not applicable: receiver ${recvT.typeName} with argument ${argT.typeName}"))
-          case _ =>
-            Left(DLCompileError(ctx.posStr, "contains cannot determine receiver or argument type"))
+          case (TypeResult.Error(e), _) => Left(e)
+          case (_, TypeResult.Error(e)) => Left(e)
+          case _ => Left(DLCompileError(ctx.posStr, "contains cannot determine receiver or argument type"))
       case _ => Right(())
 
 
@@ -260,9 +263,10 @@ object CEqualsIgnoreCaseFn extends CompileFn[EqualsIgnoreCaseFn]:
     fn match
       case e: EqualsIgnoreCaseFn =>
         Utility.rhsType(e.other) match
-          case Some(ft) if ft.isStringLike => Right(())
-          case Some(ft) => Left(DLCompileError(ctx.posStr, s"equalsIgnoreCase requires String argument, found ${ft.typeName}"))
-          case None     => Left(DLCompileError(ctx.posStr, "equalsIgnoreCase cannot determine argument type"))
+          case TypeResult.Known(ft) if ft.isStringLike => Right(())
+          case TypeResult.Known(ft)                    => Left(DLCompileError(ctx.posStr, s"equalsIgnoreCase requires String argument, found ${ft.typeName}"))
+          case TypeResult.Error(e)                      => Left(e)
+          case _                                       => Left(DLCompileError(ctx.posStr, "equalsIgnoreCase cannot determine argument type"))
       case _ => Right(())
 
 
@@ -287,7 +291,8 @@ object CMatchesRegexFn extends CompileFn[MatchesRegexFn]:
     fn match
       case m: MatchesRegexFn =>
         Utility.rhsType(m.other) match
-          case Some(ft) if ft.isStringLike => Right(())
-          case Some(ft) => Left(DLCompileError(ctx.posStr, s"matchesRegex requires String argument, found ${ft.typeName}"))
-          case None     => Left(DLCompileError(ctx.posStr, "matchesRegex cannot determine argument type"))
+          case TypeResult.Known(ft) if ft.isStringLike => Right(())
+          case TypeResult.Known(ft)                    => Left(DLCompileError(ctx.posStr, s"matchesRegex requires String argument, found ${ft.typeName}"))
+          case TypeResult.Error(e)                      => Left(e)
+          case _                                       => Left(DLCompileError(ctx.posStr, "matchesRegex cannot determine argument type"))
       case _ => Right(())

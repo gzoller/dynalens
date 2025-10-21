@@ -1,6 +1,6 @@
 package co.blocke.dynalens
 package parser
-package fn
+package cfn
 
 import co.blocke.dynalens.fn.*
 
@@ -85,15 +85,19 @@ object CPlusFn extends CompileFn[Fn[?]]:
     fn match
       case a: AddFn =>
         (Utility.rhsType(a.recv), Utility.rhsType(a.args.head)) match
-          case (Some(lt), Some(rt)) if lt.isNumeric && rt.isNumeric => Right(())
-          case (Some(lt), Some(rt)) =>
+          case (TypeResult.Known(lt), TypeResult.Known(rt)) if lt.isNumeric && rt.isNumeric => Right(())
+          case (TypeResult.Known(lt), TypeResult.Known(rt)) =>
             Left(DLCompileError(ctx.posStr, s"+ requires numeric operands, found ${lt.typeName} and ${rt.typeName}"))
+          case (TypeResult.Error(e), _) => Left(e)
+          case (_, TypeResult.Error(e)) => Left(e)
           case _ => Left(DLCompileError(ctx.posStr, "+ cannot determine operand types"))
       case c: ConcatFn =>
         (Utility.rhsType(c.recv), Utility.rhsType(c.args.head)) match
-          case (Some(lt), Some(rt)) if lt.isStringLike || rt.isStringLike => Right(())
-          case (Some(lt), Some(rt)) =>
+          case (TypeResult.Known(lt), TypeResult.Known(rt)) if lt.isStringLike || rt.isStringLike => Right(())
+          case (TypeResult.Known(lt), TypeResult.Known(rt)) =>
             Left(DLCompileError(ctx.posStr, s"+ requires string-like operands for concat, found ${lt.typeName} and ${rt.typeName}"))
+          case (TypeResult.Error(e), _) => Left(e)
+          case (_, TypeResult.Error(e)) => Left(e)
           case _ => Left(DLCompileError(ctx.posStr, "+ cannot determine operand types"))
       case _ =>
         Left(DLCompileError(ctx.posStr, "Unexpected Fn type in +"))
@@ -141,14 +145,15 @@ object CMinusFn extends CompileFn[Fn[?]]:
 
       case s: SubtractFn =>
         (Utility.rhsType(s.recv), Utility.rhsType(s.args.head)) match
-          case (Some(l), Some(r))
+          case (TypeResult.Known(l), TypeResult.Known(r))
             if l.isNumeric && r.isNumeric &&
               !l.isOptional && !r.isOptional =>
             Right(())
-          case (Some(_), Some(_)) =>
+          case (TypeResult.Known(_), TypeResult.Known(_)) =>
             Left(DLCompileError(ctx.posStr, "Binary '-' requires non-optional numeric operands"))
-          case _ =>
-            Left(DLCompileError(ctx.posStr, "Binary '-' cannot determine operand types"))
+          case (TypeResult.Error(e), _) => Left(e)
+          case (_, TypeResult.Error(e)) => Left(e)
+          case _ => Left(DLCompileError(ctx.posStr, "Binary '-' cannot determine operand types"))
 
       case _ =>
         Left(DLCompileError(ctx.posStr, "Invalid Fn for '-'"))

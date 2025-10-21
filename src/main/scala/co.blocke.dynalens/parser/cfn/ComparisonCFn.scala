@@ -1,6 +1,6 @@
 package co.blocke.dynalens
 package parser
-package fn
+package cfn
 
 
 import co.blocke.dynalens.fn.*
@@ -86,14 +86,14 @@ trait ComparisonCFn[R <: Fn[?]] extends CompileFn[R]:
 
   override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     val rt = Utility.rhsType(receiver.fn)
-    println(s"[DEBUG] ${this.getClass.getSimpleName}.accepts recv=${receiver} rhsType=${rt.map(_.typeName)}")
+    println(s"[DEBUG] ${this.getClass.getSimpleName}.accepts recv=${receiver} rhsType=${rt}")
     rt match
-      case Some(ft) => 
+      case TypeResult.Known(ft) =>
         val ok = checkOperand(ft).isRight
         println(s"[DEBUG] accepts -> checkOperand ok=$ok for ${ft.typeName}")
         ok
-      case None => 
-        println(s"[DEBUG] accepts -> rhsType=None (cannot resolve)")
+      case _ =>
+        println(s"[DEBUG] accepts -> rhsType unknown (cannot resolve)")
         false
 
   override def resultType(recv: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType =
@@ -102,29 +102,31 @@ trait ComparisonCFn[R <: Fn[?]] extends CompileFn[R]:
   override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
     val recvFTOpt = Utility.rhsType(fn.recv)
     val argFTOpts = fn.args.map(Utility.rhsType)
-    println(s"[DEBUG] ${this.getClass.getSimpleName}.validate recvFT=${recvFTOpt.map(_.typeName)} argFTs=${argFTOpts.map(_.map(_.typeName))}")
-    if recvFTOpt.isEmpty || argFTOpts.exists(_.isEmpty) then
-      println(s"[DEBUG] validate -> EARLY FAIL: missing types recvEmpty=${recvFTOpt.isEmpty} argEmpty=${argFTOpts.exists(_.isEmpty)}")
-      Left(DLCompileError(ctx.posStr, s"Cannot determine operand type(s) for '$name'"))
-    else
-      for {
-        _ <- 
-          val co = checkOperand(recvFTOpt.get)
-          println(s"[DEBUG] validate -> checkOperand(recv) = ${co.isRight} (${recvFTOpt.get.typeName})")
-          co
-        _ <- 
-          argFTOpts.foldLeft[Either[DLCompileError, Unit]](Right(()))((acc, opt) =>
-            acc.flatMap { _ => 
-              val co = checkOperand(opt.get)
-              println(s"[DEBUG] validate -> checkOperand(arg) = ${co.isRight} (${opt.get.typeName})")
-              co
-            }
-          )
-        _ <- 
-          val ec = ensureComparableTypes(recvFTOpt.get, argFTOpts.head.get)
-          println(s"[DEBUG] validate -> ensureComparableTypes = ${ec.isRight}")
-          ec
-      } yield ()
+    println(s"[DEBUG] ${this.getClass.getSimpleName}.validate recvFT=$recvFTOpt argFTs=$argFTOpts")
+    (recvFTOpt, argFTOpts) match
+      case (TypeResult.Known(recvFT), args) if args.forall(_.isInstanceOf[TypeResult.Known[?]]) =>
+        val argFTs = args.collect { case TypeResult.Known(ft) => ft }
+        for {
+          _ <-
+            val co = checkOperand(recvFT)
+            println(s"[DEBUG] validate -> checkOperand(recv) = ${co.isRight} (${recvFT.typeName})")
+            co
+          _ <-
+            argFTs.foldLeft[Either[DLCompileError, Unit]](Right(()))((acc, ft) =>
+              acc.flatMap { _ =>
+                val co = checkOperand(ft)
+                println(s"[DEBUG] validate -> checkOperand(arg) = ${co.isRight} (${ft.typeName})")
+                co
+              }
+            )
+          _ <-
+            val ec = ensureComparableTypes(recvFT, argFTs.head)
+            println(s"[DEBUG] validate -> ensureComparableTypes = ${ec.isRight}")
+            ec
+        } yield ()
+      case _ =>
+        println(s"[DEBUG] validate -> EARLY FAIL: missing or unknown types")
+        Left(DLCompileError(ctx.posStr, s"Cannot determine operand type(s) for '$name'"))
 
 
 object CLessThanFn extends ComparisonCFn[LessThanFn]:
@@ -135,7 +137,7 @@ object CLessThanFn extends ComparisonCFn[LessThanFn]:
     else Right(LessThanFn(recv.fn, args.head, ctx.posStr))
 
 
-object CLessEqualFn extends ComparisonCFn[LessThanOrEqualFn]:
+object CLessThanOrEqualFn extends ComparisonCFn[LessThanOrEqualFn]:
   val name = "<="
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
@@ -149,7 +151,7 @@ object CGreaterThanFn extends ComparisonCFn[GreaterThanFn]:
     else Right(GreaterThanFn(recv.fn, args.head, ctx.posStr))
 
 
-object CGreaterEqualFn extends ComparisonCFn[GreaterThanOrEqualFn]:
+object CGreaterThanOrEqualFn extends ComparisonCFn[GreaterThanOrEqualFn]:
   val name = ">="
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))

@@ -22,8 +22,6 @@
 package co.blocke.dynalens
 package parser
 
-import zio.*
-
 // one generic error-or wrapper
 type ParseResult[A] = Either[DLCompileError, A]
 
@@ -34,5 +32,36 @@ type ParseBoolResult = ParseResult[BooleanFn]
 type ParseFnListResult = ParseResult[List[Fn[Any]]]
 
 case class DLCompileError(posStr: String, msg: String):
-  def render(input: String): String =
+  def render: String =
     s"(compile) $posStr Error: $msg"
+
+
+// New: TypeResult ADT for richer result handling
+sealed trait TypeResult[+A]
+object TypeResult {
+  case class Known[+A](value: A) extends TypeResult[A]
+
+  case class Error(err: DLCompileError) extends TypeResult[Nothing]
+
+  case object Unknown extends TypeResult[Nothing]
+
+  def fromOption[A](opt: Option[A]): TypeResult[A] = opt match {
+    case Some(a) => Known(a)
+    case None => Unknown
+  }
+
+  def fromEither[A](e: Either[DLCompileError, A]): TypeResult[A] = e match {
+    case Right(a) => Known(a)
+    case Left(err) => Error(err)
+  }
+}
+extension [A](tr: TypeResult[A])
+  def map[B](f: A => B): TypeResult[B] = tr match
+    case TypeResult.Known(v)  => TypeResult.Known(f(v))
+    case TypeResult.Unknown   => TypeResult.Unknown
+    case TypeResult.Error(e)  => TypeResult.Error(e)
+
+  def flatMap[B](f: A => TypeResult[B]): TypeResult[B] = tr match
+    case TypeResult.Known(v)  => f(v)
+    case TypeResult.Unknown   => TypeResult.Unknown
+    case TypeResult.Error(e)  => TypeResult.Error(e)

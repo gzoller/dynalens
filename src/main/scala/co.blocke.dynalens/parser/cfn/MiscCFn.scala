@@ -1,6 +1,6 @@
 package co.blocke.dynalens
 package parser
-package fn
+package cfn
 
 
 import co.blocke.dynalens.fn.*
@@ -44,12 +44,14 @@ object CElseFn extends CompileFn[ElseFn]:
     fn match
       case e: ElseFn =>
         (Utility.rhsType(e.recv), Utility.rhsType(e.default)) match
-          case (Some(recvType), Some(d)) if recvType.isOptional =>
+          case (TypeResult.Known(recvType), TypeResult.Known(d)) if recvType.isOptional =>
             val innerType = recvType.cloneWithOptional(false)
             if innerType.typeName == d.typeName then Right(())
             else Left(DLCompileError(ctx.posStr, s"else() type mismatch: expected ${innerType.typeName}, got ${d.typeName}"))
-          case (Some(_), _) =>
+          case (TypeResult.Known(_), _) =>
             Left(DLCompileError(ctx.posStr, "else() requires an Optional receiver"))
+          case (TypeResult.Error(err), _) => Left(err)
+          case (_, TypeResult.Error(err)) => Left(err)
           case _ =>
             Left(DLCompileError(ctx.posStr, "else() could not resolve types"))
       case _ => Right(())
@@ -94,7 +96,9 @@ object CCaseWhenFn extends CompileFn[CaseWhenFn]:
     // Usually same as RHS type if all RHS are consistent, else fallback to Any
     val rhsTypes = args.tail
     if rhsTypes.nonEmpty && rhsTypes.distinct.size == 1 then rhsTypes.head
-    else Utility.rhsType(receiver.fn)(using ctx).getOrElse(ScalarType("", "scala.Any"))
+    else Utility.rhsType(receiver.fn)(using ctx) match
+      case TypeResult.Known(ft) => ft
+      case _ => ScalarType("", "scala.Any")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.isEmpty then
@@ -171,29 +175,25 @@ object CIndexFn extends CompileFn[IndexFn]:
   override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] = {
     fn match
       case i: IndexFn =>
-        val recvT  = Utility.rhsType(i.recv)
-        val argT   = Utility.rhsType(i.index)
-
-        (recvT, argT) match
-          // ---- List / Optional List + numeric index ----
-          case (Some(rt: ListType), Some(a)) if Validation.isNumericType(a) && !rt.isOptional =>
+        (Utility.rhsType(i.recv), Utility.rhsType(i.index)) match
+          case (TypeResult.Known(rt: ListType), TypeResult.Known(a)) if Validation.isNumericType(a) && !rt.isOptional =>
             Right(())
-          case (Some(rt: ListType), Some(a)) if Validation.isNumericType(a) && rt.isOptional =>
+          case (TypeResult.Known(rt: ListType), TypeResult.Known(a)) if Validation.isNumericType(a) && rt.isOptional =>
             Right(())
 
-          // ---- Map / Optional Map + key type check ----
-          case (Some(rt: MapType), Some(a)) if rt.keyType.canAssignTo(a) || a.canAssignTo(rt.keyType) =>
+          case (TypeResult.Known(rt: MapType), TypeResult.Known(a)) if rt.keyType.canAssignTo(a) || a.canAssignTo(rt.keyType) =>
             Right(())
 
-          // ---- Specific, more helpful error messages ----
-          case (Some(rt: ListType), Some(a)) =>
+          case (TypeResult.Known(rt: ListType), TypeResult.Known(a)) =>
             Left(DLCompileError(ctx.posStr, s"index requires numeric index, found ${a.typeName}"))
 
-          case (Some(rt: MapType), Some(a)) =>
+          case (TypeResult.Known(rt: MapType), TypeResult.Known(a)) =>
             Left(DLCompileError(ctx.posStr, s"map index key type mismatch: expected ${rt.keyType.typeName}, got ${a.typeName}"))
 
-          case (Some(other), _) =>
+          case (TypeResult.Known(other), _) =>
             Left(DLCompileError(ctx.posStr, s"indexing not supported on receiver type ${other.typeName}"))
+          case (TypeResult.Error(err), _) => Left(err)
+          case (_, TypeResult.Error(err)) => Left(err)
           case _ =>
             Left(DLCompileError(ctx.posStr, s"cannot resolve receiver or index type for indexing"))
 

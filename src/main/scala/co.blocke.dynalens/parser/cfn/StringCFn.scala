@@ -1,6 +1,6 @@
 package co.blocke.dynalens
 package parser
-package fn
+package cfn
 
 import co.blocke.dynalens.fn.*
 
@@ -139,10 +139,12 @@ object CReplaceFn extends CompileFn[ReplaceFn]:
         val tgtType = Utility.rhsType(r.target)
         val repType = Utility.rhsType(r.replacement)
         (tgtType, repType) match
-          case (Some(t1), Some(t2)) if t1.isStringLike && t2.isStringLike => Right(())
-          case (Some(t1), _) => Left(DLCompileError(ctx.posStr, s"replace() target must be string, got ${t1.typeName}"))
-          case (_, Some(t2)) => Left(DLCompileError(ctx.posStr, s"replace() replacement must be string, got ${t2.typeName}"))
-          case _             => Left(DLCompileError(ctx.posStr, "replace() could not resolve operand types"))
+          case (TypeResult.Known(t1), TypeResult.Known(t2)) if t1.isStringLike && t2.isStringLike => Right(())
+          case (TypeResult.Known(t1), _) => Left(DLCompileError(ctx.posStr, s"replace() target must be string, got ${t1.typeName}"))
+          case (_, TypeResult.Known(t2)) => Left(DLCompileError(ctx.posStr, s"replace() replacement must be string, got ${t2.typeName}"))
+          case (TypeResult.Error(err), _) => Left(err)
+          case (_, TypeResult.Error(err)) => Left(err)
+          case _ => Left(DLCompileError(ctx.posStr, "replace() could not resolve operand types"))
       case _ => Right(())
 
 
@@ -169,9 +171,10 @@ object CConcatFn extends CompileFn[ConcatFn]:
       case c: ConcatFn =>
         val badArgs = (c.recv :: c.args).flatMap { f =>
           Utility.rhsType(f) match
-            case Some(ft) if ft.isStringLike => None
-            case Some(ft) => Some(ft.typeName)
-            case None     => Some("unknown")
+            case TypeResult.Known(ft) if ft.isStringLike => None
+            case TypeResult.Known(ft) => Some(ft.typeName)
+            case TypeResult.Unknown => Some("unknown")
+            case TypeResult.Error(_) => Some("error")
         }
         if badArgs.nonEmpty then
           Left(DLCompileError(ctx.posStr, s"concat (+) requires string-like args, found: ${badArgs.mkString(", ")}"))

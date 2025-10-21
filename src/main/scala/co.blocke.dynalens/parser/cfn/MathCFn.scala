@@ -1,6 +1,6 @@
 package co.blocke.dynalens
 package parser
-package fn
+package cfn
 
 import co.blocke.dynalens.fn.*
 
@@ -25,7 +25,11 @@ trait MathCFn[F <: Fn[Any]] extends CompileFn[F]:
   private def resultElemType(receiver: Receiver)(using ctx: ExprContext): FieldType =
     receiver.ftype match
       case ListType(_, elem: FieldType, _, _) => elem
-      case _ => Utility.rhsType(receiver.fn)(using ctx).getOrElse(ScalarType("", "scala.Double"))
+      case _ =>
+        Utility.rhsType(receiver.fn)(using ctx) match
+          case TypeResult.Known(ft) => ft
+          case TypeResult.Unknown   => ScalarType("", "scala.Double")
+          case TypeResult.Error(_)  => ScalarType("", "scala.Double")
 
   /** Default resultType: subclasses can override if needed */
   override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
@@ -35,11 +39,12 @@ trait MathCFn[F <: Fn[Any]] extends CompileFn[F]:
   override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
     val recvFT = Utility.rhsType(fn.recv)(using ctx)
     recvFT match
-      case Some(ListType(_, elem: FieldType, _, _)) if Validation.isNumericType(elem) => Right(())
-      case Some(ft) if ft.isOptional && Validation.isNumericType(ft) => Right(())
-      case Some(ft) =>
+      case TypeResult.Known(ListType(_, elem: FieldType, _, _)) if Validation.isNumericType(elem) => Right(())
+      case TypeResult.Known(ft) if ft.isOptional && Validation.isNumericType(ft) => Right(())
+      case TypeResult.Known(ft) =>
         Left(DLCompileError(ctx.posStr, s"$name() requires a List of numeric type, got ${ft.typeName}"))
-      case None =>
+      case TypeResult.Error(err) => Left(err)
+      case TypeResult.Unknown =>
         Left(DLCompileError(ctx.posStr, s"$name() cannot determine receiver type"))
 
 
@@ -83,7 +88,10 @@ object CAbsFn extends CompileFn[AbsFn]:
       (receiver.ftype.isOptional && Validation.isNumericType(receiver.ftype))
 
   override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx).getOrElse(ScalarType("", "scala.Double"))
+    Utility.rhsType(receiver.fn)(using ctx) match
+      case TypeResult.Known(ft) => ft
+      case TypeResult.Unknown   => ScalarType("", "scala.Double")
+      case TypeResult.Error(_)  => ScalarType("", "scala.Double")
 
   override def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, AbsFn] =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "abs() takes no arguments"))
@@ -93,10 +101,11 @@ object CAbsFn extends CompileFn[AbsFn]:
     fn match
       case a: AbsFn =>
         Utility.rhsType(a.recv)(using ctx) match
-          case Some(ft) if Validation.isNumericType(ft) || (ft.isOptional && Validation.isNumericType(ft)) =>
+          case TypeResult.Known(ft) if Validation.isNumericType(ft) || (ft.isOptional && Validation.isNumericType(ft)) =>
             Right(())
-          case Some(ft) =>
+          case TypeResult.Known(ft) =>
             Left(DLCompileError(ctx.posStr, s"abs() requires a numeric type, got ${ft.typeName}"))
-          case None =>
+          case TypeResult.Error(err) => Left(err)
+          case TypeResult.Unknown =>
             Left(DLCompileError(ctx.posStr, "abs() cannot determine receiver type"))
       case _ => Right(())

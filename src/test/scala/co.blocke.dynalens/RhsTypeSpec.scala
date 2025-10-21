@@ -4,7 +4,7 @@ package parser
 import zio.*
 import zio.test.*
 import co.blocke.dynalens.fn.*
-import fn.*
+import cfn.*
 import co.blocke.testkit.ZioTestKit._
 
 

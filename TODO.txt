@@ -7,7 +7,120 @@ Features for 1.2.0:
 
 * lens pairs (assign A->B)
 
-Q: Can we do this?
 
-val x = myClassField
-val y = x.field1
+==== New Compiler Features ====
+
+🧩 1. Objects assignable to vals
+	•	Before: Only scalar RHS expressions were assignable.
+	•	Now: Any object or collection can be bound:
+
+	val x = item[3]
+    val y = x.desc   // x is now a receiver, not just a scalar
+
+	•	Compiler impact:
+	•	ValStmt must record the full inferred FieldType, not just a scalar.
+	•	Symbol table entries (via ExprContext.withVals) must accept any FieldType (including ListType, ClassType, etc.).
+	•	When x is referenced later, the compiler must emit a NamedReceiver for it (not a ConstantReceiver).
+
+
+
+🔁 2. Lambda / MapFn expressions usable as values (not just statements)
+	•	(x => _ * 2) or (x => _.len()) are now valid as expressions.
+	•	Enables inline chaining:
+
+	val f = (y => _ * 2)
+    val result = f.sum()
+
+	•	Compiler impact:
+	•	Parser must treat => blocks as producing an Fn, not a Statement.
+	•	Lambda expressions must be wrapped in a LambdaFn (or similar) AST node.
+	•	Type inference must propagate element type when lambdas appear in .map(), .filter(), etc.
+	•	Must work for both SingleExpr and BlockExpr bodies.
+
+
+
+🧱 3. Block lambdas ({ ... })
+
+    val x = (y => {
+      val z = _ / 2
+      z * 10
+    }).sum()
+
+	•	Compiler impact:
+	•	Introduce BlockFn (already defined at runtime).
+	•	Add nested scope support:
+	•	Push a new symbol map for each block.
+	•	vals inside the block live only within that lambda’s context.
+	•	Ensure correct return value propagation (last expression of block).
+
+
+🧍 4. Enhanced Receiver Semantics
+	•	We now have: SystemReceiver, NamedReceiver, ElementReceiver, ConstantReceiver.
+	•	Compiler must:
+	•	Detect when to substitute an ElementReceiver for collection predicates (_ / this / lambda element).
+	•	Preserve optional propagation in emitted Receivers.
+	•	Correctly handle receivers nested within optionals and lists:
+	•	optList.filter(_ < 3)
+	•	list.map(_.price).sum()
+
+⸻
+
+⚖️ 5. Type Optionality Propagation
+	•	Since OptionType was removed, optionality is now a flag on all FieldTypes.
+	•	Compiler must:
+	•	Merge optionality correctly when building new expressions.
+	•	When accessing a field on an optional parent (optAges.map(...)), mark the resulting receiver/field optional.
+	•	Propagate optionality through method chains (optList.reverse().len()).
+
+⸻
+
+🧮 6. Enhanced Expression Chaining
+	•	Fns can now be chained:
+
+	val total = list.map(_ * 2).sum()
+    val avg   = list.filter(_ > 3).map(_ * 2).avg()
+
+	•	Compiler impact:
+	•	Parser must emit CallChains that flatten nested function calls in order.
+	•	Optionality and receiver resolution must flow through each Fn in sequence.
+
+
+🔤 7. New “this” and “_” semantics
+	•	_ = implicit lambda parameter
+	•	this = current receiver in scope (outer or inner)
+	•	Compiler must:
+	•	Translate _ to an ElementReceiver if inside a lambda.
+	•	Translate this to the current receiver in the enclosing context.
+	•	Handle nested lambdas correctly.
+
+⸻
+
+🧠 8. Optional .else() fallback enforcement
+	•	Parser must attach .else() clauses to optional receivers.
+
+	optField.else(0)
+
+	•	If .else() is missing for an optional field in an assignment or update context, compiler should emit a DynaLensError.
+
+
+🧩 9. Index and Key Access
+	•	Ensure array and map access continue to work with new receiver model:
+	•	foo[3] → IndexFn
+	•	bar["key"] → IndexFn
+	•	Ensure compiler correctly identifies whether the container is optional and wraps the result accordingly.
+
+⸻
+
+🧰 10. Refactored ExprContext integration
+	•	Must correctly construct and merge contexts with symbols, receiver, and schema during compilation.
+	•	Ensure withReceiverFromPath works for nested references (foo.bar.baz).
+
+11. Auto-wrap assignment of scalars to optional fields
+
+
+
+For Luis:
+
+Need completed W9 form for this LLC
+Contract (simple) saying he's an independent contractor, payment, etc., indemnification, IP flow-down
+

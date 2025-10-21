@@ -12,7 +12,7 @@ object RegistryMacro:
   private def genImpl(using Quotes): Expr[Map[String, CompileFn[?]]] =
     import quotes.reflect.*
 
-    val targetPkg = "co.blocke.dynalens.parser.fn"
+    val targetPkg = "co.blocke.dynalens.parser.cfn"
     val pkg = Symbol.requiredPackage(targetPkg)
 
     // Collect all `object` symbols that extend CompileFn
