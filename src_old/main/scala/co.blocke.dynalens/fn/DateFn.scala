@@ -10,18 +10,18 @@ case class FormatDateFn(recv: Fn[Any], pattern: Fn[Any], posStr: String) extends
   def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids(0).asInstanceOf[Fn[Any]], pattern = kids(1).asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
+  def resolve(ctx: DynaContext) =
     for
-      (dateAny, dateLens) <- recv.resolve(ctx)
-      (patAny, _)  <- pattern.resolve(ctx)
-      out <- (dateAny, patAny) match
+      dateVal <- recv.resolve(ctx)
+      patVal  <- pattern.resolve(ctx)
+      out <- (dateVal, patVal) match
         case (null, _) =>
           ZIO.fail(DynaLensError(posStr, s"formatDate() receiver is null"))
         case (d: java.time.temporal.TemporalAccessor, p: String) =>
           val fmt = java.time.format.DateTimeFormatter.ofPattern(p)
-          ZIO.succeed((fmt.format(d), dateLens))
+          ZIO.succeed(fmt.format(d))
         case (_, p: String) =>
-          ZIO.fail(DynaLensError(posStr, s"formatDate() requires date/time receiver, got ${dateAny.getClass.getSimpleName}"))
+          ZIO.fail(DynaLensError(posStr, s"formatDate() requires date/time receiver, got ${dateVal.getClass.getSimpleName}"))
         case _ =>
           ZIO.fail(DynaLensError(posStr, s"formatDate() pattern must be String"))
     yield out
@@ -32,17 +32,17 @@ case class ParseDateFn(recv: Fn[Any], pattern: Fn[Any], posStr: String) extends 
   def args: List[Fn[Any]] = List(pattern)
   def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids(0).asInstanceOf[Fn[Any]], pattern = kids(1).asInstanceOf[Fn[Any]])
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
+  def resolve(ctx: DynaContext) =
     for
-      (srcAny, srcLens) <- recv.resolve(ctx)
-      (patAny, _) <- pattern.resolve(ctx)
-      out <- (srcAny, patAny) match
+      srcVal <- recv.resolve(ctx)
+      patVal <- pattern.resolve(ctx)
+      out <- (srcVal, patVal) match
         case (null, _) => ZIO.fail(DynaLensError(posStr, s"parseDate() source is null"))
         case (s: String, p: String) =>
           val fmt = java.time.format.DateTimeFormatter.ofPattern(p)
-          ZIO.succeed((java.time.LocalDateTime.parse(s, fmt), srcLens))
+          ZIO.succeed(java.time.LocalDateTime.parse(s, fmt))
         case _ =>
-          ZIO.fail(DynaLensError(posStr, s"parseDate() requires (String, String) but got (${srcAny.getClass.getSimpleName}, ${patAny.getClass.getSimpleName})"))
+          ZIO.fail(DynaLensError(posStr, s"parseDate() requires (String, String) but got (${srcVal.getClass.getSimpleName}, ${patVal.getClass.getSimpleName})"))
     yield out
 
 
@@ -51,5 +51,5 @@ case class NowFn(posStr: String) extends Fn[Any]:
   override val recv: Fn[Any] = RootFn
   def args: List[Fn[Any]] = Nil
   def rebuild(kids: List[Fn[?]]): Fn[Any] = this
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
-    ZIO.succeed((java.time.LocalDateTime.now(), ScalarLens("now", false, None)))
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
+    ZIO.succeed(java.time.LocalDateTime.now())

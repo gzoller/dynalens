@@ -12,14 +12,13 @@ object Schema:
     case c: ClassType        => c.copy(isOptional = true)
     case l: ListType         => l.copy(isOptional = true)
     case m: MapType          => m.copy(isOptional = true)
-    case e: EnumType         => e.copy(isOptional = true)
     case vt: ValType         => vt.copy(valueType = markOptional(vt.valueType))
 
   /** Build a full ClassType tree for a ScalaClassRef */
   def build(ref: RTypeRef[?]): ClassType = ref match
     case sc: ScalaClassRef[?] =>
       ClassType(
-        name = "",                      // root has no parent field name
+        fieldName = "",                      // root has no parent field name
         typeName  = ref.name,
         fields    = sc.fields.map(f => fieldTypeFromRTypeRef(f.name, f.fieldRef))
       )
@@ -100,7 +99,7 @@ object Schema:
     case s: SeqRef[?] =>
       val elem = fieldTypeFromRTypeRef(fieldName, s.elementRef)
       ListType(
-        name = fieldName,
+        fieldName = fieldName,
         elementType = elem,
         typeName = s.typedName.toString, // "scala.List", "scala.Seq", "scala.Array",
         isOptional = isOptional
@@ -111,7 +110,7 @@ object Schema:
       val key = fieldTypeFromRTypeRef(fieldName, m.elementRef)
       val value = fieldTypeFromRTypeRef(fieldName, m.elementRef2)
       MapType(
-        name = fieldName,
+        fieldName = fieldName,
         keyType = key,
         valueType = value,
         typeName = m.typedName.toString, // "scala.collection.immutable.Map", etc.
@@ -133,18 +132,9 @@ object Schema:
         sc.fields.map(f => fieldTypeFromRTypeRef(f.name, f.fieldRef))
 
       ClassType(
-        name = fieldName,
+        fieldName = fieldName,
         typeName = sc.name,
         fields   = fieldTypes,
-        isOptional = isOptional
-      )
-
-    // --- EnumRef[?] ---
-    case e: EnumRef[?] =>
-      EnumType(
-        name = fieldName,
-        validValues = e.values,
-        typeName = e.name,
         isOptional = isOptional
       )
 

@@ -3,6 +3,7 @@ package fn
 
 import zio.*
 
+
 private def comparableCompare(l: Any, r: Any)(cmp: Int => Boolean): Option[Boolean] =
   (l, r) match
     case (a: Number, b: Number) =>
@@ -13,19 +14,6 @@ private def comparableCompare(l: Any, r: Any)(cmp: Int => Boolean): Option[Boole
       Some(cmp(a.asInstanceOf[Comparable[Any]].compareTo(b)))
     case _ => None
 
-private def compareOptionals(lAny: Any, rAny: Any)(cmp: (Any, Any) => Option[Boolean]): ZIO[RuntimeEnv, DynaLensError, Boolean] =
-  (lAny, rAny) match
-    case (None, None) => ZIO.succeed(true)
-    case (None, Some(_)) =>
-      ZIO.fail(DynaLensError("", "Cannot compare None with Some value"))
-    case (Some(_), None) =>
-      ZIO.fail(DynaLensError("", "Cannot compare Some value with None"))
-    case (Some(lVal), Some(rVal)) =>
-      cmp(lVal, rVal) match
-        case Some(b) => ZIO.succeed(b)
-        case None => ZIO.fail(DynaLensError("", s"Cannot compare types: ${lVal.getClass}, ${rVal.getClass}"))
-    case _ =>
-      ZIO.fail(DynaLensError("", s"Cannot compare values: $lAny, $rAny"))
 
 case class LessThanFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends BinaryFn[Boolean] with BooleanFn:
 
@@ -34,12 +22,14 @@ case class LessThanFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends Binar
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for
-      (lAny, lLens) <- recv.resolve(ctx)
-      (rAny, _)     <- arg.resolve(ctx)
-      res <- compareOptionals(lAny, rAny){ (lVal, rVal) => comparableCompare(lVal, rVal)(_ < 0) }
-    yield (res, lLens)
+      l <- recv.resolve(ctx)
+      r <- arg.resolve(ctx)
+      res <- comparableCompare(l, r)(_ < 0) match
+        case Some(b) => ZIO.succeed(b)
+        case None => ZIO.fail(DynaLensError(posStr, s"Cannot compare types: ${l.getClass}, ${r.getClass}"))
+    yield res
 
 
 case class GreaterThanFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends BinaryFn[Boolean] with BooleanFn:
@@ -49,12 +39,14 @@ case class GreaterThanFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends Bi
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for
-      (lAny, lLens) <- recv.resolve(ctx)
-      (rAny, _)     <- arg.resolve(ctx)
-      res <- compareOptionals(lAny, rAny){ (lVal, rVal) => comparableCompare(lVal, rVal)(_ > 0) }
-    yield (res, lLens)
+      l <- recv.resolve(ctx)
+      r <- arg.resolve(ctx)
+      res <- comparableCompare(l, r)(_ > 0) match
+        case Some(b) => ZIO.succeed(b)
+        case None => ZIO.fail(DynaLensError(posStr, s"Cannot compare types: ${l.getClass}, ${r.getClass}"))
+    yield res
 
 
 case class LessThanOrEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends BinaryFn[Boolean] with BooleanFn:
@@ -64,12 +56,14 @@ case class LessThanOrEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extend
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for
-      (lAny, lLens) <- recv.resolve(ctx)
-      (rAny, _)     <- arg.resolve(ctx)
-      res <- compareOptionals(lAny, rAny){ (lVal, rVal) => comparableCompare(lVal, rVal)(_ <= 0) }
-    yield (res, lLens)
+      l <- recv.resolve(ctx)
+      r <- arg.resolve(ctx)
+      res <- comparableCompare(l, r)(_ <= 0) match
+        case Some(b) => ZIO.succeed(b)
+        case None => ZIO.fail(DynaLensError(posStr, s"Cannot compare types: ${l.getClass}, ${r.getClass}"))
+    yield res
 
 
 case class GreaterThanOrEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends BinaryFn[Boolean] with BooleanFn:
@@ -79,12 +73,14 @@ case class GreaterThanOrEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) ext
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for
-      (lAny, lLens) <- recv.resolve(ctx)
-      (rAny, _)     <- arg.resolve(ctx)
-      res <- compareOptionals(lAny, rAny){ (lVal, rVal) => comparableCompare(lVal, rVal)(_ >= 0) }
-    yield (res, lLens)
+      l <- recv.resolve(ctx)
+      r <- arg.resolve(ctx)
+      res <- comparableCompare(l, r)(_ >= 0) match
+        case Some(b) => ZIO.succeed(b)
+        case None => ZIO.fail(DynaLensError(posStr, s"Cannot compare types: ${l.getClass}, ${r.getClass}"))
+    yield res
 
 
 case class EqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends BinaryFn[Boolean] with BooleanFn:
@@ -94,12 +90,14 @@ case class EqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends BinaryFn
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for
-      (lAny, lLens) <- recv.resolve(ctx)
-      (rAny, _)     <- arg.resolve(ctx)
-      res <- compareOptionals(lAny, rAny){ (lVal, rVal) => comparableCompare(lVal, rVal)(_ == 0) }
-    yield (res, lLens)
+      l <- recv.resolve(ctx)
+      r <- arg.resolve(ctx)
+      res <- comparableCompare(l, r)(_ == 0) match
+        case Some(b) => ZIO.succeed(b)
+        case None => ZIO.fail(DynaLensError(posStr, s"Cannot compare types: ${l.getClass}, ${r.getClass}"))
+    yield res
 
 
 case class NotEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends BinaryFn[Boolean] with BooleanFn:
@@ -109,9 +107,11 @@ case class NotEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends Binar
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Boolean] =
     for
-      (lAny, lLens) <- recv.resolve(ctx)
-      (rAny, _)     <- arg.resolve(ctx)
-      res <- compareOptionals(lAny, rAny){ (lVal, rVal) => comparableCompare(lVal, rVal)(_ != 0) }
-    yield (res, lLens)
+      l <- recv.resolve(ctx)
+      r <- arg.resolve(ctx)
+      res <- comparableCompare(l, r)(_ != 0) match
+        case Some(b) => ZIO.succeed(b)
+        case None => ZIO.fail(DynaLensError(posStr, s"Cannot compare types: ${l.getClass}, ${r.getClass}"))
+    yield res

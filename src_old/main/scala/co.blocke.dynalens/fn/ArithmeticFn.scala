@@ -14,22 +14,23 @@ case class NegateFn(
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(kids.head.asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      (v, lens) <- recv.resolve(ctx)
-      result <- (v match {
+      v <- recv.resolve(ctx)
+      result <- v match {
         case i: Int => ZIO.succeed(-i)
         case l: Long => ZIO.succeed(-l)
         case f: Float => ZIO.succeed(-f)
         case d: Double => ZIO.succeed(-d)
         case bi: BigInt => ZIO.succeed(-bi)
         case bd: BigDecimal => ZIO.succeed(-bd)
+
         case _ =>
           ZIO.fail(
             DynaLensError(posStr, s"NegateFn does not support operand type: ${v.getClass.getSimpleName}")
           )
-      })
-    } yield (result, lens)
+      }
+    } yield result
 
 
 case class AddFn(
@@ -45,11 +46,11 @@ case class AddFn(
       List(kids(1).asInstanceOf[Fn[Any]])
     )
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      (lv, lLens) <- recv.resolve(ctx)
-      (rv, _) <- args.head.resolve(ctx)
-      result <- (lv, rv) match {
+      l <- recv.resolve(ctx)
+      r <- args.head.resolve(ctx)
+      result <- (l, r) match {
 
         // ----- Int / ... -----
         case (a: Int, b: Int) => ZIO.succeed(a + b)
@@ -93,11 +94,11 @@ case class AddFn(
         case _ =>
           ZIO.fail(
             DynaLensError(posStr,
-              s"AddFn does not support operand types: ${lv.getClass.getSimpleName}, ${rv.getClass.getSimpleName}"
+              s"AddFn does not support operand types: ${l.getClass.getSimpleName}, ${r.getClass.getSimpleName}"
             )
           )
       }
-    } yield (result, lLens)
+    } yield result
 
 
 case class SubtractFn(
@@ -113,11 +114,11 @@ case class SubtractFn(
       List(kids(1).asInstanceOf[Fn[Any]])
     )
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      (lv, lLens) <- recv.resolve(ctx)
-      (rv, _) <- args.head.resolve(ctx)
-      result <- (lv, rv) match {
+      l <- recv.resolve(ctx)
+      r <- args.head.resolve(ctx)
+      result <- (l, r) match {
 
         // ----- Int / ... -----
         case (a: Int, b: Int) => ZIO.succeed(a - b)
@@ -161,11 +162,11 @@ case class SubtractFn(
         case _ =>
           ZIO.fail(
             DynaLensError(posStr,
-              s"SubtractFn does not support operand types: ${lv.getClass.getSimpleName}, ${rv.getClass.getSimpleName}"
+              s"SubtractFn does not support operand types: ${l.getClass.getSimpleName}, ${r.getClass.getSimpleName}"
             )
           )
       }
-    } yield (result, lLens)
+    } yield result
 
 
 case class MultiplyFn(
@@ -181,11 +182,11 @@ case class MultiplyFn(
       List(kids(1).asInstanceOf[Fn[Any]])
     )
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      (lv, lLens) <- recv.resolve(ctx)
-      (rv, _) <- args.head.resolve(ctx)
-      result <- (lv, rv) match {
+      l <- recv.resolve(ctx)
+      r <- args.head.resolve(ctx)
+      result <- (l, r) match {
         // --- Int cases
         case (a: Int, b: Int)       => ZIO.succeed(a * b)
         case (a: Int, b: Long)      => ZIO.succeed(a * b)
@@ -221,11 +222,11 @@ case class MultiplyFn(
         case _ =>
           ZIO.fail(
             DynaLensError(posStr,
-              s"MultiplyFn does not support operands of types: ${lv.getClass.getSimpleName}, ${rv.getClass.getSimpleName}"
+              s"MultiplyFn does not support operands of types: ${l.getClass.getSimpleName}, ${r.getClass.getSimpleName}"
             )
           )
       }
-    } yield (result, lLens)
+    } yield result
 
 
 case class DivideFn(
@@ -241,11 +242,11 @@ case class DivideFn(
       List(kids(1).asInstanceOf[Fn[Any]])
     )
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      (lv, lLens) <- recv.resolve(ctx)
-      (rv, _) <- args.head.resolve(ctx)
-      result <- (lv, rv) match {
+      l <- recv.resolve(ctx)
+      r <- args.head.resolve(ctx)
+      result <- (l, r) match {
         // --- Guard divide by zero for numeric types ---
         case (_, 0 | 0L | 0f | 0d) =>
           ZIO.fail(DynaLensError(posStr,"Division by zero"))
@@ -294,11 +295,11 @@ case class DivideFn(
         case _ =>
           ZIO.fail(
             DynaLensError(posStr,
-              s"DivideFn does not support operand types: ${lv.getClass.getSimpleName}, ${rv.getClass.getSimpleName}"
+              s"DivideFn does not support operand types: ${l.getClass.getSimpleName}, ${r.getClass.getSimpleName}"
             )
           )
       }
-    } yield (result, lLens)
+    } yield result
 
 
 case class ModuloFn(
@@ -314,11 +315,11 @@ case class ModuloFn(
       List(kids(1).asInstanceOf[Fn[Any]])
     )
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, Any] =
     for {
-      (lv, lLens) <- recv.resolve(ctx)
-      (rv, _) <- args.head.resolve(ctx)
-      result <- (lv, rv) match {
+      l <- recv.resolve(ctx)
+      r <- args.head.resolve(ctx)
+      result <- (l, r) match {
         // --- Prevent divide/mod by zero ---
         case (_, 0 | 0L | 0f | 0d) =>
           ZIO.fail(DynaLensError(posStr, s"Modulus by zero"))
@@ -365,8 +366,8 @@ case class ModuloFn(
         case _ =>
           ZIO.fail(
             DynaLensError(posStr,
-              s"ModuloFn does not support operand types: ${lv.getClass.getSimpleName}, ${rv.getClass.getSimpleName}"
+              s"ModuloFn does not support operand types: ${l.getClass.getSimpleName}, ${r.getClass.getSimpleName}"
             )
           )
       }
-    } yield (result, lLens)
+    } yield result

@@ -2,52 +2,45 @@ package co.blocke.dynalens
 package fn
 
 import zio.*
-import util.TemplateUtils
 
 
 case class TrimFn(recv: Fn[Any], posStr: String)
   extends Fn[String] with UnaryFn[String]:
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
-    copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
+    copy(recv = kids.head.asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
-    for
-      (raw, rawLens) <- recv.resolve(ctx)
-      res <- raw match
-        case null => ZIO.fail(DynaLensError(posStr, "trim() found null"))
-        case s: String => ZIO.succeed((s.trim, rawLens))
-        case other => ZIO.fail(DynaLensError(posStr, s"trim() expects String, got ${other.getClass.getSimpleName}"))
-    yield res
+  def resolve(ctx: DynaContext) =
+    for raw <- recv.resolve(ctx)
+      yield raw match
+        case null => throw DynaLensError(posStr, "trim() found null")
+        case s: String => s.trim
+        case other => throw DynaLensError(posStr, s"trim() expects String, got ${other.getClass.getSimpleName}")
 
 
 case class ToLowerFn(recv: Fn[Any], posStr: String)
   extends Fn[String] with UnaryFn[String]:
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
-    copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
+    copy(recv = kids.head.asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
-    for
-      (raw, rawLens) <- recv.resolve(ctx)
-      res <- raw match
-        case null => ZIO.fail(DynaLensError(posStr, "toLower() found null"))
-        case s: String => ZIO.succeed((s.toLowerCase, rawLens))
-        case other => ZIO.fail(DynaLensError(posStr, s"toLower() expects String, got ${other.getClass.getSimpleName}"))
-    yield res
+  def resolve(ctx: DynaContext) =
+    for raw <- recv.resolve(ctx)
+      yield raw match
+        case null => throw DynaLensError(posStr, "toLower() found null")
+        case s: String => s.toLowerCase
+        case other => throw DynaLensError(posStr, s"toLower() expects String, got ${other.getClass.getSimpleName}")
 
 
 case class ToUpperFn(recv: Fn[Any], posStr: String)
   extends Fn[String] with UnaryFn[String]:
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
-    copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
+    copy(recv = kids.head.asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
-    for
-      (raw, rawLens) <- recv.resolve(ctx)
-      res <- raw match
-        case null => ZIO.fail(DynaLensError(posStr, "toUpper() found null"))
-        case s: String => ZIO.succeed((s.toUpperCase, rawLens))
-        case other => ZIO.fail(DynaLensError(posStr, s"toUpper() expects String, got ${other.getClass.getSimpleName}"))
-    yield res
+  def resolve(ctx: DynaContext) =
+    for raw <- recv.resolve(ctx)
+      yield raw match
+        case null => throw DynaLensError(posStr, "toUpper() found null")
+        case s: String => s.toUpperCase
+        case other => throw DynaLensError(posStr, s"toUpper() expects String, got ${other.getClass.getSimpleName}")
 
 
 case class InterpolateFn(
@@ -56,21 +49,21 @@ case class InterpolateFn(
                           posStr: String
                         ) extends UnaryFn[String]:
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
-    copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
+    copy(recv = kids.head.asInstanceOf[Fn[Any]])
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
+  def resolve(ctx: DynaContext) =
     for
-      (raw, rawLens) <- recv.resolve(ctx)
+      raw <- recv.resolve(ctx)
       pat <- raw match
         case null => ZIO.fail(DynaLensError(posStr, "template() pattern was null"))
         case s: String => ZIO.succeed(s)
         case other => ZIO.fail(DynaLensError(posStr, s"template() expects String, got ${other.getClass.getSimpleName}"))
       filled <- ZIO.foreach(TemplateUtils.extractVariables(pat).toList) { v =>
         varMap.get(v) match
-          case Some(fn) => fn.resolve(ctx).map(values => v -> values._1)
+          case Some(fn) => fn.resolve(ctx).map(v -> _)
           case None => ZIO.succeed(v -> null.asInstanceOf[Any])
       }.map(_.toMap)
-    yield (TemplateUtils.fill(pat, filled), rawLens)
+    yield TemplateUtils.fill(pat, filled)
 
 
 case class SubstringFn(
@@ -83,8 +76,8 @@ case class SubstringFn(
 
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
     kids match
-      case r :: s :: e :: Nil => copy(recv = r.asInstanceOf[Fn[Any]], start = s.asInstanceOf[Fn[Any]], end = Some(e.asInstanceOf[Fn[Any]]), posStr = posStr)
-      case r :: s :: Nil => copy(recv = r.asInstanceOf[Fn[Any]], start = s.asInstanceOf[Fn[Any]], end = None, posStr = posStr)
+      case r :: s :: e :: Nil => copy(recv = r.asInstanceOf[Fn[Any]], start = s.asInstanceOf[Fn[Any]], end = Some(e.asInstanceOf[Fn[Any]]))
+      case r :: s :: Nil => copy(recv = r.asInstanceOf[Fn[Any]], start = s.asInstanceOf[Fn[Any]], end = None)
       case _ => this
 
   private def toIndex(n: Any): Option[Int] = n match
@@ -96,21 +89,21 @@ case class SubstringFn(
     case b: java.lang.Byte => Some(b.toInt)
     case _ => None
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
+  def resolve(ctx: DynaContext) =
     for
-      (rawS, rawLens) <- recv.resolve(ctx)
+      rawS <- recv.resolve(ctx)
       s <- rawS match
         case null => ZIO.fail(DynaLensError(posStr, "substring() receiver was null"))
         case str: String => ZIO.succeed(str)
         case other => ZIO.fail(DynaLensError(posStr, s"substring() expects String, got ${other.getClass.getSimpleName}"))
       fromV <- start.resolve(ctx)
-      from <- ZIO.fromOption(toIndex(fromV._1)).mapError(_ => DynaLensError(posStr, "substring() start must be numeric"))
+      from <- ZIO.fromOption(toIndex(fromV)).mapError(_ => DynaLensError(posStr, "substring() start must be numeric"))
       toOpt <- end match
         case None => ZIO.succeed(None)
-        case Some(e) => e.resolve(ctx).flatMap(v => ZIO.fromOption(toIndex(v._1)).map(Some(_)).mapError(_ => DynaLensError(posStr, "substring() end must be numeric")))
+        case Some(e) => e.resolve(ctx).flatMap(v => ZIO.fromOption(toIndex(v)).map(Some(_)).mapError(_ => DynaLensError(posStr, "substring() end must be numeric")))
       (lo, hi0) = (Math.max(0, from), toOpt.getOrElse(s.length))
       hi = Math.max(lo, Math.min(hi0, s.length))
-    yield (s.substring(lo, hi), rawLens)
+    yield s.substring(lo, hi)
 
 
 case class ReplaceFn(
@@ -124,27 +117,27 @@ case class ReplaceFn(
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
     kids match
       case r :: t :: rp :: Nil =>
-        copy(recv = r.asInstanceOf[Fn[Any]], target = t.asInstanceOf[Fn[Any]], replacement = rp.asInstanceOf[Fn[Any]], posStr = posStr)
+        copy(recv = r.asInstanceOf[Fn[Any]], target = t.asInstanceOf[Fn[Any]], replacement = rp.asInstanceOf[Fn[Any]])
       case _ => this
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
+  def resolve(ctx: DynaContext) =
     for
-      (s, rawLens) <- recv.resolve(ctx).flatMap {
-        case (null, _) => ZIO.fail(DynaLensError(posStr, "replace() receiver was null"))
-        case (str: String, lens) => ZIO.succeed((str, lens))
-        case (other, _) => ZIO.fail(DynaLensError(posStr, s"replace() expects String, got ${other.getClass.getSimpleName}"))
+      s <- recv.resolve(ctx).flatMap {
+        case null => ZIO.fail(DynaLensError(posStr, "replace() receiver was null"))
+        case str: String => ZIO.succeed(str)
+        case other => ZIO.fail(DynaLensError(posStr, s"replace() expects String, got ${other.getClass.getSimpleName}"))
       }
       t <- target.resolve(ctx).map {
-        case (null | None, _) => ""
-        case (Some(x), _) => x.toString
-        case (x, _) => x.toString
+        case null | None => ""
+        case Some(x) => x.toString
+        case x => x.toString
       }
       rep <- replacement.resolve(ctx).map {
-        case (null | None, _) => ""
-        case (Some(x), _) => x.toString
-        case (x, _) => x.toString
+        case null | None => ""
+        case Some(x) => x.toString
+        case x => x.toString
       }
-    yield (s.replace(t, rep), rawLens)
+    yield s.replace(t, rep)
 
 
 /** ---------------------- cocatenate ---------------------- */
@@ -158,17 +151,15 @@ case class ConcatFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
       case head :: tail =>
         copy(
           recv = head.asInstanceOf[Fn[Any]],
-          args = tail.asInstanceOf[List[Fn[Any]]],
-          posStr = posStr
+          args = tail.asInstanceOf[List[Fn[Any]]]
         )
       case _ =>
-        copy(args = Nil, posStr = posStr)
+        copy(args = Nil)
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, String] =
     for
-      (recvVal, recvLens)  <- recv.resolve(ctx)
-      argValsWithLens  <- ZIO.foreach(args)(_.resolve(ctx))
-      argVals = argValsWithLens.map(_._1)
+      recvVal  <- recv.resolve(ctx)
+      argVals  <- ZIO.foreach(args)(_.resolve(ctx))
       result   <- ZIO.attempt {
         val sb = new StringBuilder
         def appendAny(value: Any): Unit =
@@ -185,4 +176,4 @@ case class ConcatFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
         argVals.foreach(appendAny)
         sb.toString
       }.catchAll(e => ZIO.fail(DynaLensError(posStr, s"concat (+) failed at $posStr: ${e.getMessage}")))
-    yield (result, recvLens)
+    yield result

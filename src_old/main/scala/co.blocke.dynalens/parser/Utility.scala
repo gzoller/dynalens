@@ -157,7 +157,7 @@ object Utility:
         currentType match
           // ---- ClassType ----
           case c: ClassType =>
-            c.fields.find(_.fieldName == fieldName) match
+            c.fields.find(_.name == fieldName) match
               case Some(f) =>
                 maybeIndex match
                   case None => Right(f)
@@ -190,7 +190,7 @@ object Utility:
 
           // ---- ScalarType ----
           case s: ScalarType =>
-            Left(DLCompileError(ctx.posStr, s"Cannot traverse into scalar field '${s.fieldName}' at $posStr"))
+            Left(DLCompileError(ctx.posStr, s"Cannot traverse into scalar field '${s.name}' at $posStr"))
     }
   }
 
@@ -234,7 +234,7 @@ object Utility:
         ft match
           // ---- 1. If it's a ClassType, descend into its fields ----
           case c: ClassType =>
-            c.fields.find(_.fieldName == seg).flatMap(f => walkType(f, tail))
+            c.fields.find(_.name == seg).flatMap(f => walkType(f, tail))
 
           // ---- 2. Optional wrapper (isOptional == true) ----
           case ft if ft.isOptional =>

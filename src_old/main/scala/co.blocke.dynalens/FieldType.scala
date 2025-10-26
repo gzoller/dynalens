@@ -2,7 +2,7 @@ package co.blocke.dynalens
 
 
 sealed trait FieldType:
-  def name: String
+  def fieldName: String
   def typeName: String
   def isNumeric: Boolean = false
   def isStringLike: Boolean = this match
@@ -64,7 +64,6 @@ sealed trait FieldType:
     case m: MapType         => m.copy(isOptional = flag)
     case c: ClassType       => c.copy(isOptional = flag)
     case v: ValType         => v.copy(valueType = v.valueType.cloneWithOptional(flag))
-    case e: EnumType        => e.copy(isOptional = flag)
 
 
 
@@ -74,23 +73,21 @@ object FieldType:
    * Keeps structure/type information but clears the name so it won’t collide with schema fields.
    */
   def synthetic(base: FieldType): FieldType = base match
-    case e: EnumType =>
-      e.copy(name = "")
     case v: ValType =>
       // unwrap the value type and synthesize recursively so `ValType` wrapper stays consistent
-      v.copy(name = "", valueType = synthetic(v.valueType))
+      v.copy(fieldName = "", valueType = synthetic(v.valueType))
     case s: ScalarType =>
-      s.copy(name = "")
+      s.copy(fieldName = "")
     case l: ListType =>
-      l.copy(name = "")
+      l.copy(fieldName = "")
     case m: MapType =>
-      m.copy(name = "")
+      m.copy(fieldName = "")
     case c: ClassType =>
-      c.copy(name = "")
+      c.copy(fieldName = "")
 
 
 
-case class ScalarType(name: String, typeName: String, isOptional: Boolean = false) extends FieldType:
+case class ScalarType(fieldName: String, typeName: String, isOptional: Boolean = false) extends FieldType:
   override def isNumeric: Boolean =
     Set(
       "scala.Byte", "scala.Short", "scala.Int", "scala.Long", "scala.Float", "scala.Double",
@@ -98,20 +95,18 @@ case class ScalarType(name: String, typeName: String, isOptional: Boolean = fals
       "java.lang.Float", "java.lang.Double", "scala.math.BigDecimal"
     ).contains(typeName)
 
-case class ListType(name: String, elementType: FieldType, typeName: String, isOptional: Boolean = false) extends FieldType
-case class MapType(name: String, keyType: FieldType, valueType: FieldType, typeName: String, isOptional: Boolean = false) extends FieldType
+case class ListType(fieldName: String, elementType: FieldType, typeName: String, isOptional: Boolean = false) extends FieldType
+case class MapType(fieldName: String, keyType: FieldType, valueType: FieldType, typeName: String, isOptional: Boolean = false) extends FieldType
 case class ClassType(
-                      name: String,
+                      fieldName: String,
                       typeName: String,
                       fields: List[FieldType],
                       isOptional: Boolean = false
                     ) extends FieldType
-case class ValType(name: String, valueType: FieldType, typeName: String) extends FieldType:
+case class ValType(fieldName: String, valueType: FieldType, typeName: String) extends FieldType:
   override def isNumeric: Boolean = valueType.isNumeric
   override def isStringLike: Boolean = valueType.isStringLike
   val isOptional: Boolean = valueType.isOptional
-
-case class EnumType(name: String, validValues: List[String], typeName: String, isOptional: Boolean = false) extends FieldType
 
 /**
  * ResolvedType exiss to carry the end result of Schema.resolvePath(path) — i.e. when you walk a schema through nested FieldTypes (e.g. "foo.bar.baz"), you get:

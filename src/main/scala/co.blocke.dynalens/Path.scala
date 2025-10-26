@@ -21,50 +21,54 @@
 
 package co.blocke.dynalens
 
+
+case class PathElement(name: Option[String], index: Option[String]) {
+  def listIndex(): Option[Int] =
+    index.flatMap(i => scala.util.Try(i.toInt).toOption)
+}
+
+
 object Path:
 
-  sealed trait PathElement {
-    def name: String
-  }
-  case class Field(name: String) extends PathElement
-  case class IndexedField(name: String, index: Option[String]) extends PathElement:
-    def listIndex(): Option[Int] =
-      index.flatMap(i => scala.util.Try(i.toInt).toOption)
+//  private val segmentRe = """^([^.\[]+)(?:\[([^\]]+)\])?$""".r
 
   def parsePath(path: String): List[PathElement] =
-    path.split("\\.").toList.map { segment =>
-      val clean = segment
-
-      val re = """^([^\[]+)(?:\[(\w+|"(?:[^"\\]|\\.)*")\])?$""".r
-      clean match {
-        case re(name, idx) if idx != null =>
-          val unquoted =
-            if idx.startsWith("\"") && idx.endsWith("\"") && idx.length >= 2 then
-              idx.substring(1, idx.length - 1)
-            else idx
-          IndexedField(name, Some(unquoted))
-        case re(name, _) =>
-          Field(name)
-      }
-    }
-
-  private val re = """^([^\[]+)(?:\[(\w+|"(?:[^"\\]|\\.)*")\])?$""".r
-  def segmentAndIndex(seg: String): (String, Option[String]) = seg match
-    case re(name, idx) =>
-      val unquoted =
-        if idx != null && idx.startsWith("\"") && idx.endsWith("\"") && idx.length >= 2 then
-          idx.substring(1, idx.length - 1)
-        else idx
-      (name, Option(unquoted))
-    case _ =>
-      (seg, None)
-
-  // Strip all "noise" out of path--just raw path--for DynaLens low-level operations
-  def partialPath(pathParts: List[PathElement]): String =
-    pathParts
-      .map {
-        case IndexedField(name, Some(i)) => s"$name[$i]"
-        case Field(name)                 => name
-        case IndexedField(name, None)   => name
-      }
-      .mkString(".")
+    if path == null || path.trim.isEmpty then Nil
+    else
+      val buf = collection.mutable.ListBuffer.empty[PathElement]
+      val sb = new StringBuilder
+      var i = 0
+      while i < path.length do
+        path.charAt(i) match
+          // Dotted boundary: end of field name
+          case '.' =>
+            if sb.nonEmpty then
+              buf += PathElement(Some(sb.toString), None)
+              sb.clear()
+          // Bracketed index or key
+          case '[' =>
+            if sb.nonEmpty then
+              // Normal case: something like items[0]
+              val baseName = sb.toString
+              sb.clear()
+              i += 1
+              val idx = new StringBuilder
+              while i < path.length && path.charAt(i) != ']' do
+                idx.append(path.charAt(i))
+                i += 1
+              if idx.nonEmpty then
+                buf += PathElement(Some(baseName), Some(idx.toString))
+            else
+              // Case like [key] after a list or map
+              i += 1
+              val idx = new StringBuilder
+              while i < path.length && path.charAt(i) != ']' do
+                idx.append(path.charAt(i))
+                i += 1
+              if idx.nonEmpty then
+                buf += PathElement(None, Some(idx.toString))
+          case ']' => // handled by inner loop
+          case c => sb.append(c)
+        i += 1
+      if sb.nonEmpty then buf += PathElement(Some(sb.toString), None)
+      buf.toList

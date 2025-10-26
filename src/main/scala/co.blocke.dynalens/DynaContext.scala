@@ -1,163 +1,100 @@
-/*
- * Copyright (c) 2025 Greg Zoller
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy of
- * this software and associated documentation files (the "Software"), to deal in
- * the Software without restriction, including without limitation the rights to
- * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
- * the Software, and to permit persons to whom the Software is furnished to do so,
- * subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
- * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
- * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
- * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- */
-
 package co.blocke.dynalens
 
 import zio.*
-import scala.collection.mutable
 
-// --- Core aliases ------------------------------------------------------------
 
-//
-// DynaContext used during runtime execution of compiled scripts
-//
-// Map[ symbol, (value, lens?) ]
-type DynaContext = mutable.Map[String, (Any, Option[DynaLens[?]])]
-type Binding = (Any, Option[DynaLens[?]])
+final case class DynaContext(
+                              symbols: Map[String, (Any, Lens)]
+                            ) {
 
-// --- Keys & small helpers ----------------------------------------------------
+  // ---------------- Lookup ----------------
 
-object CtxKey {
-  val Top = "top"
-  val This = "this"
-  inline def coll(name: String): String = s"$name[]"
+  /** Retrieve the (value, lens) pair for a symbol. */
+  def get(sym: String): Option[(Any, Lens)] = symbols.get(sym)
 
-  /** Keys we consider ephemeral (shouldn’t appear in “public” ctx dumps) */
-  inline def isEphemeral(k: String): Boolean =
-    k == This || k.endsWith("[]")
-}
+  /** Retrieve only the value for a symbol. */
+  def getValue(sym: String): Option[Any] = symbols.get(sym).map(_._1)
 
-// --- Constructors ------------------------------------------------------------
+  /** Retrieve only the lens for a symbol. */
+  def getLens(sym: String): Option[Lens] = symbols.get(sym).map(_._2)
 
-object DynaContext {
-  def apply(target: Any, lens: Option[DynaLens[?]]): DynaContext =
-    mutable.Map(CtxKey.Top -> (target, lens))
 
-  def empty: DynaContext = mutable.Map.empty
-}
+  // ---------------- Updates ----------------
 
-// --- Ergonomic extensions ----------------------------------------------------
+  /**
+   * Create or overwrite a symbol value.
+   */
+  def bind(sym: String, value: Any, lens: Lens): DynaContext =
+    copy(symbols = symbols + (sym -> (value, lens)))
 
-extension (ctx: DynaContext)
-  /** Immutable-style update (clone + set) when you need to return a new ctx. */
-  def updatedWith(k: String, v: Binding): DynaContext = {
-    val copy = ctx.clone().asInstanceOf[DynaContext]
-    copy += (k -> v)
-    copy
-  }
+  /**
+   * Remove a symbol binding from the context.
+   */
+  def unbind(sym: String): DynaContext = copy(symbols = symbols - sym)
 
-  /** Replace or insert a binding (mutable; returns ctx for chaining). */
-  def set(k: String, v: Binding): DynaContext = { ctx.update(k, v); ctx }
 
-  /** Remove a key if present (mutable; returns ctx for chaining). */
-  def removeKey(k: String): DynaContext = { ctx.remove(k); ctx }
+  /**
+   * Update 'this' object reference for the current evaluation scope.
+   */
+  def setThis(obj: Any, lens: Lens): DynaContext =
+    copy(symbols = symbols + ("this" -> (obj, lens)))
 
-  /** Fetch just the value part if present. */
-  def valueOf(k: String): Option[Any] = ctx.get(k).map(_._1)
-
-  /** Public (ephemeral-free) view of entries. */
-  def publicEntries: Iterable[(String, Binding)] =
-    ctx.iterator.filterNot { case (k, _) => CtxKey.isEphemeral(k) }.toSeq
-
-// --- High-level binders (scoped) --------------------------------------------
-
-/** Generic “with key” bracket: set key, run body, restore previous state. */
-def withKeyScoped[R](
-    ctx: DynaContext,
-    key: String,
-    binding: Binding
-)(
-    body: => ZIO[_BiMapRegistry, DynaLensError, R]
-): ZIO[_BiMapRegistry, DynaLensError, R] = {
-  val prev: Option[Binding] = ctx.get(key) // snapshot
-  ctx.update(key, binding) // set new binding
-
-  // ── IMPORTANT: defend against a null body ────────────────────────────────
-  val safeBody: ZIO[_BiMapRegistry, DynaLensError, R] =
-    Option(body).getOrElse(
-      ZIO.fail(DynaLensError("","Internal: null body passed to withKeyScoped"))
+  /**
+   * Update 'this.key' and 'this.value' bindings used in map/loop functions.
+   */
+  def setThisKeyValue(k: Any, v: Any, keyLens: Lens, valLens: Lens): DynaContext =
+    copy(
+      symbols =
+        symbols +
+          ("this.key"   -> (k, keyLens)) +
+          ("this.value" -> (v, valLens))
     )
 
-  safeBody.ensuring(
-    ZIO.succeed {
-      prev match {
-        case Some(old) => ctx.update(key, old) // restore
-        case None      => ctx.remove(key) // remove if we introduced it
-      }
-      ()
+  /** Retrieve current 'this' reference */
+  def getThis: Option[(Any, Lens)] =
+    get("this")
+
+  /** Retrieve top-level target object */
+  def getTop: Option[(Any, Lens)] =
+    get("top")
+
+
+  // ---------------- Scoped Helpers ----------------
+
+  /**
+   * Executes a scoped block with a temporary 'this' binding.
+   * The previous binding is automatically restored.
+   */
+  def withThisScoped[R](obj: Any, lens: Lens)(
+    body: DynaContext => ZIO[RuntimeEnv, DynaLensError, R]
+  ): ZIO[RuntimeEnv, DynaLensError, R] =
+    val previous = get("this")
+    val newCtx   = setThis(obj, lens)
+    body(newCtx).ensuring {
+      ZIO.succeed(previous match
+        case Some((v, l)) => copy(symbols = symbols + ("this" -> (v, l)))
+        case None         => copy(symbols = symbols - "this")
+      )
     }
-  )
+
+
+  /**
+   * Executes a scoped block with temporary 'this.key' and 'this.value' bindings.
+   * Used primarily in LoopFn for map and filter operations.
+   */
+  def withThisKeyValueScoped[R](k: Any, v: Any, keyLens: Lens, valLens: Lens)(
+    body: DynaContext => ZIO[RuntimeEnv, DynaLensError, R]
+  ): ZIO[RuntimeEnv, DynaLensError, R] =
+    val prevKey = get("this.key")
+    val prevVal = get("this.value")
+    val newCtx  = setThisKeyValue(k, v, keyLens, valLens)
+    body(newCtx).ensuring {
+      ZIO.succeed(
+        copy(symbols =
+          symbols
+            ++ prevKey.map("this.key"   -> _)
+            ++ prevVal.map("this.value" -> _)
+        )
+      )
+    }
 }
-
-/** Bind `this` for the duration of `body`. */
-def withThisScoped[R](
-    ctx: DynaContext,
-    value: Any,
-    lens: Option[DynaLens[?]] = None
-)(body: => ZIO[_BiMapRegistry, DynaLensError, R]): ZIO[_BiMapRegistry, DynaLensError, R] =
-  withKeyScoped(ctx, CtxKey.This, (value, lens))(body)
-
-/** Bind loop symbol (e.g. “items”) to the current element for the duration of `body`. */
-def withLoopSymbol[R](
-    ctx: DynaContext,
-    key: String,
-    value: Any,
-    lens: Option[DynaLens[?]]
-)(body: => ZIO[_BiMapRegistry, DynaLensError, R]): ZIO[_BiMapRegistry, DynaLensError, R] =
-  withKeyScoped(ctx, key, (value, lens))(body)
-
-/** Bind the *whole collection* as `name[]` for the duration of `body`. */
-def withCollectionSymbol[R](
-    ctx: DynaContext,
-    loopKey: String,
-    iterable: Iterable[?]
-)(body: => ZIO[_BiMapRegistry, DynaLensError, R]): ZIO[_BiMapRegistry, DynaLensError, R] =
-  withKeyScoped(ctx, CtxKey.coll(loopKey), (iterable, None))(body)
-
-// --- Simple non-scoped convenience (kept for parity with your code) ---------
-
-/** Non-scoped setter for `this` (returns ctx to allow chaining). */
-def withElemCtx(elem: Any, ctx: DynaContext): DynaContext =
-  ctx.set(CtxKey.This, (elem, None))
-
-// Keep alongside your DynaContext code
-
-object CtxStrings:
-  /** Pretty-print ctx. Ephemeral keys (`this`, `name[]`) are hidden by default. */
-  def toStringCtx(ctx: DynaContext, includeEphemeral: Boolean = false): String = {
-    inline def isEphemeral(k: String): Boolean = k == "this" || k.endsWith("[]")
-
-    // (key, valueOnly) sequence, filtered
-    val base: Seq[(String, Any)] =
-      ctx.iterator
-        .filterNot { case (k, _) => !includeEphemeral && isEphemeral(k) }
-        .map { case (k, (v, _)) => (k, v) }
-        .toSeq
-
-    // order: "top" first, then alpha
-    val ordered =
-      base.sortBy { case (k, _) => if k == "top" then "\u0000" else k }
-
-    // match your test snapshots: "key -> value.toString"
-    ordered
-      .map { case (k, v) => s"$k -> ${Option(v).fold("null")(_.toString)}" }
-      .mkString("", "\n", "\n")
-  }

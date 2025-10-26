@@ -163,7 +163,7 @@ trait Level1 extends Level0 {
                   val fieldExists =
                     ctx.resolveSymbol(path).isDefined ||
                       effectiveRecvType.exists {
-                        case ClassType(_, _, fields, _) => fields.exists(_.fieldName == path)
+                        case ClassType(_, _, fields, _) => fields.exists(_.name == path)
                         case _ => false
                       } ||
                       ctx.schema.fields.exists(_.fieldName == path)
@@ -325,7 +325,7 @@ trait Level1 extends Level0 {
             withBaseBound match
               case Right(ctx2) =>
                 if childFields.nonEmpty then
-                  ctx2.withVals(childFields.map(ft => ft.fieldName -> ft)*)
+                  ctx2.withVals(childFields.map(ft => ft.name -> ft)*)
                 else
                   ctx2
               case Left(_) => ctx

@@ -369,7 +369,7 @@ trait Level2 extends Level1 with ValueExprModule:
           case TypeResult.Known(ft: FieldType) =>
             // ensure ScalarType carries the val name, so later assignments match cleanly
             val ftNamed = ft match
-              case s: ScalarType if s.fieldName.isEmpty => s.copy(fieldName = name)
+              case s: ScalarType if s.name.isEmpty => s.copy(fieldName = name)
               case other                                => other
             val valFt = ValType(name, ftNamed, ftNamed.typeName)
             val newCtx = ctx.withVals(name -> valFt)

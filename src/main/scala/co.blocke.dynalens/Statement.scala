@@ -22,35 +22,38 @@
 package co.blocke.dynalens
 
 import zio.*
-import Path.*
 
 trait Statement:
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext]
+  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, DynaContext]
 
 case class ValStmt[R](name: String, fn: Fn[R]) extends Statement:
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
+  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, DynaContext] =
     for {
-      value <- fn.resolve(ctx)
-    } yield ctx.updatedWith(name, (value, None))
+      (value, lens) <- fn.resolve(ctx)
+    } yield ctx.bind(name, value, lens)
 
 case class MapStmt(path: String, fn: Fn[Any], posStr: String) extends Statement:
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
+  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, DynaContext] =
     ctx.get("top") match
       case Some((root, topLens)) =>
+        /*
         topLens match
           case Some(lens) =>
-            for
-              mapped <- MapRuntime.mapOver(
-                path = path,
-                predicate = fn,
-                root = root,
-                lens = lens.asInstanceOf[DynaLens[Any]],
-                posStr = posStr,
-                outerCtx = ctx
-              )
-            yield ctx.clone.addOne("top", (mapped, topLens))
+            // for
+            //   mapped <- MapRuntime.mapOver(
+            //     path = path,
+            //     predicate = fn,
+            //     root = root,
+            //     lens = lens.asInstanceOf[DynaLens[Any]],
+            //     posStr = posStr,
+            //     outerCtx = ctx
+            //   )
+            // yield ctx.clone.addOne("top", (mapped, topLens))
+            ZIO.fail(DynaLensError(posStr, "MapStmt not yet implemented (TODO)"))
           case None =>
             ZIO.fail(DynaLensError(posStr, "MapStmt requires top lens in context"))
+         */
+        ZIO.fail(DynaLensError(posStr, "Boom!  TODO--temporary error"))
       case None =>
         ZIO.fail(DynaLensError(posStr, "Missing 'top' in context for map statement"))
 
@@ -61,62 +64,64 @@ case class IfStmt(
     elseBlock: Option[Statement] = None
 ) extends Statement {
 
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
+  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, DynaContext] =
     for {
-      cond <- condition.resolve(ctx)
+      (condAny, _) <- condition.resolve(ctx)
+      cond = condAny.asInstanceOf[Boolean]
       resultCtx <-
         if cond then thenBlock.resolve(ctx)
         else elseBlock.map(_.resolve(ctx)).getOrElse(ZIO.succeed(ctx))
     } yield resultCtx
 }
 
+
 case class BlockStmt(statements: Seq[Statement]) extends Statement:
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
-    statements.foldLeft(ZIO.succeed(ctx): ZIO[_BiMapRegistry, DynaLensError, DynaContext]) { (accZio, stmt) =>
+  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, DynaContext] =
+    statements.foldLeft[ZIO[RuntimeEnv, DynaLensError, DynaContext]](ZIO.succeed(ctx)) { (accZio, stmt) =>
       accZio.flatMap { accCtx =>
         stmt.resolve(accCtx)
       }
     }
 
-case class UpdateStmt[R](
-    path: String,
-    valueFn: Fn[R],
-    posStr: String
-) extends Statement:
 
-  def resolve(ctx: DynaContext): ZIO[_BiMapRegistry, DynaLensError, DynaContext] =
-    parsePath(path) match
-      case Nil =>
-        ZIO.fail(DynaLensError(posStr, "update requires a path"))
+case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends Statement:
 
-      case pathHead :: rest if ctx.contains(pathHead.name) =>
-        ctx(pathHead.name) match
-          case (obj, None) =>
-            ZIO.fail(DynaLensError(posStr, s"Cannot update val '${pathHead.name}' (no lens)"))
-          case (obj, dynalens) =>
-            dynalens
-              .map(lens =>
-                for {
-                  value <- valueFn.resolve(ctx)
-                  updatedObj <- lens
-                    .asInstanceOf[DynaLens[Any]]
-                    .update(partialPath(rest), value, obj.asInstanceOf[lens.ThisT])
-                } yield ctx.clone().addOne(pathHead.name, (updatedObj, dynalens))
-              )
-              .getOrElse(ZIO.succeed(ctx))
+  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, DynaContext] =
+    ctx.get("top") match
+      case None =>
+        ZIO.fail(DynaLensError(posStr, "Missing 'top' in context for update statement"))
 
-      case _ =>
-        ctx.get("top") match
-          case Some((obj, dynalens)) =>
-            dynalens
-              .map(lens =>
-                for {
-                  value <- valueFn.resolve(ctx)
-                  updatedObj <- lens
-                    .asInstanceOf[DynaLens[Any]]
-                    .update(path, value, obj.asInstanceOf[lens.ThisT])
-                } yield ctx.clone().addOne("top", (updatedObj, dynalens))
-              )
-              .getOrElse(ZIO.succeed(ctx))
-          case None =>
-            ZIO.fail(DynaLensError(posStr, s"Unable to update: no 'top' context found for path $path"))
+      case Some((rootObj, rootLens)) =>
+        if rootObj == null then
+          ZIO.fail(DynaLensError(posStr, "Receiver object is null — cannot update"))
+        else
+          val elements0 = Path.parsePath(path)
+          val startsWithThis = elements0.headOption match
+            case Some(PathElement(Some("this"), None)) => true
+            case _                                      => false
+          val elements = if startsWithThis then elements0.tail else elements0
+
+          for
+            ctxWithThis   <- ZIO.succeed(ctx.bind("this", rootObj, rootLens))
+            (newValue, _) <- valueFn.resolve(ctxWithThis)
+
+            updatedObj <-
+              if startsWithThis && (rootObj == None) then
+                // Optional parent missing and path anchored to `this` → no-op, preserve original root object
+                ZIO.succeed(rootObj)
+              else
+                ZIO
+                  .attempt(rootLens.update(elements, newValue, rootObj))
+                  .flatten
+                  .mapError {
+                    case _: ClassCastException =>
+                      DynaLensError(
+                        posStr,
+                        s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
+                      )
+                    case e =>
+                      DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
+                  }
+
+            updatedCtx = ctx.bind("top", updatedObj, rootLens)
+          yield updatedCtx.unbind("this")

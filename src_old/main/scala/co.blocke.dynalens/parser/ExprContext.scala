@@ -33,7 +33,7 @@ case class ExprContext(
                       ) {
 
   def pushScope(fields: List[FieldType]): ExprContext =
-    copy(symbols = fields.map(ft => ft.fieldName -> ft).toMap :: symbols)
+    copy(symbols = fields.map(ft => ft.name -> ft).toMap :: symbols)
 
   def resolveSymbol(name: String): Option[FieldType] =
     symbols.collectFirst { case m if m.contains(name) => m(name) }
