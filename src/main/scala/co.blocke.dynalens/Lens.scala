@@ -75,8 +75,9 @@ final case class ClassLens(
 
           // SHORT-CIRCUIT: skip the rest of update entirely
           updatedBase <-
-            if isOptional && baseObj == None then
-              ZIO.succeed(None)
+            if isOptional && baseObj == None && rest.nonEmpty then
+              // return original parent unchanged
+              ZIO.succeed(obj)
             else
               for
                 fieldValue <- _get(fieldNameOpt.getOrElse(""), baseObj)

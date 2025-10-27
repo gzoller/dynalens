@@ -271,7 +271,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val stmt = UpdateStmt(
         "address.city",
         ConcatFn(
-          GetFn("this", false, RootFn, "<pos>"),
+          GetFn("this.city", false, RootFn, "<pos>"),
           List(ConstantFn(" - TX")),
           "<pos>"
         ),
@@ -298,6 +298,63 @@ object UpdateStmtSpec extends ZIOSpecDefault {
         updateResult <- stmt.resolve(DynaContext(Map("top" -> (p, lensOpt)))).either
       yield assertTrue(updateResult.isRight)
     },
+    test("Map → List nested update — success") {
+      case class OuterMap(lm: Map[String, WithList])
+      val rootLens = DynaLens.into[OuterMap].topLens
+
+      val p = OuterMap(Map("a" -> WithList(List(UpdateItem("x", 1)))))
+      val stmt = UpdateStmt("lm[a].items[0].qty", ConstantFn(9), "<pos>")
+
+      for
+        updated <- stmt.resolve(DynaContext(Map("top" -> (p, rootLens))))
+        result = updated.getValue("top").get.asInstanceOf[OuterMap]
+      yield assertTrue(result.lm("a").items(0).qty == 9)
+    },
+    test("Map → List nested update — missing key fails") {
+      case class OuterMap(lm: Map[String, WithList])
+      val rootLens = DynaLens.into[OuterMap].topLens
+
+      val p = OuterMap(Map("a" -> WithList(List(UpdateItem("x", 1)))))
+      val stmt = UpdateStmt("lm[b].items[0].qty", ConstantFn(9), "<pos>")
+
+      for
+        result <- stmt.resolve(DynaContext(Map("top" -> (p, rootLens)))).either
+      yield assertTrue(result.isLeft)
+    },
+    test("Map → List nested update — index OOB fails") {
+      case class OuterMap(lm: Map[String, WithList])
+      val rootLens = DynaLens.into[OuterMap].topLens
+
+      val p = OuterMap(Map("a" -> WithList(List(UpdateItem("x", 1)))))
+      val stmt = UpdateStmt("lm[a].items[3].qty", ConstantFn(9), "<pos>")
+
+      for
+        result <- stmt.resolve(DynaContext(Map("top" -> (p, rootLens)))).either
+      yield assertTrue(result.isLeft)
+    },
+    test("List → Map nested update — success") {
+      case class OuterList(lm: List[WithMap])
+      val rootLens = DynaLens.into[OuterList].topLens
+
+      val p = OuterList(List(WithMap(Map("x" -> UpdateItem("y", 2)))))
+      val stmt = UpdateStmt("lm[0].things[x].qty", ConstantFn(17), "<pos>")
+
+      for
+        updated <- stmt.resolve(DynaContext(Map("top" -> (p, rootLens))))
+        result = updated.getValue("top").get.asInstanceOf[OuterList]
+      yield assertTrue(result.lm(0).things("x").qty == 17)
+    },
+    test("List → Map nested update — missing key fails") {
+      case class OuterList(lm: List[WithMap])
+      val rootLens = DynaLens.into[OuterList].topLens
+
+      val p = OuterList(List(WithMap(Map("x" -> UpdateItem("y", 2)))))
+      val stmt = UpdateStmt("lm[0].things[z].qty", ConstantFn(17), "<pos>")
+
+      for
+        result <- stmt.resolve(DynaContext(Map("top" -> (p, rootLens)))).either
+      yield assertTrue(result.isLeft)
+    }
   ).provide(
     ZLayer.succeed(
       RuntimeEnv(

@@ -151,11 +151,15 @@ case class SubtractFn(
         // ----- BigInt / BigDecimal -----
         case (a: BigInt, b: BigInt) => ZIO.succeed(a - b)
         case (a: BigInt, b: Int) => ZIO.succeed(a - BigInt(b))
+        case (a: BigInt, b: Long) => ZIO.succeed(a - BigInt(b))
         case (a: BigInt, b: BigDecimal) => ZIO.succeed(BigDecimal(a) - b)
         case (a: BigDecimal, b: BigDecimal) => ZIO.succeed(a - b)
         case (a: BigDecimal, b: BigInt) => ZIO.succeed(a - BigDecimal(b))
         case (a: BigDecimal, b: Double) => ZIO.succeed(a - BigDecimal(b))
         case (a: BigDecimal, b: Int) => ZIO.succeed(a - BigDecimal(b))
+        case (a: BigDecimal, b: Long) => ZIO.succeed(a - BigDecimal(b))
+        case (a: Long, b: BigInt) => ZIO.succeed(BigInt(a) - b)
+        case (a: Long, b: BigDecimal) => ZIO.succeed(BigDecimal(a) - b)
 
         // ----- Fallback -----
         case _ =>
@@ -197,6 +201,7 @@ case class MultiplyFn(
         case (a: Long, b: Long)     => ZIO.succeed(a * b)
         case (a: Long, b: Float)    => ZIO.succeed(a * b)
         case (a: Long, b: Double)   => ZIO.succeed(a * b)
+        case (a: Long, b: BigDecimal) => ZIO.succeed(BigDecimal(a) * b)
 
         // --- Float cases
         case (a: Float, b: Int)     => ZIO.succeed(a * b)
@@ -216,6 +221,7 @@ case class MultiplyFn(
         case (a: BigInt, b: Int) => ZIO.succeed(a * BigInt(b))
         case (a: Int, b: BigInt) => ZIO.succeed(BigInt(a) * b)
         case (a: BigDecimal, b: Double) => ZIO.succeed(a * BigDecimal(b))
+        case (a: BigDecimal, b: Long) => ZIO.succeed(a * BigDecimal(b))
         case (a: Double, b: BigDecimal) => ZIO.succeed(BigDecimal(a) * b)
 
         case _ =>
@@ -290,6 +296,10 @@ case class DivideFn(
           ZIO.succeed(a / BigDecimal(b))
         case (a: Double, b: BigDecimal) =>
           ZIO.succeed(BigDecimal(a) / b)
+        case (a: BigDecimal, b: Long) =>
+          ZIO.succeed(a / BigDecimal(b))
+        case (a: Long, b: BigDecimal) =>
+          ZIO.succeed(BigDecimal(a) / b)
 
         case _ =>
           ZIO.fail(
@@ -356,6 +366,14 @@ case class ModuloFn(
           ZIO.succeed(a % b)
         case (a: BigDecimal, b: BigDecimal) =>
           ZIO.succeed(a.remainder(b))
+        case (a: BigDecimal, b: Long) =>
+          ZIO.succeed(a.remainder(BigDecimal(b)))
+        case (a: Long, b: BigDecimal) =>
+          ZIO.succeed(BigDecimal(a).remainder(b))
+        case (a: BigDecimal, b: Int) =>
+          ZIO.succeed(a.remainder(BigDecimal(b)))
+        case (a: Int, b: BigDecimal) =>
+          ZIO.succeed(BigDecimal(a).remainder(b))
         case (a: BigInt, b: Int) =>
           ZIO.succeed(a % BigInt(b))
         case (a: Int, b: BigInt) =>

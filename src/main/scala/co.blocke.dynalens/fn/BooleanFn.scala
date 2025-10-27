@@ -47,7 +47,7 @@ case class AndFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
       lvBool <- lv match
         case b: Boolean => ZIO.succeed(b)
         case other => ZIO.fail(DynaLensError(posStr, s"Left side not Boolean: ${other.getClass.getSimpleName}"))
-      result <- 
+      result <-
         if !lvBool then ZIO.succeed((false, lLens)) // short-circuit
         else
           for
@@ -80,7 +80,7 @@ case class OrFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
       lvBool <- lv match
         case b: Boolean => ZIO.succeed(b)
         case other => ZIO.fail(DynaLensError(posStr, s"Left side not Boolean: ${other.getClass.getSimpleName}"))
-      result <- 
+      result <-
         if lvBool then ZIO.succeed((true, lLens)) // short-circuit
         else
           for
@@ -90,7 +90,7 @@ case class OrFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
               case other => ZIO.fail(DynaLensError(posStr, s"Right side not Boolean: ${other.getClass.getSimpleName}"))
           yield (lvBool || rvBool, lLens)
     yield result
-    
+
 
 /** NOT */
 case class NotFn(recv: Fn[Any], posStr: String)
@@ -228,26 +228,39 @@ object ContainsFn {
       // ---- Iterable: supports predicate OR value check ----
       case it: Iterable[?] =>
         needle match {
-
-          // Predicate case: evaluate per element with `this` bound
           case pred: BooleanFn =>
-            ZIO
-              .foreach(it.asInstanceOf[Iterable[Any]]) { elem =>
-                ctx.withThisScoped(elem, lens) { newCtx =>
-                  pred.resolve(newCtx)
-                }.either
-              }
-              .map(_.exists {
-                case Right((true, _)) => true
-                case _           => false
-              })
-              .map(res => (res, lens))
-
-          // Value case: compute target once, then == compare
+            def loop(
+              elems: List[Any],
+              firstError: Option[DynaLensError],
+              foundFalseSuccess: Boolean
+            ): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] = elems match {
+              case Nil =>
+                firstError match {
+                  case None => ZIO.succeed((false, lens)) // no errors, all false
+                  case Some(err) =>
+                    if (foundFalseSuccess) ZIO.succeed((false, lens))
+                    else ZIO.fail(err)
+                }
+              case head :: tail =>
+                val elemLens: Lens = lens match
+                  case ll: ListLens => ll.elementLens
+                  case _            => lens
+                ctx.withThisScoped(head, elemLens) { scopedCtx =>
+                  pred.resolve(scopedCtx).either.flatMap {
+                    case Right((true, _)) =>
+                      ZIO.succeed((true, lens)) // short-circuit on true
+                    case Right((false, _)) =>
+                      loop(tail, firstError, true)
+                    case Left(err) =>
+                      loop(tail, firstError.orElse(Some(err)), foundFalseSuccess)
+                  }
+                }
+            }
+            loop(it.toList, None, false)
           case _ =>
             for {
-              (ndlVal, ndlLens) <- needle.resolve(ctx)
-            } yield (it.asInstanceOf[Iterable[Any]].exists(_ == ndlVal), lens)
+              (ndlVal, _) <- needle.resolve(ctx)
+            } yield (it.exists(_ == ndlVal), lens)
         }
 
       // ---- Unsupported receiver types ----
