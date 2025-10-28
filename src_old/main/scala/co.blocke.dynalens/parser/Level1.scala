@@ -535,14 +535,6 @@ trait Level1 extends Level0 {
         if childFields.nonEmpty then ctxWithThis.pushScope(childFields)
         else ctxWithThis
 
-      // Build a GetFn for the collection receiver
-//      val baseFn: Fn[Any] = GetFn(
-//        basePath,
-//        isOptional = Utility.isPathOptional(basePath, ctxWithThis),
-//        recv = NoOpFn,
-//        posStr = ctx.posStr
-//      )
-
       given ExprContext = ctxForArgs
 
       // require a first method

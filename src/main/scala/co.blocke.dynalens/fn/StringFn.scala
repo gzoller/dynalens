@@ -108,7 +108,20 @@ case class SubstringFn(
       toOpt <- end match
         case None => ZIO.succeed(None)
         case Some(e) => e.resolve(ctx).flatMap(v => ZIO.fromOption(toIndex(v._1)).map(Some(_)).mapError(_ => DynaLensError(posStr, "substring() end must be numeric")))
-      (lo, hi0) = (Math.max(0, from), toOpt.getOrElse(s.length))
+      
+      // If start index is beyond the string length, return empty string + original lens
+      _ <-
+        if from >= s.length then
+          ZIO.succeed(())
+        else
+          ZIO.succeed(())
+      
+      (lo, hi0) =
+        if from >= s.length then
+          (s.length, s.length)
+        else
+          (Math.max(0, from), toOpt.getOrElse(s.length))
+      
       hi = Math.max(lo, Math.min(hi0, s.length))
     yield (s.substring(lo, hi), rawLens)
 
@@ -166,23 +179,27 @@ case class ConcatFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
     for
-      (recvVal, recvLens)  <- recv.resolve(ctx)
-      argValsWithLens  <- ZIO.foreach(args)(_.resolve(ctx))
+      (recvVal, recvLens) <- recv.resolve(ctx)
+      argValsWithLens <- ZIO.foreach(args)(_.resolve(ctx))
       argVals = argValsWithLens.map(_._1)
-      result   <- ZIO.attempt {
+
+      result <- ZIO.attempt {
         val sb = new StringBuilder
+
         def appendAny(value: Any): Unit =
           value match
             case null | None => ()
-            case Some(xs: Seq[?])      => xs.foreach(x => if x != null then sb.append(x.toString))
-            case Some(xs: Iterable[?]) => xs.foreach(x => if x != null then sb.append(x.toString))
-            case xs: Seq[?]            => xs.foreach(x => if x != null then sb.append(x.toString))
-            case xs: Iterable[?]       => xs.foreach(x => if x != null then sb.append(x.toString))
-            case Some(v)               => sb.append(v.toString)
-            case v                     => sb.append(v.toString)
+            case Some(v) => appendAny(v) // ✅ flatten nested Options
+            case xs: Iterable[?] =>
+              xs.foreach(x => appendAny(x)) // ✅ flatten collections
+            case xs: Seq[?] =>
+              xs.foreach(x => appendAny(x)) // ✅ flatten sequences
+            case v =>
+              sb.append(v.toString)
 
         appendAny(recvVal)
         argVals.foreach(appendAny)
         sb.toString
       }.catchAll(e => ZIO.fail(DynaLensError(posStr, s"concat (+) failed at $posStr: ${e.getMessage}")))
+
     yield (result, recvLens)

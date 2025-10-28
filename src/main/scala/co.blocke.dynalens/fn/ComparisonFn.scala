@@ -12,40 +12,19 @@ object ComparisonSupport:
     case bd: BigDecimal => Some(bd)
     case _ => None
 
-  def compareNumbers(a: Any, b: Any): Either[String, Int] =
-    if (a == null || b == null) Left(s"Cannot compare values: $a, $b")
-    else if (a.isInstanceOf[Option[?]] || b.isInstanceOf[Option[?]])
-      Left(s"Cannot compare values: $a, $b")
-    else
-      (asBigDecimal(a), asBigDecimal(b)) match
-        case (Some(ba), Some(bb)) => Right(ba.compare(bb)) // -1,0,1
-        case _ => Left(s"Cannot compare values: $a, $b")
+  def compareValues(a: Any, b: Any): Either[String, Int] =
+    (a, b) match
+      case (_: Option[?], _) | (_, _: Option[?]) =>
+        Left(s"Cannot compare values: $a, $b")
+      case (null, _) | (_, null) =>
+        Left(s"Cannot compare values: $a, $b")
+      case (as: String, bs: String) =>
+        Right(as.compareTo(bs))
+      case _ =>
+        (asBigDecimal(a), asBigDecimal(b)) match
+          case (Some(ba), Some(bb)) => Right(ba.compare(bb))
+          case _ => Left(s"Cannot compare values: $a, $b")
 
-
-
-private def comparableCompare(l: Any, r: Any)(cmp: Int => Boolean): Option[Boolean] =
-  (l, r) match
-    case (a: Number, b: Number) =>
-      Some(cmp(java.lang.Double.compare(a.doubleValue(), b.doubleValue())))
-    case (a: String, b: String) =>
-      Some(cmp(a.compareTo(b)))
-    case (a: Comparable[?], b: Comparable[?]) if a.getClass == b.getClass =>
-      Some(cmp(a.asInstanceOf[Comparable[Any]].compareTo(b)))
-    case _ => None
-
-private def compareOptionals(lAny: Any, rAny: Any)(cmp: (Any, Any) => Option[Boolean]): ZIO[RuntimeEnv, DynaLensError, Boolean] =
-  (lAny, rAny) match
-    case (None, None) => ZIO.succeed(true)
-    case (None, Some(_)) =>
-      ZIO.fail(DynaLensError("", "Cannot compare None with Some value"))
-    case (Some(_), None) =>
-      ZIO.fail(DynaLensError("", "Cannot compare Some value with None"))
-    case (Some(lVal), Some(rVal)) =>
-      cmp(lVal, rVal) match
-        case Some(b) => ZIO.succeed(b)
-        case None => ZIO.fail(DynaLensError("", s"Cannot compare types: ${lVal.getClass}, ${rVal.getClass}"))
-    case _ =>
-      ZIO.fail(DynaLensError("", s"Cannot compare values: $lAny, $rAny"))
 
 case class LessThanFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends BinaryFn[Boolean] with BooleanFn:
 
@@ -58,7 +37,7 @@ case class LessThanFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends Binar
     for
       (lv, lLens) <- recv.resolve(ctx)
       (rv, _)     <- arg.resolve(ctx)
-      cmp <- ComparisonSupport.compareNumbers(lv, rv) match
+      cmp <- ComparisonSupport.compareValues(lv, rv) match
         case Right(c) => ZIO.succeed(c)
         case Left(msg) => ZIO.fail(DynaLensError(posStr, msg))
     yield (cmp < 0, lLens)
@@ -74,8 +53,8 @@ case class GreaterThanFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends Bi
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
     for
       (lv, lLens) <- recv.resolve(ctx)
-      (rv, _)     <- args.head.resolve(ctx)
-      cmp <- ComparisonSupport.compareNumbers(lv, rv) match
+      (rv, _)     <- arg.resolve(ctx)
+      cmp <- ComparisonSupport.compareValues(lv, rv) match
         case Right(c) => ZIO.succeed(c)
         case Left(msg) => ZIO.fail(DynaLensError(posStr, msg))
     yield (cmp > 0, lLens)
@@ -92,7 +71,7 @@ case class LessThanOrEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extend
     for
       (lv, lLens) <- recv.resolve(ctx)
       (rv, _)     <- arg.resolve(ctx)
-      cmp <- ComparisonSupport.compareNumbers(lv, rv) match
+      cmp <- ComparisonSupport.compareValues(lv, rv) match
         case Right(c) => ZIO.succeed(c)
         case Left(msg) => ZIO.fail(DynaLensError(posStr, msg))
     yield (cmp <= 0, lLens)
@@ -109,7 +88,7 @@ case class GreaterThanOrEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) ext
     for
       (lv, lLens) <- recv.resolve(ctx)
       (rv, _)     <- arg.resolve(ctx)
-      cmp <- ComparisonSupport.compareNumbers(lv, rv) match
+      cmp <- ComparisonSupport.compareValues(lv, rv) match
         case Right(c) => ZIO.succeed(c)
         case Left(msg) => ZIO.fail(DynaLensError(posStr, msg))
     yield (cmp >= 0, lLens)
@@ -126,10 +105,7 @@ case class EqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends BinaryFn
     for
       (lv, lLens) <- recv.resolve(ctx)
       (rv, _)     <- arg.resolve(ctx)
-      cmp <- ComparisonSupport.compareNumbers(lv, rv) match
-        case Right(c) => ZIO.succeed(c)
-        case Left(msg) => ZIO.fail(DynaLensError(posStr, msg))
-    yield (cmp == 0, lLens)
+    yield (lv == rv, lLens)
 
 
 case class NotEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends BinaryFn[Boolean] with BooleanFn:
@@ -143,7 +119,4 @@ case class NotEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends Binar
     for
       (lv, lLens) <- recv.resolve(ctx)
       (rv, _)     <- arg.resolve(ctx)
-      cmp <- ComparisonSupport.compareNumbers(lv, rv) match
-        case Right(c) => ZIO.succeed(c)
-        case Left(msg) => ZIO.fail(DynaLensError(posStr, msg))
-    yield (cmp != 0, lLens)
+    yield (lv != rv, lLens)

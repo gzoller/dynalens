@@ -32,3 +32,6 @@ case class DeepNested(items: List[Map[String, Int]])
 
 case class Holder(deep: Option[DeepNested])
 
+import fn.*
+inline def G(s: String) = GetFn(s, false, RootFn, s"pos-$s")
+inline def C(v: Any) = ConstantFn(v)

@@ -25,48 +25,53 @@ case class ElseFn(recv: Fn[Any], default: Fn[Any], posStr: String) extends Metho
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids(0).asInstanceOf[Fn[Any]], default = kids(1).asInstanceOf[Fn[Any]], posStr = posStr)
 
-  // Update ElseFn.resolve to handle FailSentinel fallback:
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for
-      (optVal, rLens) <- recv.resolve(ctx)
-      res <- optVal match
-        case o: Option[?] =>
-          o match
-            case Some(v) => ZIO.succeed((v, rLens))
+      attempt <- recv.resolve(ctx).either
+      res <- attempt match
+        case Right((raw, rLens)) =>
+          // Only allow else() if lens is optional
+          if !rLens.isOptional then
+            ZIO.fail(DynaLensError(posStr, "else() requires an Option"))
+          else
+            // Normalize raw into Option: null => None, Some(null) => None, non-option => Some(value)
+            val normalized: Option[Any] = raw match
+              case null         => None
+              case Some(null)   => None
+              case None         => None
+              case opt: Option[?] => opt.asInstanceOf[Option[Any]] match
+                case Some(null) => None
+                case other      => other
+              case other        => Some(other)
+            normalized match
+              case Some(v) if v != null =>
+                ZIO.succeed((v, rLens))
+              case _ =>
+                default.resolve(ctx).flatMap {
+                  case (FailSentinel, _) =>
+                    ZIO.fail(DynaLensError(posStr, s"Required value missing before else(fail)"))
+                  case (v2, _) =>
+                    ZIO.succeed((v2, rLens))
+                }
+        case Left(_) =>
+          // If lens is optional, resolve default; else error.
+          val recoveredLensZ: ZIO[RuntimeEnv, DynaLensError, Lens] = recv match
+            case g: GetFn =>
+              g.copy(isOptional = true).resolve(ctx).map(_._2).orElse(ZIO.succeed(ScalarLens("<get>", true, None)))
+            case _ =>
+              ZIO.succeed(ScalarLens("<get>", true, None))
 
-            case None =>
+          recoveredLensZ.flatMap { rLens =>
+            if !rLens.isOptional then
+              ZIO.fail(DynaLensError(posStr, "else() requires an Option"))
+            else
               default.resolve(ctx).flatMap {
                 case (FailSentinel, _) =>
-                  ZIO.fail(
-                    DynaLensError(
-                      posStr,
-                      s"Required value missing before else(fail)"
-                    )
-                  )
-                case other =>
-                  ZIO.succeed(other)
+                  ZIO.fail(DynaLensError(posStr, s"Required value missing before else(fail)"))
+                case (v, _) =>
+                  ZIO.succeed((v, rLens))
               }
-
-        case null =>
-          default.resolve(ctx).flatMap {
-            case (FailSentinel, _) =>
-              ZIO.fail(
-                DynaLensError(
-                  posStr,
-                  s"Receiver null before else(fail)"
-                )
-              )
-            case other =>
-              ZIO.succeed(other)
           }
-
-        case other =>
-          ZIO.fail(
-            DynaLensError(
-              posStr,
-              s"else() requires Option receiver, got ${other.getClass.getSimpleName}"
-            )
-          )
     yield res
 
 
@@ -92,12 +97,51 @@ case class BlockFn[R](statements: Seq[Statement], finalFn: Fn[R], posStr: String
   override val isOptional: Boolean = finalFn.isOptional
 
   // Execute statements in order, threading the DynaContext; return the value of the final Fn.
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (R, Lens)] =
+  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (R, Lens)] = {
+    val ctxWithTop: DynaContext =
+      ctx.getTop match
+        case Some(_) => ctx
+        case None =>
+          ctx.getThis match
+            case Some((obj, lens)) => ctx.bind("top", obj, lens)
+            case None =>
+              // Fallback: use RootFn's unit object and lens as synthetic top
+              ctx.bind("top", (), ScalarLens("<root>", false, None))
+
     val staged: ZIO[RuntimeEnv, DynaLensError, DynaContext] =
-      statements.foldLeft(ZIO.succeed(ctx): ZIO[RuntimeEnv, DynaLensError, DynaContext]) {
-        (acc, stmt) => acc.flatMap(ctx2 => stmt.resolve(ctx2))
+      statements.foldLeft(
+        ZIO.succeed(ctxWithTop): ZIO[RuntimeEnv, DynaLensError, DynaContext]
+      ) { (accZ, stmt) =>
+        accZ.flatMap { accCtx =>
+          stmt match
+            case u: UpdateStmt[_] =>
+              u match
+                case UpdateStmt(symPath, valueFn, _) if !symPath.contains(".") && accCtx.get(symPath).isDefined =>
+                  // Direct symbol update without top
+                  valueFn.resolve(accCtx).map { case (newVal, _) =>
+                    val (_, existingLens) = accCtx.get(symPath).getOrElse(newVal -> ScalarLens(symPath, false, None))
+                    accCtx.bind(symPath, newVal, existingLens)
+                  }
+                case _ =>
+                  u.resolve(accCtx)
+            case other =>
+              other.resolve(accCtx).as(accCtx)
+        }
       }
-    staged.flatMap(finalFn.resolve)
+
+    staged.flatMap { finalCtx =>
+      finalFn.resolve(finalCtx).map { case (value, lens) =>
+        val clean =
+          lens match
+            case s: ScalarLens => s.copy(parent = None)
+            case c: ClassLens  => c.copy(parent = None)
+            case l: ListLens   => l.copy(parent = None)
+            case m: MapLens    => m.copy(parent = None)
+            case e: EnumLens   => e.copy(parent = None)
+        (value, clean)
+      }
+    }
+  }
 
 
 case class CaseWhenFn(
@@ -130,10 +174,18 @@ case class CaseWhenFn(
     for
       (v, _) <- receiver.resolve(ctx)
       result <- cases.collectFirst { case (p, rhs) if v == p => rhs.resolve(ctx) } match
-        case Some(matched) => matched
+        case Some(matched) =>
+          matched.flatMap { case (value, _) =>
+            receiver.resolve(ctx).map { case (_, rLens) =>
+              (value, rLens) // preserve the receiver lens
+            }
+          }
         case None =>
           default match
-            case Some(defFn) => defFn.resolve(ctx)
+            case Some(defFn) =>
+              defFn.resolve(ctx).flatMap { case (v, _) =>
+                receiver.resolve(ctx).map { case (_, rLens) => (v, rLens) }
+              }
             case None if permissive => receiver.resolve(ctx)
             case None =>
               ZIO.fail(DynaLensError(posStr, s"No case matched for value: $v"))
@@ -209,6 +261,7 @@ case class Tuple2Fn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
     yield ((a, b), aLens)
 
 
+/* Deprecated
 case class LoopFn(inner: Fn[Any], posStr: String)
   extends Fn[List[Any]]:
 
@@ -239,37 +292,7 @@ case class LoopFn(inner: Fn[Any], posStr: String)
 
       case None =>
         ZIO.fail(DynaLensError(posStr, "LoopFn requires 'this' bound to a collection"))
-
-
-// TODO: Deprecate this--shouldn't be needed with lens chaining
-case class PolyFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String) extends Fn[Any]:
-  override val methodName: String = "<poly>"
-  override val isOptional: Boolean =
-    recv.isOptional || args.exists(_.isOptional)
-  override def children: List[Fn[?]] =
-    recv :: args
-
-  override def rebuild(kids: List[Fn[?]]): Fn[Any] =
-    kids match
-      case r :: tail =>
-        copy(recv = r.asInstanceOf[Fn[Any]], args = tail.asInstanceOf[List[Fn[Any]]])
-      case _ =>
-        this
-
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
-    ctx.get("this") match
-      case Some((origVal, lens)) =>
-        for
-          _ <- ZIO.foreachDiscard(args) { fn =>
-            fn.resolve(ctx).map { case (resVal, _) => ctx.bind("this", resVal, lens) }
-          }
-          finalVal <- ctx.get("this") match {
-            case Some((v, _)) => ZIO.succeed(v)
-            case None => ZIO.fail(DynaLensError(posStr, "'this' unexpectedly missing from context"))
-          }
-        yield (finalVal, lens)
-      case None =>
-        ZIO.fail(DynaLensError(posStr, "'this' not found in context"))
+    */
 
 
 case class GetFn(
@@ -343,21 +366,25 @@ case class GetFn(
         else ZIO.fail(DynaLensError(posStr, s"No anchor found for path '$path' (missing symbol/this/top)"))
 
       case Some((baseVal, baseLens, tail)) =>
-        // Validate anchor lens presence: a symbol/anchor must provide a lens.
         if baseLens == null then
           if isOptional then
             ZIO.succeed((None, ScalarLens("<get>", true, None)))
           else
-            ZIO.fail(DynaLensError(posStr, s"Anchor for '$path' is missing a lens"))
+            ZIO.fail(DynaLensError(posStr, s"Missing lens for required path '$path'"))
         else if baseVal == null then
-          ZIO.fail(DynaLensError(posStr, s"Receiver for '$path' is null"))
+          if isOptional then
+            ZIO.succeed((None, baseLens))
+          else
+            ZIO.fail(DynaLensError(posStr, s"Receiver for '$path' is null"))
         else baseVal match
           case None =>
-            if isOptional then ZIO.succeed((None, ScalarLens("<get>", true, None)))
-            else ZIO.fail(DynaLensError(posStr, s"Receiver for '$path' is None"))
+            if isOptional then ZIO.succeed((None, baseLens))
+            else resolveWithLens(None, baseLens, tail)
           case Some(inner) =>
-            // Unwrap Option receiver and continue
-            resolveWithLens(inner, baseLens, tail)
+            if inner == null && isOptional then
+              ZIO.succeed((None, baseLens))
+            else
+              resolveWithLens(inner, baseLens, tail)
           case nonOpt =>
             resolveWithLens(nonOpt, baseLens, tail)
 
@@ -429,11 +456,19 @@ case class GetFn(
         case null =>
           ZIO.fail(DynaLensError(posStr, s"Null encountered for required access"))
         case None =>
-          ZIO.fail(DynaLensError(posStr, s"Required map key missing"))
+          val outLens = deriveTerminalLens(lens, tail)
+          if tail.isEmpty then
+            ZIO.succeed((None, outLens))
+          else
+            ZIO.fail(DynaLensError(posStr, s"Required map key missing"))
         case Some(null) =>
           ZIO.fail(DynaLensError(posStr, s"Required map value is null"))
         case Some(None) =>
-          ZIO.fail(DynaLensError(posStr, s"Required map key missing"))
+          val outLens = deriveTerminalLens(lens, tail)
+          if tail.isEmpty then
+            ZIO.succeed((None, outLens))
+          else
+            ZIO.fail(DynaLensError(posStr, s"Required map key missing"))
         case Some(v) =>
           val outLens = deriveTerminalLens(lens, tail)
           // DEBUG: show lens chaining for required branch
@@ -461,6 +496,7 @@ object NoOpFn extends Fn[Any]:
     ZIO.fail(DynaLensError(posStr, "NoOpFn should never be resolved"))
 
 
+/* Deprecated
 // Special converter: Fn[Any]->BooleanFn
 case class ToBooleanFn(inner: Fn[Any], posStr: String) extends BooleanFn:
 
@@ -493,3 +529,4 @@ case class ToBooleanFn(inner: Fn[Any], posStr: String) extends BooleanFn:
           ZIO.fail(DynaLensError(posStr,
             s"Expected Boolean at runtime, got ${other.getClass.getSimpleName} = $other"))
     yield (res, rLens)
+*/
