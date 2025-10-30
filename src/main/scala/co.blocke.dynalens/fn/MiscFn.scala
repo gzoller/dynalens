@@ -318,6 +318,14 @@ case class GetFn(
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     val parts = parsePath(path)
 
+    // Special case: direct symbols this_key / this_value
+    if (path == "this_key" || path == "this_value") && !path.contains(".") && !path.contains("[") then
+      ctx.get(path) match
+        case Some((v, l)) =>
+          return ZIO.succeed((v, l))
+        case None =>
+          return ZIO.fail(DynaLensError(posStr, s"No this binding found for '$path'"))
+    
     // Decide anchor: symbol -> this -> top, including index anchors
     val anchored: Option[(Any, Lens, List[PathElement])] = parts match
       // Symbol anchor + index
@@ -354,12 +362,6 @@ case class GetFn(
           .map { case (v, l) => (v, l, parts) }
           .orElse(ctx.get("top").map { case (v, l) => (v, l, parts) })
 
-    // DEBUG[GetFn:anchor]
-    //   fullPath      = """" + path + """"
-    //   parsedParts   = """" + parts.toString + """"
-    //   anchored?     = """" + anchored.isDefined + """"
-    //   baseLens      = """" + anchored.map(_._2.getClass.getSimpleName).getOrElse("<none>") + """"
-    //   remainingPath = """" + anchored.map(_._3).getOrElse(Nil).toString + """"
     anchored match
       case None =>
         if isOptional then ZIO.succeed((None, ScalarLens("<get>", true, None)))
@@ -378,15 +380,32 @@ case class GetFn(
             ZIO.fail(DynaLensError(posStr, s"Receiver for '$path' is null"))
         else baseVal match
           case None =>
-            if isOptional then ZIO.succeed((None, baseLens))
-            else resolveWithLens(None, baseLens, tail)
+            if isOptional then
+              ZIO.succeed((None, baseLens))
+            else {
+              val z = resolveWithLens(None, baseLens, tail)
+              z.map { case (v, l) =>
+                (v, l)
+              }
+            }
           case Some(inner) =>
             if inner == null && isOptional then
               ZIO.succeed((None, baseLens))
-            else
-              resolveWithLens(inner, baseLens, tail)
+            else {
+              val z = resolveWithLens(inner, baseLens, tail)
+              z.map { case (v, l) =>
+                (v, l)
+              }
+            }
           case nonOpt =>
-            resolveWithLens(nonOpt, baseLens, tail)
+            if tail.isEmpty then
+              ZIO.succeed((nonOpt, baseLens))
+            else {
+              val z = resolveWithLens(nonOpt, baseLens, tail)
+              z.map { case (v, l) =>
+                (v, l)
+              }
+            }
 
   // Derive the terminal lens by walking the entire remaining path
   private def deriveTerminalLens(start: Lens, tail: List[PathElement]): Lens =

@@ -11,6 +11,7 @@ enum MapKeyKind:
   case LongKey
   case EnumKey(enumClassName: String)
 
+
 given ToExpr[MapKeyKind] with
   def apply(mkk: MapKeyKind)(using Quotes): Expr[MapKeyKind] = mkk match
     case MapKeyKind.StringKey => '{ MapKeyKind.StringKey }

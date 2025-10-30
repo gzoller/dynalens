@@ -12,7 +12,7 @@ object MathFnSpec extends ZIOSpecDefault:
   case class Foo(i: Int, xs: List[Int], ys: List[Double], os: Option[List[Int]])
   val foo       = Foo(5, List(1, -2, 3), List(2.5, 7.5, 10.0), Some(List(4, 4, 4)))
   val fooLens   = DynaLens.into[Foo].topLens
-  def ctx       = DynaContext(Map("foo" -> (foo, fooLens)))
+  def ctx       = DynaContext(Map("foo" -> (foo, fooLens)), TestHelpers.emptyDL)
 
   def G(path: String, opt: Boolean = false): GetFn =
     GetFn(path, opt, RootFn, s"pos-$path")

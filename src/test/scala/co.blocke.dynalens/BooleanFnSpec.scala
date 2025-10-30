@@ -11,8 +11,13 @@ object BooleanFnSpec extends ZIOSpecDefault:
   case class Foo(s: String, n: Int, flag: Boolean, opt: Option[Int], items: List[Int])
   val foo = Foo("Hello world", 42, true, Some(9), List(1,2,3))
 
-  val fooLens = DynaLens.into[Foo].topLens
-  def buildCtx = DynaContext(Map.empty).bind("foo", foo, fooLens)
+  val dynalens = DynaLens.into[Foo]
+  val fooLens = dynalens.topLens
+  def buildCtx =
+    DynaContext(
+      Map("foo" -> (foo, fooLens)),
+      dynalens
+    )
 
   def G(path: String): GetFn = GetFn(path, false, RootFn, "pos")
   def C(v: Any): ConstantFn[Any] = ConstantFn(v)
@@ -165,7 +170,7 @@ object BooleanFnSpec extends ZIOSpecDefault:
     },
 
     test("Contains map key") {
-      val ctx = DynaContext(Map.empty).bind("m", Map("a" -> 1, "b" -> 2), ScalarLens("<const>", false, None))
+      val ctx = DynaContext(Map.empty, TestHelpers.emptyDL).bind("m", Map("a" -> 1, "b" -> 2), ScalarLens("<const>", false, None))
       val fn = ContainsFn(G("m"), C("a"), "")
       for (v, _) <- fn.resolve(ctx)
         yield assertTrue(v)

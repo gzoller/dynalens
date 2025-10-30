@@ -4,13 +4,16 @@ import zio.*
 
 
 final case class DynaContext(
-                              symbols: Map[String, (Any, Lens)]
+                              symbols: Map[String, (Any, Lens)],
+                              dynaLens: DynaLens[?]
                             ) {
 
   // ---------------- Lookup ----------------
 
   /** Retrieve the (value, lens) pair for a symbol. */
   def get(sym: String): Option[(Any, Lens)] = symbols.get(sym)
+
+  def getSymbol(sym: String): Option[(Any, Lens)] = get(sym)
 
   /** Retrieve only the value for a symbol. */
   def getValue(sym: String): Option[Any] = symbols.get(sym).map(_._1)
@@ -25,29 +28,30 @@ final case class DynaContext(
    * Create or overwrite a symbol value.
    */
   def bind(sym: String, value: Any, lens: Lens): DynaContext =
-    copy(symbols = symbols + (sym -> (value, lens)))
+    copy(symbols = symbols + (sym -> (value, lens)), dynaLens = this.dynaLens)
 
   /**
    * Remove a symbol binding from the context.
    */
-  def unbind(sym: String): DynaContext = copy(symbols = symbols - sym)
+  def unbind(sym: String): DynaContext = copy(symbols = symbols - sym, dynaLens = this.dynaLens)
 
 
   /**
    * Update 'this' object reference for the current evaluation scope.
    */
   def setThis(obj: Any, lens: Lens): DynaContext =
-    copy(symbols = symbols + ("this" -> (obj, lens)))
+    copy(symbols = symbols + ("this" -> (obj, lens)), dynaLens = this.dynaLens)
 
   /**
-   * Update 'this.key' and 'this.value' bindings used in map/loop functions.
+   * Update 'this_key' and 'this_value' bindings used in map/loop functions.
    */
   def setThisKeyValue(k: Any, v: Any, keyLens: Lens, valLens: Lens): DynaContext =
     copy(
       symbols =
         symbols +
-          ("this.key"   -> (k, keyLens)) +
-          ("this.value" -> (v, valLens))
+          ("this_key"   -> (k, keyLens)) +
+          ("this_value" -> (v, valLens)),
+      dynaLens = this.dynaLens
     )
 
   /** Retrieve current 'this' reference */
@@ -72,28 +76,35 @@ final case class DynaContext(
     val newCtx   = setThis(obj, lens)
     body(newCtx).ensuring {
       ZIO.succeed(previous match
-        case Some((v, l)) => copy(symbols = symbols + ("this" -> (v, l)))
-        case None         => copy(symbols = symbols - "this")
+        case Some((v, l)) => copy(symbols = symbols + ("this" -> (v, l)), dynaLens = this.dynaLens)
+        case None         => copy(symbols = symbols - "this", dynaLens = this.dynaLens)
       )
     }
 
 
   /**
-   * Executes a scoped block with temporary 'this.key' and 'this.value' bindings.
+   * Executes a scoped block with temporary 'this_key' and 'this_value' bindings.
    * Used primarily in LoopFn for map and filter operations.
    */
   def withThisKeyValueScoped[R](k: Any, v: Any, keyLens: Lens, valLens: Lens)(
     body: DynaContext => ZIO[RuntimeEnv, DynaLensError, R]
   ): ZIO[RuntimeEnv, DynaLensError, R] =
-    val prevKey = get("this.key")
-    val prevVal = get("this.value")
-    val newCtx  = setThisKeyValue(k, v, keyLens, valLens)
+    val prevKey = get("this_key")
+    val prevVal = get("this_value")
+    val prevThis = get("this")
+
+    // new context includes all 3: this_key, this_value, and this
+    val newCtx = setThisKeyValue(k, v, keyLens, valLens)
+      .setThis(v, valLens)
+
     body(newCtx).ensuring {
       ZIO.succeed(
         copy(symbols =
           symbols
-            ++ prevKey.map("this.key"   -> _)
-            ++ prevVal.map("this.value" -> _)
+            ++ prevKey.map("this_key"   -> _)
+            ++ prevVal.map("this_value" -> _)
+            ++ prevThis.map("this"      -> _),
+          dynaLens = this.dynaLens
         )
       )
     }

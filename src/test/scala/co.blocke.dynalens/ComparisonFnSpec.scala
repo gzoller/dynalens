@@ -11,10 +11,11 @@ object ComparisonFnSpec extends ZIOSpecDefault:
 
   case class Foo(a: Int, s: String)
   val foo = Foo(5, "hi")
-  val fooLens = DynaLens.into[Foo].topLens
+  val dynalens = DynaLens.into[Foo]
+  val fooLens = dynalens.topLens
 
   def buildCtx(values: (String, Any)*): DynaContext =
-    values.foldLeft(DynaContext(Map.empty)) { case (ctx, (k, v)) =>
+    values.foldLeft(DynaContext(Map.empty, TestHelpers.emptyDL)) { case (ctx, (k, v)) =>
       val lens = ScalarLens(k, false, None)
       ctx.bind(k, v, lens)
     }
@@ -136,7 +137,7 @@ object ComparisonFnSpec extends ZIOSpecDefault:
 
     suite("Lens propagation")(
       test("Lens from recv is returned") {
-        val ctx = DynaContext(Map("foo" -> (foo, fooLens)))
+        val ctx = DynaContext(Map("foo" -> (foo, fooLens)), dynalens)
 
         val fn = LessThanFn(G("foo.a"), C(10), "pos")
 

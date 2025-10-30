@@ -187,10 +187,44 @@ object LensGetSpec extends ZIOSpecDefault:
     },
     test("Validate DynaContext behavior") {
       val lens = DynaLens.into[Order].topLens
-      val ctx = DynaContext(Map.empty)
+      val ctx = DynaContext(Map.empty, TestHelpers.emptyDL)
         .bind("x", "wow", ScalarLens("x", false, None))
         .setThis(Order("O1", Nil), lens)
       assertTrue(ctx.getValue("x").contains("wow"))
       assertTrue(ctx.get("this").isDefined)
     },
+    // === Anchored traversal tests ===
+
+    test("this anchor should allow field traversal inside list elements") {
+      case class Wrap(items: List[Item])
+      val data = Wrap(List(Item("soap", 3), Item("pen", 2)))
+      val lens = DynaLens.into[Wrap].topLens
+      for {
+        v <- lens.get(Path.parsePath("items[1].this.name"), data)
+      } yield assertTrue(v == "pen")
+    },
+    test("this_value supports field traversal inside map values") {
+      case class Wrap(things: Map[String, Item])
+      val data = Wrap(Map("a" -> Item("soap", 3), "b" -> Item("pen", 2)))
+      val lens = DynaLens.into[Wrap].topLens
+      for {
+        v <- lens.get(Path.parsePath("things[a].this_value.name"), data)
+      } yield assertTrue(v == "soap")
+    },
+    test("this_key rejects field navigation") {
+      case class Wrap(things: Map[String, Int])
+      val data = Wrap(Map("a" -> 1))
+      val lens = DynaLens.into[Wrap].topLens
+      for {
+        result <- lens.get(Path.parsePath("things[a].this_key.foo"), data).either
+      } yield assertTrue(result.isLeft)
+    },
+    test("nested: list -> map -> this_value") {
+      case class Wrap(items: List[Map[String, Item]])
+      val data = Wrap(List(Map("x" -> Item("soap", 3))))
+      val lens = DynaLens.into[Wrap].topLens
+      for {
+        v <- lens.get(Path.parsePath("items[0][x].this_value.qty"), data)
+      } yield assertTrue(v == 3)
+    }
   ) @@ ziotestkit

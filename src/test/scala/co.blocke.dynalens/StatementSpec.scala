@@ -1,5 +1,7 @@
 package co.blocke.dynalens
 
+import co.blocke.dynalens.ClassType
+
 import zio.*
 import zio.test.*
 import co.blocke.testkit.ZioTestKit._
@@ -15,6 +17,9 @@ object StatementSpec extends ZIOSpecDefault:
   // --------------------------------------------------
 
   case class Foo(a: Int, b: Boolean)
+
+  // Macro-built root provides the precise schema for Foo
+  private val fooSchema: ClassType = DynaLens.into[Foo].schema
 
   val fooLens: ClassLens =
     ClassLens(
@@ -38,10 +43,12 @@ object StatementSpec extends ZIOSpecDefault:
             ZIO.succeed(obj.asInstanceOf[Foo].copy(b = value.asInstanceOf[Boolean]))
           case _ =>
             ZIO.fail(DynaLensError("", s"No such field '$field'"))
+    ,
+    schema = fooSchema
     )
 
   val baseCtx: DynaContext =
-    DynaContext(Map("top" -> (Foo(5, true), fooLens)))
+    DynaContext(Map("top" -> (Foo(5, true), fooLens)), TestHelpers.emptyDL)
 
 
   def G(path: String): GetFn = GetFn(path, false, RootFn, "")

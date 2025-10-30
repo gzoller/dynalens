@@ -36,23 +36,6 @@ case class MapStmt(path: String, fn: Fn[Any], posStr: String) extends Statement:
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, DynaContext] =
     ctx.get("top") match
       case Some((root, topLens)) =>
-        /*
-        topLens match
-          case Some(lens) =>
-            // for
-            //   mapped <- MapRuntime.mapOver(
-            //     path = path,
-            //     predicate = fn,
-            //     root = root,
-            //     lens = lens.asInstanceOf[DynaLens[Any]],
-            //     posStr = posStr,
-            //     outerCtx = ctx
-            //   )
-            // yield ctx.clone.addOne("top", (mapped, topLens))
-            ZIO.fail(DynaLensError(posStr, "MapStmt not yet implemented (TODO)"))
-          case None =>
-            ZIO.fail(DynaLensError(posStr, "MapStmt requires top lens in context"))
-         */
         ZIO.fail(DynaLensError(posStr, "Boom!  TODO--temporary error"))
       case None =>
         ZIO.fail(DynaLensError(posStr, "Missing 'top' in context for map statement"))
@@ -140,6 +123,26 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                       for
                         baseObj <- baseObjZ
                         fieldName = fieldNameOpt.getOrElse("")
+                        // Anchor handling for update traversal
+                        _ <-
+                          if fieldName == "this" then
+                            // Stay at current scope
+                            loop(curLens, curObj, tail).flatMap(res => ZIO.succeed(res)).asInstanceOf[ZIO[Any, DynaLensError, Unit]]
+                          else if fieldName == "this_key" then
+                            curObj match
+                              case (k: Any, kvLens: Lens) =>
+                                // Treat key as scalar lens; remain at same lens but change object to key
+                                loop(ScalarLens("this_key", false, Some(curLens)), k, tail).flatMap(res => ZIO.succeed(res)).asInstanceOf[ZIO[Any, DynaLensError, Unit]]
+                              case _ =>
+                                ZIO.fail(DynaLensError("", "this_key used outside map key context")).asInstanceOf[ZIO[Any, DynaLensError, Unit]]
+                          else if fieldName == "this_value" then
+                            curObj match
+                              case (_, v: Any) =>
+                                // Treat value as object itself; keep current lens for traversal
+                                loop(curLens, v, tail).flatMap(res => ZIO.succeed(res)).asInstanceOf[ZIO[Any, DynaLensError, Unit]]
+                              case _ =>
+                                ZIO.fail(DynaLensError("", "this_value used outside map value context")).asInstanceOf[ZIO[Any, DynaLensError, Unit]]
+                          else ZIO.unit
                         fieldLens <- ZIO.fromOption(cl.fields.get(fieldName))
                           .orElseFail(DynaLensError("", s"No such field: $fieldName"))
                         fieldValue <- cl._get(fieldName, baseObj)
@@ -230,6 +233,10 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
           (parentObj, parentLens, lastElem)
         }
 
+      case _ =>
+        // This case is unreachable under normal circumstances, but makes the match exhaustive
+        ZIO.fail(DynaLensError("", s"Unexpected path structure: ${normalizedPath.mkString("/")}"))  
+
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, DynaContext] =
     ctx.get("top") match
       case None =>
@@ -259,24 +266,33 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                         (newValue, _) <-
                           valueFn.resolve(ctxForRhs).catchAll { e1 =>
                             // Fallback to resolving from root context when missing field on element-this
-                            valueFn.resolve(ctxWithThis).catchAll { e2 =>
+                            valueFn.resolve(ctxWithThis).catchAll { _ =>
                               ZIO.fail(e1) // original error if root also fails
                             }
                           }
                         // Important: perform the full update through the root lens so child update bubbles back into containers
-                        updated <- ZIO
-                          .attempt(rootLens.update(elements, newValue, rootObj))
-                          .flatten
-                          .mapError {
-                            case _: ClassCastException =>
-                              DynaLensError(
-                                posStr,
-                                s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
-                              )
-                            case e =>
-                              DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
-                          }
+                        updated <- {
+                          val cleaned = elements.filterNot(pe =>
+                            pe.name.contains("this") ||
+                              pe.name.contains("this_key") ||
+                              pe.name.contains("this_value")
+                          )
+                          ZIO
+                            .attempt(rootLens.update(cleaned, newValue, rootObj))
+                            .flatten
+                            .mapError {
+                              case _: ClassCastException =>
+                                DynaLensError(
+                                  posStr,
+                                  s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
+                                )
+                              case e =>
+                                DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
+                            }
+                        }
                       yield updated
+                    case null =>
+                      ZIO.dieMessage("walkToParent returned unexpected tuple")
                   }
                 else
                   rootObj match
@@ -287,18 +303,25 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                     case _ =>
                       for
                         (newValue, _) <- valueFn.resolve(ctxWithThis)
-                        updated <- ZIO
-                          .attempt(rootLens.update(elements, newValue, rootObj))
-                          .flatten
-                          .mapError {
-                            case _: ClassCastException =>
-                              DynaLensError(
-                                posStr,
-                                s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
-                              )
-                            case e =>
-                              DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
-                          }
+                        updated <- {
+                          val cleaned = elements.filterNot(pe =>
+                            pe.name.contains("this") ||
+                              pe.name.contains("this_key") ||
+                              pe.name.contains("this_value")
+                          )
+                          ZIO
+                            .attempt(rootLens.update(cleaned, newValue, rootObj))
+                            .flatten
+                            .mapError {
+                              case _: ClassCastException =>
+                                DynaLensError(
+                                  posStr,
+                                  s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
+                                )
+                              case e =>
+                                DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
+                            }
+                        }
                       yield updated
               else
                 elements match
@@ -331,24 +354,33 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                           (newValue, _) <-
                             valueFn.resolve(ctxForRhs).catchAll { e1 =>
                               // Fallback to resolving from root context when missing field on element-this
-                              valueFn.resolve(ctxWithThis).catchAll { e2 =>
+                              valueFn.resolve(ctxWithThis).catchAll { _ =>
                                 ZIO.fail(e1) // original error if root also fails
                               }
                             }
                           // Important: perform the full update through the root so the mutation bubbles up the full object graph
-                          updated <- ZIO
-                            .attempt(rootLens.update(elements, newValue, rootObj))
-                            .flatten
-                            .mapError {
-                              case _: ClassCastException =>
-                                DynaLensError(
-                                  posStr,
-                                  s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
-                                )
-                              case e =>
-                                DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
-                            }
+                          updated <- {
+                            val cleaned = elements.filterNot(pe =>
+                              pe.name.contains("this") ||
+                                pe.name.contains("this_key") ||
+                                pe.name.contains("this_value")
+                            )
+                            ZIO
+                              .attempt(rootLens.update(cleaned, newValue, rootObj))
+                              .flatten
+                              .mapError {
+                                case _: ClassCastException =>
+                                  DynaLensError(
+                                    posStr,
+                                    s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
+                                  )
+                                case e =>
+                                  DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
+                              }
+                          }
                         yield updated
+                      case _ =>
+                        ZIO.dieMessage("walkToParent returned unexpected tuple")
                     }
             updatedCtx = ctx.bind("top", updatedObj, rootLens)
           yield updatedCtx.unbind("this")

@@ -18,9 +18,10 @@ object StringFnSpec extends ZIOSpecDefault:
                 )
 
   // ---------- Lenses / context ----------
-  val foo      = Foo("  HeLlO  ", "Alpha beta", "World", List(1,2,3), None)
-  val fooLens  = DynaLens.into[Foo].topLens
-  def buildCtx = DynaContext(Map.empty).bind("foo", foo, fooLens)
+  val dynalens = DynaLens.into[Foo]
+  val fooLens  = dynalens.topLens
+  val foo = Foo("  HeLlO  ", "Alpha beta", "World", List(1,2,3), None)
+  def buildCtx = DynaContext(Map.empty, dynalens).bind("foo", foo, fooLens)
 
   // ---------- Short-hands ----------
   // Get symbol at a path off top-level context symbols
@@ -64,7 +65,7 @@ object StringFnSpec extends ZIOSpecDefault:
       },
 
       test("TrimFn wrong recv type errors") {
-        val ctx = DynaContext(Map.empty).bind("x", 42, ScalarLens("x", false, None))
+        val ctx = DynaContext(Map.empty, TestHelpers.emptyDL).bind("x", 42, ScalarLens("x", false, None))
         val fn  = TrimFn(G("x"), "pos-x")
         for exit <- fn.resolve(ctx).exit
           yield assertTrue(exit.isFailure)
@@ -92,7 +93,7 @@ object StringFnSpec extends ZIOSpecDefault:
       },
 
       test("ConcatFn coerces non-string recv via toString; lens from recv") {
-        val ctx = DynaContext(Map.empty).bind("x", 999, ScalarLens("x", false, None))
+        val ctx = DynaContext(Map.empty, TestHelpers.emptyDL).bind("x", 999, ScalarLens("x", false, None))
         val fn  = ConcatFn(G("x"), List(C("a")), "pos-x")
         for exit <- fn.resolve(ctx).exit
           yield assertTrue(
@@ -124,7 +125,7 @@ object StringFnSpec extends ZIOSpecDefault:
       },
 
       test("ReplaceFn wrong recv type errors") {
-        val ctx = DynaContext(Map.empty).bind("x", true, ScalarLens("x", false, None))
+        val ctx = DynaContext(Map.empty, TestHelpers.emptyDL).bind("x", true, ScalarLens("x", false, None))
         val fn  = ReplaceFn(G("x"), C("true"), C("false"), "pos-x")
         for exit <- fn.resolve(ctx).exit
           yield assertTrue(exit.isFailure)
@@ -148,7 +149,7 @@ object StringFnSpec extends ZIOSpecDefault:
       // Substring
       // -------------------------------
       test("SubstringFn(start, end) normal bounds") {
-        val ctx = DynaContext(Map.empty)
+        val ctx = DynaContext(Map.empty, TestHelpers.emptyDL)
           .bind("s", "abcdef", ScalarLens("s", false, None))
         val fn  = SubstringFn(G("s"), C(1), Some(C(4)), "pos")
         for exit <- fn.resolve(ctx).exit
@@ -158,7 +159,7 @@ object StringFnSpec extends ZIOSpecDefault:
       },
 
       test("SubstringFn with start beyond length → \"\"") {
-        val ctx = DynaContext(Map.empty)
+        val ctx = DynaContext(Map.empty, TestHelpers.emptyDL)
           .bind("s", "abc", ScalarLens("s", false, None))
         val fn  = SubstringFn(G("s"), C(100), None, "pos")
         for exit <- fn.resolve(ctx).exit
@@ -168,7 +169,7 @@ object StringFnSpec extends ZIOSpecDefault:
       },
 
       test("SubstringFn wrong recv type errors") {
-        val ctx = DynaContext(Map.empty).bind("n", 12345, ScalarLens("n", false, None))
+        val ctx = DynaContext(Map.empty, TestHelpers.emptyDL).bind("n", 12345, ScalarLens("n", false, None))
         val fn  = SubstringFn(G("n"), C(0), Some(C(2)), "pos-n")
         for exit <- fn.resolve(ctx).exit
           yield assertTrue(exit.isFailure)

@@ -98,6 +98,35 @@ object LensUpdateSpec extends ZIOSpecDefault:
         result <- lens.update(Path.parsePath("things[z]"), 2, MapHolder(Map("x" -> 1))).either
       } yield assertTrue(result == Right(MapHolder(Map("x" -> 1, "z" -> 2))))
     },
+    test("update via this anchor in list should modify element") {
+      val order = Order("O1", List(Item("A",1), Item("B",2)))
+      val lens = DynaLens.into[Order].topLens
+      val path = Path.parsePath("items[1].this.name")
+      for {
+        updated <- lens.update(path, "Zed", order)
+      } yield assertTrue(
+        updated == Order("O1", List(Item("A",1), Item("Zed",2)))
+      )
+    },
+    test("update via this_value inside map values should modify value field") {
+      val deep = Map("x" -> DeepItem("desc", 1.0))
+      val holder = DeepMapHolder(List(deep))
+      val lens = DynaLens.into[DeepMapHolder].topLens
+      val path = Path.parsePath("items[0][x].this_value.price")
+      for {
+        updated <- lens.update(path, 9.99, holder)
+      } yield assertTrue(
+        updated == DeepMapHolder(List(Map("x" -> DeepItem("desc", 9.99))))
+      )
+    },
+    test("update via this_value should fail if non-object value") {
+      val holder = OptionMapHolder(Some(Map("x" -> 5)))
+      val lens = DynaLens.into[OptionMapHolder].topLens
+      val path = Path.parsePath("mapOpt[x].this_value.foo")
+      for {
+        result <- lens.update(path, 10, holder).either
+      } yield assertTrue(result.isLeft)
+    },
     test("list update with out of bounds index should fail") {
       val order = Order("O1", List(Item("A",1)))
       val lens = DynaLens.into[Order].topLens

@@ -1,29 +1,3 @@
-/*
-final case class DynaRoot(
-                           topLens: ClassLens,
-                           schema: ClassType,
-                           registry: Map[String, Lens] = Map.empty
-                         ):
-
-  /** Creates an initial context with the top-level value bound to 'this'. */
-  def initialContext(topValue: Any): DynaContext =
-    val base = DynaContext(Map.empty)
-      .bind("this", topValue, topLens)
-    base
-
-  /** Lookup a Lens by symbol name. */
-  def getLens(name: String): ZIO[Any, DynaLensError, Lens] =
-    ZIO.fromOption(registry.get(name))
-      .orElseFail(DynaLensError("", s"No lens found for symbol '$name'"))
-
-  /** Debug helper: list known symbols. */
-  def dumpRegistry(): String =
-    if registry.isEmpty then "(no symbols)"
-    else registry.map((k, v) => s"$k → ${v.name}").mkString("\n")
-    */
-
-//---------
-
 package co.blocke.dynalens
 
 import zio.*
@@ -34,19 +8,58 @@ import co.blocke.scala_reflection.reflect.rtypeRefs.*
 
 
 
-final case class DynaLens(
+final case class DynaLens[T](
                            topLens: ClassLens,
                            schema: ClassType,
                            registry: Map[String, Lens] = Map.empty
-                         )
+                         ):
+  // Run a compiled lens script
+  inline def run(
+                  script: BlockStmt,
+                  target: T,
+                  registry: _BiMapRegistry = EmptyBiMapRegistry
+                ): ZIO[Any, DynaLensError, (T, DynaContext)] =
+    actualRun(script, target).provide(
+      ZLayer.succeed(RuntimeEnv(registry))
+    )
+
+  private inline def actualRun(
+                                script: BlockStmt,
+                                target: T
+                              ): ZIO[RuntimeEnv, DynaLensError, (T, DynaContext)] =
+    val ctx: DynaContext = this.initialContext(target)
+    for {
+      resultCtx <- script.resolve(ctx)
+      (resultObj, _) = resultCtx.getTop.getOrElse((target, topLens))
+    } yield (resultObj.asInstanceOf[T], resultCtx)
+
+  def runNoZIO(script: BlockStmt, target: T, registry: _BiMapRegistry = EmptyBiMapRegistry): Either[DynaLensError, (T, DynaContext)] =
+    Unsafe.unsafe { implicit unsafe =>
+      Runtime.default.unsafe
+        .run(
+          run(script, target, registry).either
+        )
+        .getOrThrow()
+    }
+
+
+extension [T](dl: DynaLens[T])
+  /** Creates an initial context with the top-level value bound to 'this', 'this_value', and 'this_key'. */
+  def initialContext(topValue: Any): DynaContext =
+    val base = DynaContext(Map.empty, dl)
+      .bind("this", topValue, dl.topLens)
+      .bind("this_value", topValue, dl.topLens)
+      .bind("this_key", null, ScalarLens("this_key", false, None))
+    base
+
 
 object DynaLens:
 
-  inline def into[T]: DynaLens = ${ buildForImpl[T] }
+  inline def into[T]: DynaLens[T] = ${ buildForImpl[T] }
 
   // ------------------------------- Macro Impl -------------------------------
 
-  private def buildForImpl[T: Type](using q: Quotes): Expr[DynaLens] =
+  private def buildForImpl[T: Type](using q: Quotes): Expr[DynaLens[T]] =
     given Quotes = q
     import q.reflect.*
 
@@ -56,10 +69,10 @@ object DynaLens:
       case cls: ScalaClassRef[?] if cls.isCaseClass =>
         buildFromClassRef[T](cls)
       case other =>
-        report.errorAndAbort(s"DynaRoot.buildFor only supports case classes. Got: ${other.name}")
+        report.errorAndAbort(s"DynaLens.buildForImpl only supports case classes. Got: ${other.name}")
 
   // Build from a case class
-  private def buildFromClassRef[T: Type](cls: ScalaClassRef[?])(using q: Quotes): Expr[DynaLens] =
+  private def buildFromClassRef[T: Type](cls: ScalaClassRef[?])(using q: Quotes): Expr[DynaLens[T]] =
     given Quotes = q
 
     // schema (runtime via class name)
@@ -68,7 +81,7 @@ object DynaLens:
     // Build the full ClassLens tree and collect registry entries
     val (topLensExpr, regPairsExpr) = buildClassLensAndRegistry(cls, parent = None)
 
-    '{ DynaLens(topLens = $topLensExpr, schema = $schemaExpr, registry = Map.from($regPairsExpr)) }
+    '{ DynaLens[T](topLens = $topLensExpr, schema = $schemaExpr, registry = Map.from($regPairsExpr)) }
 
 
   // ----------------------- Lens + Registry Builders -------------------------
@@ -93,11 +106,12 @@ object DynaLens:
     val parentOptExpr = parent.map(p => '{ Some($p) }).getOrElse('{ None })
 
     // Build ClassLens with a lazy self, so children can reference `self` as their parent
+    val classSchemaExpr: Expr[ClassType] = Expr(Schema.build(cls))
     val classLensExpr: Expr[ClassLens] = '{
       var self: ClassLens = null.asInstanceOf[ClassLens]
       val fieldPairs: List[(String, Lens)] = ${ fieldPairsWithParent(cls, '{ self }) }
       val fields: Map[String, Lens] = Map.from(fieldPairs)
-      self = ClassLens(name = $nameExpr, isOptional = false, fields = fields, parent = $parentOptExpr, _get = $getFn, _update = $updFn)
+      self = ClassLens(name = $nameExpr, isOptional = false, fields = fields, parent = $parentOptExpr, _get = $getFn, _update = $updFn, schema = $classSchemaExpr)
       self
     }
 

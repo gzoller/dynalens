@@ -6,6 +6,16 @@ import zio.*
 import co.blocke.dynalens.fn.FnUtils.asSeq
 
 
+  // Helper to set parent on a lens, preserving type
+  private def withParent(l: Lens, parent: Lens): Lens =
+    l match
+      case sl: ScalarLens => sl.copy(parent = Some(parent))
+      case ll: ListLens   => ll.copy(parent = Some(parent))
+      case ml: MapLens    => ml.copy(parent = Some(parent))
+      case el: EnumLens   => el.copy(parent = Some(parent))
+      case other          => other
+
+
 object FnUtils {
   /** Convert anything that should represent a collection into a List[Any],
    * unwrapping Option/None and normalizing null to Nil.
@@ -341,14 +351,26 @@ case class CleanFn(recv: Fn[Any], posStr: String)
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
     recv.resolve(ctx).flatMap {
-      case (None | null, vLens) => ZIO.succeed((Nil, vLens))
-      case (Some(xs: Iterable[?]), vLens) =>
-        ZIO.succeed((xs.collect { case Some(v) => v; case v if v != null => v }.toList, vLens))
-      case (xs: Iterable[?], vLens) =>
-        ZIO.succeed((xs.collect { case Some(v) => v; case v if v != null => v }.toList, vLens))
-      case (other, _) => ZIO.fail(DynaLensError(posStr, s"clean() requires List receiver, got ${other.getClass.getSimpleName}"))
-    }
+      case (None | null, vLens) =>
+        ZIO.succeed((Nil, vLens))
 
+      case (Some(xs: Iterable[?]), vLens) =>
+        val cleaned = xs.collect {
+          case Some(v) => Some(v)
+          case v if v != null && v != None => v
+        }.toList
+        ZIO.succeed((cleaned, vLens))
+
+      case (xs: Iterable[?], vLens) =>
+        val cleaned = xs.collect {
+          case Some(v) => Some(v)
+          case v if v != null && v != None => v
+        }.toList
+        ZIO.succeed((cleaned, vLens))
+
+      case (other, _) =>
+        ZIO.fail(DynaLensError(posStr, s"clean() requires List receiver, got ${other.getClass.getSimpleName}"))
+    }
 
 /*---------------------------------------------
   len()
@@ -488,71 +510,103 @@ case class MapFn(recv: Fn[Any], fn: Fn[Any], posStr: String)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for
       recvRes <- recv.resolve(ctx)
-      (recvVal, rLens) = recvRes
-      result <- recvVal match
-        // ---------- None or null ----------
-        case null | None =>
-          ZIO.succeed((Nil, rLens))
+      (raw, rLens) = recvRes
+      // unwrap Option containers before dispatch
+      res <- {
+        def isEmptyColl(v: Any): Boolean = v match
+          case m: Map[?, ?] => m.isEmpty
+          case it: Iterable[?] => it.isEmpty
+          case _ => false
 
-        // ---------- Map ----------
-        case Some(m: Map[?, ?]) =>
-          val m2 = m.asInstanceOf[Map[Any, Any]]
-          ZIO.foreach(m2.toList) { case (k, v) =>
-            ctx.withThisKeyValueScoped(k, v, ScalarLens("key", false, Some(rLens)), rLens) { scoped =>
-              scoped.withThisScoped((k, v), rLens) { s2 =>
-                fn.resolve(s2).map(_._1)
-              }
+        if (raw == null) {
+          // no-op passthrough
+          ZIO.succeed((raw, rLens))
+        } else if (rLens.isOptional && isEmptyColl(raw)) {
+          // logical None for optional receiver => no-op passthrough
+          ZIO.succeed((raw, rLens))
+        } else {
+          val unwrapped = raw match
+            case Some(v) => v
+            case None    => Nil
+            case v       => v
+
+          if (rLens.isOptional && (unwrapped == Nil || unwrapped == None)) {
+            val defaultOut =
+              if (fn.isInstanceOf[Tuple2Fn]) Map.empty
+              else Nil
+            ZIO.succeed((defaultOut, rLens))
+          } else
+            unwrapped match {
+              case m: Map[?, ?] =>
+                mapOverMap(m.asInstanceOf[Map[Any, Any]], rLens, ctx)
+              case xs: Iterable[?] =>
+                mapOverList(xs.asInstanceOf[Iterable[Any]], rLens, ctx)
+              case other =>
+                ZIO.fail(DynaLensError(posStr, s"=> requires List or Map receiver, got ${other.getClass.getSimpleName}"))
             }
-          }.map { vals =>
-            if vals.forall(_.isInstanceOf[Tuple2[?, ?]]) then
-              // TODO: Build a MapLens here for proper lensing
-              (vals.asInstanceOf[List[(Any, Any)]].toMap, rLens)
-            else
-              (vals.toList, rLens)
-          }
-        case m: Map[?, ?] =>
-          val m2 = m.asInstanceOf[Map[Any, Any]]
-          ZIO.foreach(m2.toList) { case (k, v) =>
-            ctx.withThisKeyValueScoped(k, v, ScalarLens("key", false, Some(rLens)), rLens) { scoped =>
-              scoped.withThisScoped((k, v), rLens) { s2 =>
-                fn.resolve(s2).map(_._1)
-              }
-            }
-          }.map { vals =>
-            if vals.forall(_.isInstanceOf[Tuple2[?, ?]]) then
-              // TODO: Build a MapLens here for proper lensing
-              (vals.asInstanceOf[List[(Any, Any)]].toMap, rLens)
-            else
-              (vals.toList, rLens)
-          }
+        }
+      }
+    yield res
 
-        // ---------- List or Iterable ----------
-        case Some(xs: Iterable[?]) =>
-          rLens match
-            case ll: ListLens =>
-              val elemLens = ll.elementLens
-              ZIO.foreach(xs.asInstanceOf[Iterable[Any]].toList) { elem =>
-                ctx.withThisScoped(elem, elemLens) { scoped =>
-                  fn.resolve(scoped).map(_._1)
-                }
-              }.map(l => (l, rLens))
-            case _ =>
-              ZIO.fail(DynaLensError(posStr, s"Receiver lens for => must be ListLens, got ${rLens.getClass.getSimpleName}"))
-        case xs: Iterable[?] =>
-          rLens match
-            case ll: ListLens =>
-              val elemLens = ll.elementLens
-              ZIO.foreach(xs.asInstanceOf[Iterable[Any]].toList) { elem =>
-                ctx.withThisScoped(elem, elemLens) { scoped =>
-                  fn.resolve(scoped).map(_._1)
-                }
-              }.map(l => (l, rLens))
-            case _ =>
-              ZIO.fail(DynaLensError(posStr, s"Receiver lens for => must be ListLens, got ${rLens.getClass.getSimpleName}"))
+  private def mapOverMap(m: Map[Any, Any], rLens: Lens, ctx: DynaContext) =
+    val (keyKind, valueLens) = rLens match
+      case ml: MapLens =>
+        (ml.keyKind, withParent(ml.valueLens, rLens)) // re-anchor valueLens properly
+      case _ =>
+        (MapKeyKind.StringKey, ScalarLens("value", rLens.isOptional, Some(rLens)))
 
-        // ---------- Invalid receiver ----------
-        case other =>
-          ZIO.fail(
-            DynaLensError(posStr, s"Receiver for => must be List or Map, got ${other.getClass.getSimpleName}")
+    // Iterate through map entries
+    for vals <- ZIO.foreach(m.toList) { case (k, v) =>
+      val keyLens = ScalarLens("key", rLens.isOptional, Some(rLens))
+      ctx.withThisKeyValueScoped(k, v, keyLens, valueLens) { scoped =>
+        fn.resolve(scoped).map(_._1)
+      }
+    }
+    yield {
+      val tuples = vals.collect { case t: (Any, Any) => t }
+      val allTuples = tuples.size == vals.size
+      if allTuples then
+        if (rLens.isOptional && tuples.isEmpty)
+          (Nil, rLens)
+        else
+          val resMap = tuples.toMap
+          val resLens = MapLens(
+            rLens.name,
+            rLens.isOptional,
+            keyKind,
+            ScalarLens("value", rLens.isOptional, Some(rLens)),
+            Some(rLens)
           )
-    yield result
+          (resMap, resLens)
+      else
+        val resLens = ListLens(
+          rLens.name,
+          rLens.isOptional,
+          ScalarLens("value", rLens.isOptional, Some(rLens)),
+          Some(rLens)
+        )
+        (vals, resLens)
+    }
+
+  private def mapOverList(xs: Iterable[Any], rLens: Lens, ctx: DynaContext) =
+    val elemLens = rLens match
+      case ll: ListLens => withParent(ll.elementLens, rLens)
+      case _            => ScalarLens("value", rLens.isOptional, Some(rLens))
+
+    for vals <- ZIO.foreach(xs.toList) { elem =>
+      ctx.withThisScoped(elem, elemLens) { scoped =>
+        fn.resolve(scoped).map(_._1)
+      }
+    }
+    yield
+      val tuples = vals.collect { case t: (Any, Any) => t }
+      val allTuples = tuples.size == vals.size
+      if allTuples then
+        val resMap = tuples.toMap
+        val resLens = MapLens(rLens.name, rLens.isOptional, MapKeyKind.StringKey,
+          ScalarLens("value", rLens.isOptional, Some(rLens)), Some(rLens))
+        (resMap, resLens)
+      else
+        val resLens = ListLens(rLens.name, rLens.isOptional,
+          ScalarLens("value", rLens.isOptional, Some(rLens)), Some(rLens))
+        (vals, resLens)

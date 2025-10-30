@@ -4,6 +4,7 @@ package fn
 import zio.*
 import zio.test.*
 import co.blocke.testkit.ZioTestKit.*
+import co.blocke.dynalens.TestHelpers.*
 
 object ArithmeticFnSpec extends ZIOSpecDefault {
 
@@ -17,10 +18,10 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
                   s: String
                 )
 
-  val lensFoo = ClassLens(
+  val dynalens = DynaLens.into[Foo]
+  val fooSchema = dynalens.schema
+  val lensFoo = classLensFor[Foo](
     name = "foo",
-    isOptional = false,
-    parent = None,
     fields = Map(
       "i"  -> ScalarLens("i", false, None),
       "l"  -> ScalarLens("l", false, None),
@@ -30,7 +31,7 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
       "bd" -> ScalarLens("bd", false, None),
       "s"  -> ScalarLens("s", false, None)
     ),
-    _get = (f,obj) => ZIO.succeed(f match {
+    getFn = (f,obj) => ZIO.succeed(f match {
       case "i"  => obj.asInstanceOf[Foo].i
       case "l"  => obj.asInstanceOf[Foo].l
       case "f"  => obj.asInstanceOf[Foo].f
@@ -39,8 +40,9 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
       case "bd" => obj.asInstanceOf[Foo].bd
       case "s"  => obj.asInstanceOf[Foo].s
     }),
-    _update = (_, newVal, obj) =>
-      ZIO.succeed(obj.asInstanceOf[Foo].copy(s = newVal.asInstanceOf[String]))
+    updFn = (_, newVal, obj) =>
+      ZIO.succeed(obj.asInstanceOf[Foo].copy(s = newVal.asInstanceOf[String])),
+    schema = fooSchema
   )
 
   val fooObj = Foo(2, 3L, 1.5f, 10.5, BigInt(100), BigDecimal(42.7), "hello")
@@ -50,7 +52,8 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
       Map(
         "top"  -> (fooObj, lensFoo),
         "this" -> (fooObj, lensFoo)
-      )
+      ),
+      dynalens
     )
 
   def G(path: String): GetFn =

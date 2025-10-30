@@ -11,9 +11,10 @@ object DateFnSpec extends ZIOSpecDefault {
   case class Foo(dt: java.time.LocalDateTime, s: String)
 
   val foo = Foo(java.time.LocalDateTime.of(2025, 1, 1, 12, 0), "abc")
-  val fooLens = DynaLens.into[Foo].topLens
+  val dynalens = DynaLens.into[Foo]
+  val fooLens = dynalens.topLens
 
-  def ctx = DynaContext(Map("foo" -> (foo, fooLens)))
+  def ctx = DynaContext(Map("foo" -> (foo, fooLens)), dynalens)
 
   def spec = suite("DateFnSpec")(
     suite("formatDate")(
@@ -36,7 +37,7 @@ object DateFnSpec extends ZIOSpecDefault {
       },
 
       test("error: null receiver") {
-        val badCtx = DynaContext(Map("foo" -> (Foo(null.asInstanceOf[java.time.LocalDateTime], "abc"), fooLens)))
+        val badCtx = DynaContext(Map("foo" -> (Foo(null.asInstanceOf[java.time.LocalDateTime], "abc"), fooLens)), dynalens)
         val fn = FormatDateFn(G("foo.dt"), C("yyyy"), "")
         for exit <- fn.resolve(badCtx).exit
           yield assertTrue(exit.isFailure)

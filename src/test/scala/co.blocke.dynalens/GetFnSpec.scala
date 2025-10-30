@@ -28,7 +28,8 @@ object GetFnSpec extends ZIOSpecDefault {
       case "street" => obj.asInstanceOf[Address].street
       case "city"   => obj.asInstanceOf[Address].city
     }),
-    _update = (_, _, obj) => ZIO.succeed(obj)
+    _update = (_, _, obj) => ZIO.succeed(obj),
+    schema = DynaLens.into[Address].schema
   )
 
   val lensPerson = ClassLens(
@@ -45,18 +46,24 @@ object GetFnSpec extends ZIOSpecDefault {
       case "age"     => obj.asInstanceOf[Person].age
       case "address" => obj.asInstanceOf[Person].address
     }),
-    _update = (_, _, obj) => ZIO.succeed(obj)
+    _update = (_, _, obj) => ZIO.succeed(obj),
+    schema = DynaLens.into[Person].schema
   )
 
   val personObj = Person("Greg", 51, Address("Main St", "Dallas"))
   val topLens = lensPerson.copy(parent = None)
+  val dynalens = DynaLens(topLens, DynaLens.into[Person].schema, Map(
+    "co.blocke.dynalens.Person" -> topLens,
+    "co.blocke.dynalens.Address" -> lensAddress
+  ))
 
   def buildCtx: DynaContext =
-    DynaContext(symbols =
-      Map(
+    DynaContext(
+      symbols = Map(
         "top" -> (personObj, topLens),
         "this" -> (personObj, topLens) // default receiver fallback
-      )
+      ),
+      dynaLens = dynalens
     )
 
   val lensItem = ClassLens(
@@ -71,7 +78,8 @@ object GetFnSpec extends ZIOSpecDefault {
       case "name" => obj.asInstanceOf[Item].name
       case "qty" => obj.asInstanceOf[Item].qty
     }),
-    _update = (_, _, obj) => ZIO.succeed(obj)
+    _update = (_, _, obj) => ZIO.succeed(obj),
+    schema = DynaLens.into[Item].schema
   )
 
   val lensOrder = ClassLens(
@@ -86,7 +94,8 @@ object GetFnSpec extends ZIOSpecDefault {
       case "items" => obj.asInstanceOf[Order].items
       case "attrs" => obj.asInstanceOf[Order].attrs
     }),
-    _update = (_, _, obj) => ZIO.succeed(obj)
+    _update = (_, _, obj) => ZIO.succeed(obj),
+    schema = DynaLens.into[Order].schema
   )
 
   val orderObj = Order(
@@ -119,7 +128,8 @@ object GetFnSpec extends ZIOSpecDefault {
       case "label" => obj.asInstanceOf[P4Item].label
       case "price" => obj.asInstanceOf[P4Item].price
     }),
-    _update = (_, _, obj) => ZIO.succeed(obj)
+    _update = (_, _, obj) => ZIO.succeed(obj),
+    schema = DynaLens.into[P4Item].schema
   )
 
   val lensP4Order = ClassLens(
@@ -136,11 +146,13 @@ object GetFnSpec extends ZIOSpecDefault {
       case "items" => obj.asInstanceOf[P4Order].items
       case "attrs" => obj.asInstanceOf[P4Order].attrs
     }),
-    _update = (_, _, obj) => ZIO.succeed(obj)
+    _update = (_, _, obj) => ZIO.succeed(obj),
+    schema = DynaLens.into[P4Order].schema
   )
 
   val ctxP4 =
     buildCtx.bind("order4", p4Order, lensP4Order)
+      .copy(dynaLens = dynalens)
 
 
   override def spec = suite("GetFn") (
@@ -213,7 +225,7 @@ object GetFnSpec extends ZIOSpecDefault {
 
     // 9 — top fallback when neither symbol nor this available
     test("Falls back to top if this missing") {
-      val ctx = DynaContext(Map("top" -> (personObj, topLens)))
+      val ctx = DynaContext(Map("top" -> (personObj, topLens)), dynalens)
       val fn = GetFn("name", false, RootFn, "pos")
       for
         (value, _) <- fn.resolve(ctx)
@@ -222,7 +234,7 @@ object GetFnSpec extends ZIOSpecDefault {
 
     // 10 — No anchor → error non-optional
     test("No anchor found when optional=false triggers error") {
-      val ctx = DynaContext(Map()) // no top, no this, no symbols
+      val ctx = DynaContext(Map(), dynalens) // no top, no this, no symbols
       val fn = GetFn("name", false, RootFn, "pos")
       for
         result <- fn.resolve(ctx).exit
@@ -231,7 +243,7 @@ object GetFnSpec extends ZIOSpecDefault {
 
     // 11 — No anchor → None optional
     test("No anchor optional=true returns None") {
-      val ctx = DynaContext(Map())
+      val ctx = DynaContext(Map(), dynalens)
       val fn = GetFn("name", true, RootFn, "pos")
       for
         (value, _) <- fn.resolve(ctx)
@@ -286,7 +298,7 @@ object GetFnSpec extends ZIOSpecDefault {
 
     // 17 — Missing required final field → error
     test("Missing required final field → error") {
-      val ctx = DynaContext(Map("top" -> (personObj, topLens)))
+      val ctx = DynaContext(Map("top" -> (personObj, topLens)), dynalens)
       val fn = GetFn("middle.nope", true, RootFn, "pos") // bad path under optional
       for
         result <- fn.resolve(ctx).exit
@@ -306,7 +318,7 @@ object GetFnSpec extends ZIOSpecDefault {
     // 19 — Optional middle Some but final field missing → error
     test("Optional middle Some but final field missing → None") {
       val lensOptPerson = topLens.copy(isOptional = true)
-      val ctx = DynaContext(Map("top" -> (Some(personObj), lensOptPerson)))
+      val ctx = DynaContext(Map("top" -> (Some(personObj), lensOptPerson)), dynalens)
       val fn = GetFn("address.zip", true, RootFn, "pos") // missing field
       for
         result <- fn.resolve(ctx).exit
@@ -316,7 +328,7 @@ object GetFnSpec extends ZIOSpecDefault {
     // 20 — Nested optional auto-flatten → Some(x)
     test("Nested optional auto-flatten → Some(x)") {
       val lensOptPerson = topLens.copy(isOptional = true)
-      val ctx = DynaContext(Map("top" -> (Some(personObj), lensOptPerson)))
+      val ctx = DynaContext(Map("top" -> (Some(personObj), lensOptPerson)), dynalens)
       val fn = GetFn("address.city", true, RootFn, "pos")
       for
         (value, _) <- fn.resolve(ctx)
@@ -327,7 +339,7 @@ object GetFnSpec extends ZIOSpecDefault {
     test("Null under optional yields None") {
       val badPerson = Person("Greg", 51, null.asInstanceOf[Address])
       val lensOptPerson = topLens.copy(isOptional = true)
-      val ctx = DynaContext(Map("top" -> (badPerson, lensOptPerson)))
+      val ctx = DynaContext(Map("top" -> (badPerson, lensOptPerson)), dynalens)
       val fn = GetFn("address.city", true, RootFn, "pos")
       for
         result <- fn.resolve(ctx).exit
@@ -338,7 +350,7 @@ object GetFnSpec extends ZIOSpecDefault {
     test("Null encountered but required → error") {
       val badPerson = Person("Greg", 51, null.asInstanceOf[Address])
       val lensOptPerson = topLens.copy(isOptional = true)
-      val ctx = DynaContext(Map("top" -> (badPerson, lensOptPerson)))
+      val ctx = DynaContext(Map("top" -> (badPerson, lensOptPerson)), dynalens)
       val fn = GetFn("address.city", false, RootFn, "pos")
       for
         result <- fn.resolve(ctx).exit
@@ -575,7 +587,7 @@ object GetFnSpec extends ZIOSpecDefault {
 
     // 47 — top used when symbol and this missing
     test("Fallback to top when symbol and this missing") {
-      val ctx = DynaContext(Map("top" -> (personObj, topLens)))
+      val ctx = DynaContext(Map("top" -> (personObj, topLens)), dynalens)
       val fn = GetFn("address.city", false, RootFn, "pos")
       for
         (value, _) <- fn.resolve(ctx)
@@ -584,7 +596,7 @@ object GetFnSpec extends ZIOSpecDefault {
 
     // 48 — No receivers available required → error
     test("No context/this/top with required → error") {
-      val ctx = DynaContext(Map())
+      val ctx = DynaContext(Map(), dynalens)
       val fn = GetFn("age", false, RootFn, "pos")
       for
         result <- fn.resolve(ctx).exit
@@ -593,7 +605,7 @@ object GetFnSpec extends ZIOSpecDefault {
 
     // 49 — No receivers available optional → None
     test("No context/this/top optional → None") {
-      val ctx = DynaContext(Map())
+      val ctx = DynaContext(Map(), dynalens)
       val fn = GetFn("age", true, RootFn, "pos")
       for
         (value, _) <- fn.resolve(ctx)
@@ -622,8 +634,6 @@ object GetFnSpec extends ZIOSpecDefault {
     test("Inside list scope fallback to list element as this") {
       val ctx = orderCtx.setThis(orderObj.items(0), lensItem)
       val fn = GetFn("qty", false, RootFn, "pos")
-//      val ctx = orderCtx.bind("item", orderObj.items(0), lensItem)
-//      val fn = GetFn("qty", false, RootFn, "pos") // resolves via this
       for
         (value, _) <- fn.resolve(ctx)
       yield assertTrue(value == 1)

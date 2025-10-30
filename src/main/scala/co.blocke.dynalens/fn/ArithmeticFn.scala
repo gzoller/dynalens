@@ -158,8 +158,6 @@ case class SubtractFn(
         case (a: BigDecimal, b: Double) => ZIO.succeed(a - BigDecimal(b))
         case (a: BigDecimal, b: Int) => ZIO.succeed(a - BigDecimal(b))
         case (a: BigDecimal, b: Long) => ZIO.succeed(a - BigDecimal(b))
-        case (a: Long, b: BigInt) => ZIO.succeed(BigInt(a) - b)
-        case (a: Long, b: BigDecimal) => ZIO.succeed(BigDecimal(a) - b)
 
         // ----- Fallback -----
         case _ =>

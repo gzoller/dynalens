@@ -108,20 +108,20 @@ case class SubstringFn(
       toOpt <- end match
         case None => ZIO.succeed(None)
         case Some(e) => e.resolve(ctx).flatMap(v => ZIO.fromOption(toIndex(v._1)).map(Some(_)).mapError(_ => DynaLensError(posStr, "substring() end must be numeric")))
-      
+
       // If start index is beyond the string length, return empty string + original lens
       _ <-
         if from >= s.length then
           ZIO.succeed(())
         else
           ZIO.succeed(())
-      
+
       (lo, hi0) =
         if from >= s.length then
           (s.length, s.length)
         else
           (Math.max(0, from), toOpt.getOrElse(s.length))
-      
+
       hi = Math.max(lo, Math.min(hi0, s.length))
     yield (s.substring(lo, hi), rawLens)
 
@@ -189,11 +189,9 @@ case class ConcatFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
         def appendAny(value: Any): Unit =
           value match
             case null | None => ()
-            case Some(v) => appendAny(v) // ✅ flatten nested Options
+            case Some(v) => appendAny(v) // flatten nested Options
             case xs: Iterable[?] =>
-              xs.foreach(x => appendAny(x)) // ✅ flatten collections
-            case xs: Seq[?] =>
-              xs.foreach(x => appendAny(x)) // ✅ flatten sequences
+              xs.foreach(x => appendAny(x)) // flatten collections
             case v =>
               sb.append(v.toString)
 

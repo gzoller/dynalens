@@ -13,19 +13,40 @@ sealed trait Lens {
 }
 
 
+object Lens {
+
+  def fromValue(v: Any, isOptional: Boolean, parent: Option[Lens]): Lens =
+    v match
+      case s: String =>
+        ScalarLens("str", isOptional, parent)
+      case _: Int | _: Long | _: Double | _: Float | _: Boolean =>
+        ScalarLens("num", isOptional, parent)
+      case _ =>
+        // Fallback: treat as scalar. Structural lenses (ClassLens, MapLens, ListLens)
+        // must be provided by compile-time schema or higher-level functions (e.g., MapFn/ListFn)
+        ScalarLens("value", isOptional, parent)
+}
+
+
 final case class ClassLens(
                             name: String,
                             isOptional: Boolean,
                             parent: Option[Lens],
                             fields: Map[String, Lens],
                             _get: (String, Any) => ZIO[Any, DynaLensError, Any],
-                            _update: (String, Any, Any) => ZIO[Any, DynaLensError, Any]
+                            _update: (String, Any, Any) => ZIO[Any, DynaLensError, Any],
+                            schema: ClassType
                           ) extends Lens:
 
   override def get(path: List[PathElement], obj: Any): ZIO[Any, DynaLensError, Any] =
     path match
       case Nil =>
         ZIO.succeed(obj)
+
+      case PathElement(Some(anchor), None) :: rest
+        if anchor == "this" || anchor == "this_value" || anchor == "this_key" =>
+          // Do not change the current obj. Just keep walking.
+          get(rest, obj)
 
       case PathElement(fieldNameOpt, indexOpt) :: rest =>
         // If this is an optional class lens, unwrap before descending
@@ -57,6 +78,10 @@ final case class ClassLens(
     path match
       case Nil =>
         ZIO.succeed(value)
+
+      case PathElement(Some(anchor), None) :: rest
+        if anchor == "this" || anchor == "this_value" || anchor == "this_key" =>
+          update(rest, value, obj)
 
       case PathElement(fieldNameOpt, indexOpt) :: rest =>
         val baseObjZ: ZIO[Any, DynaLensError, Any] =
