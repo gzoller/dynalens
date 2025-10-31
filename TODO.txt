@@ -3,9 +3,13 @@ Features for 1.2.0:
 
 * Full type system
 
-* Pluggable function definition
-
 * lens pairs (assign A->B)
+
+* Pluggable function definition / User-addable Fns (currently the compile registry macro runs when dynalens compiles--not user code)
+
+* new Foo ability (all case class fields must have default values for empty constructor)
+
+* var, w/assignment (maybe val -> var?)
 
 
 ==== New Compiler Features ====
@@ -123,26 +127,3 @@ For Luis:
 
 Need completed W9 form for this LLC
 Contract (simple) saying he's an independent contractor, payment, etc., indemnification, IP flow-down
-
-
-// In Utility
-def fieldOptionality(
-    lens: DynaLens[?],
-    path: List[PathElement]
-): Either[DynaLensError, Boolean] =
-  for {
-    ft <- pathFieldType(lens, path) // Resolves to the FieldType, or Left if missing
-  } yield ft.isOptional
-
-
-def pathFieldType(
-    lens: DynaLens[?],
-    path: List[Path.PathElement]
-): Either[DynaLensError, FieldType] =
-  path match
-    case Nil =>
-      Left(DynaLensError("Empty path", "<internal>"))
-
-    case _ =>
-      val rootSchema = lens.schema  // ClassType for the root object
-      resolvePath(rootSchema, path, lens)

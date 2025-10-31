@@ -29,6 +29,12 @@ inThisBuild(
   )
 )
 
+dependencyOverrides ++= Seq(
+  "org.scala-lang" %% "scala3-compiler"        % "3.7.1",
+  "org.scala-lang" %% "scala3-staging"         % "3.7.1",
+  "org.scala-lang" %% "scala3-tasty-inspector" % "3.7.1"
+)
+
 //ThisBuild / version := "1.0.0-SNAPSHOT" // <-- Comment this line out for real releases!
 
 ThisBuild / name := "dynalens"

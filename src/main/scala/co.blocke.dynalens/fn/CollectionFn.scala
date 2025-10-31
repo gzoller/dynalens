@@ -281,6 +281,8 @@ case class DistinctFn(recv: Fn[Any], fieldOpt: Option[String], posStr: String)
               case o => o.toString
             }.map(_._2.head).toList
         ZIO.succeed((result, vLens))
+      case (m: Map[?, ?], _) =>
+        ZIO.fail(DynaLensError(posStr, s"distinct() requires List receiver, got ${m.getClass.getSimpleName}"))
       case (xs: Iterable[?], vLens) =>
         val result = fieldOpt match
           case None => xs.asInstanceOf[Iterable[Any]].toList.distinct
@@ -593,20 +595,29 @@ case class MapFn(recv: Fn[Any], fn: Fn[Any], posStr: String)
       case ll: ListLens => withParent(ll.elementLens, rLens)
       case _            => ScalarLens("value", rLens.isOptional, Some(rLens))
 
-    for vals <- ZIO.foreach(xs.toList) { elem =>
+    ZIO.foreach(xs.toList) { elem =>
       ctx.withThisScoped(elem, elemLens) { scoped =>
         fn.resolve(scoped).map(_._1)
       }
+    }.flatMap { vals =>
+      // Validation: ensure all resolved values are scalar or Tuple2
+      ZIO.foreach(vals) { v =>
+        v match {
+          case _: Iterable[?] | _: Map[?, ?] =>
+            ZIO.fail(DynaLensError(posStr, s"=> body must return scalar or tuple2, got ${v.getClass.getSimpleName}"))
+          case _ => ZIO.unit
+        }
+      }.as {
+        val tuples = vals.collect { case t: (Any, Any) => t }
+        val allTuples = tuples.size == vals.size
+        if allTuples then
+          val resMap = tuples.toMap
+          val resLens = MapLens(rLens.name, rLens.isOptional, MapKeyKind.StringKey,
+            ScalarLens("value", rLens.isOptional, Some(rLens)), Some(rLens))
+          (resMap, resLens)
+        else
+          val resLens = ListLens(rLens.name, rLens.isOptional,
+            ScalarLens("value", rLens.isOptional, Some(rLens)), Some(rLens))
+          (vals, resLens)
+      }
     }
-    yield
-      val tuples = vals.collect { case t: (Any, Any) => t }
-      val allTuples = tuples.size == vals.size
-      if allTuples then
-        val resMap = tuples.toMap
-        val resLens = MapLens(rLens.name, rLens.isOptional, MapKeyKind.StringKey,
-          ScalarLens("value", rLens.isOptional, Some(rLens)), Some(rLens))
-        (resMap, resLens)
-      else
-        val resLens = ListLens(rLens.name, rLens.isOptional,
-          ScalarLens("value", rLens.isOptional, Some(rLens)), Some(rLens))
-        (vals, resLens)

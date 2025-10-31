@@ -511,7 +511,6 @@ object CollectionFnSpec extends ZIOSpecDefault {
 
       val tuplePred = Tuple2Fn(ConstantFn(1), List(ConstantFn(2)), "(tuple)")
       val m1 = MapFn(recvNone, tuplePred, "(=>)")
-      val nonTuplePred = ConstantFn(42)
 
       for (out1, _) <- m1.resolve(ctx)
       yield assertTrue(out1 == Map())
@@ -527,7 +526,60 @@ object CollectionFnSpec extends ZIOSpecDefault {
       yield assertTrue(out2 == List())
     },
 
+    /*───────────────────────────*
+     * Extra coverage for completeness
+     *───────────────────────────*/
 
+    test("distinct() on Map should fail") {
+      val ctx = buildCtx("root", Map("a" -> 1))
+      val fn  = DistinctFn(GetFn("root", false, RootFn, "pos"), None, "pos")
+      for result <- fn.resolve(ctx).either
+        yield assertTrue(result.isLeft)
+    },
+
+    test("distinct() on String should fail") {
+      val ctx = buildCtx("root", "abc")
+      val fn  = DistinctFn(GetFn("root", false, RootFn, "pos"), None, "pos")
+      for result <- fn.resolve(ctx).either
+        yield assertTrue(result.isLeft)
+    },
+
+    test("reverse() on None yields Nil") {
+      val ctx = buildCtx("root", None)
+      val fn  = ReverseFn(GetFn("root", true, RootFn, "pos"), "pos")
+      for (v, _) <- fn.resolve(ctx)
+        yield assertTrue(v == Nil)
+    },
+
+    test("reverse() on non-list receiver should fail") {
+      val ctx = buildCtx("root", 42)
+      val fn  = ReverseFn(GetFn("root", false, RootFn, "pos"), "pos")
+      for result <- fn.resolve(ctx).either
+        yield assertTrue(result.isLeft)
+    },
+
+    test("limit() greater than list size just returns the list") {
+      val ctx = buildCtx("root", List(1, 2, 3))
+      val fn  = LimitFn(GetFn("root", false, RootFn, "pos"), 10, "pos")
+      for (v, _) <- fn.resolve(ctx)
+        yield assertTrue(v == List(1, 2, 3))
+    },
+
+    test("clean() on empty list returns empty list") {
+      val ctx = buildCtx("root", List.empty[String])
+      val fn  = CleanFn(GetFn("root", false, RootFn, "pos"), "pos")
+      for (v, _) <- fn.resolve(ctx)
+        yield assertTrue(v == Nil)
+    },
+
+    test("MapFn: invalid body result type should fail") {
+      val ctx = buildCtx("root", List(1, 2))
+      // Produces a Map instead of scalar or tuple2
+      val badBody: ConstantFn[Any] = ConstantFn(Map("x" -> 1))
+      val fn = MapFn(GetFn("root", false, RootFn, "pos"), badBody, "pos")
+      for result <- fn.resolve(ctx).either
+        yield assertTrue(result.isLeft)
+    }
   ).provide(
     ZLayer.succeed(RuntimeEnv(new BiMapRegistry()))
   ) @@ ziotestkit

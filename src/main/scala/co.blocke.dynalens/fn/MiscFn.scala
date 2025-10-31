@@ -3,6 +3,8 @@ package fn
 
 import zio.*
 
+import scala.annotation.tailrec
+
 
 // (For ElseFn)
 sealed trait ElseFallback
@@ -261,40 +263,6 @@ case class Tuple2Fn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
     yield ((a, b), aLens)
 
 
-/* Deprecated
-case class LoopFn(inner: Fn[Any], posStr: String)
-  extends Fn[List[Any]]:
-
-  override val recv: Fn[Any] = RootFn               // implicit receiver: "this"
-  override val args: List[Fn[Any]] = List(inner)    // body of the loop
-  override val methodName: String = "<loop>"
-
-  override val isOptional: Boolean = inner.isOptional
-
-  override def children: List[Fn[?]] = List(inner)
-  override def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
-    kids match
-      case h :: Nil => copy(inner = h.asInstanceOf[Fn[Any]])
-      case _        => this
-
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
-    ctx.get("this") match
-      case Some((raw, lens)) =>
-        for
-          seq <- ZIO.fromEither(FnUtils.asSeq(raw, "loop", posStr))
-            .mapError(_ => DynaLensError(posStr, s"LoopFn expected an Iterable for 'this', got ${raw.getClass.getSimpleName}"))
-          results <- ZIO.foreach(seq) { item =>
-            ctx.withThisScoped(item, lens) { scoped =>
-              inner.resolve(scoped).map(_._1)
-            }
-          }
-        yield (results.toList, lens)
-
-      case None =>
-        ZIO.fail(DynaLensError(posStr, "LoopFn requires 'this' bound to a collection"))
-    */
-
-
 case class GetFn(
                   path: String,
                   override val isOptional: Boolean,
@@ -325,7 +293,7 @@ case class GetFn(
           return ZIO.succeed((v, l))
         case None =>
           return ZIO.fail(DynaLensError(posStr, s"No this binding found for '$path'"))
-    
+
     // Decide anchor: symbol -> this -> top, including index anchors
     val anchored: Option[(Any, Lens, List[PathElement])] = parts match
       // Symbol anchor + index
@@ -408,6 +376,7 @@ case class GetFn(
             }
 
   // Derive the terminal lens by walking the entire remaining path
+  @tailrec
   private def deriveTerminalLens(start: Lens, tail: List[PathElement]): Lens =
     tail match
       case Nil => start
@@ -515,37 +484,117 @@ object NoOpFn extends Fn[Any]:
     ZIO.fail(DynaLensError(posStr, "NoOpFn should never be resolved"))
 
 
-/* Deprecated
-// Special converter: Fn[Any]->BooleanFn
-case class ToBooleanFn(inner: Fn[Any], posStr: String) extends BooleanFn:
+case class IndexFn(recv: Fn[Any], index: Fn[Any], pos: String) extends Fn[Any] {
+  override def posStr: String = pos
+  override def args: List[Fn[Any]] = List(recv, index)
+  override def rebuild(kids: List[Fn[?]]): Fn[Any] =
+    IndexFn(kids.head.asInstanceOf[Fn[Any]], kids(1).asInstanceOf[Fn[Any]], pos)
 
-  override val recv: Fn[Any] = inner
-  override val args: List[Fn[Any]] = Nil
-  override val methodName: String = "<toBoolean>"
-  override val isOptional: Boolean = inner.isOptional
+  override def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] = {
+    val resultZ: ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] = recv match
+      // --- Compile-time path concatenation for GetFn or nested IndexFn ---
+      case g: GetFn =>
+        for {
+          recvVal <- g.resolve(ctx)
+          idxRes  <- index.resolve(ctx)
+          idx = idxRes._1
+          res <- recvVal._1 match {
+            case None =>
+              ZIO.succeed((None, recvVal._2))
 
-  override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
-    kids match
-      case f :: Nil => copy(inner = f.asInstanceOf[Fn[Any]])
-      case _        => this
+            case list: List[_] if idx.isInstanceOf[Int] =>
+              ZIO.succeed((list.lift(idx.asInstanceOf[Int]), recvVal._2))
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
-    for
-      (r, rLens) <- inner.resolve(ctx)
-      res <- r match
-        case b: Boolean =>
-          ZIO.succeed(b)
+            case map: Map[_, _] =>
+              ZIO.succeed((map.asInstanceOf[Map[Any, Any]].get(idx), recvVal._2))
 
-        case Some(_: Boolean) =>
-          ZIO.fail(DynaLensError(posStr,
-            s"Optional Boolean cannot be used directly — add .else()"))
+            case Some(inner) =>
+              inner match {
+                case list: List[_] if idx.isInstanceOf[Int] =>
+                  ZIO.succeed((list.lift(idx.asInstanceOf[Int]), recvVal._2))
+                case map: Map[_, _] =>
+                  ZIO.succeed((map.asInstanceOf[Map[Any, Any]].get(idx), recvVal._2))
+                case _ =>
+                  ZIO.fail(DynaLensError(pos, s"Cannot index Option containing ${inner.getClass.getSimpleName}"))
+              }
 
-        case None =>
-          ZIO.fail(DynaLensError(posStr,
-            s"Boolean expression evaluated to None — add .else()"))
+            case v =>
+              ZIO.fail(DynaLensError(pos, s"Cannot index value of type ${v.getClass.getSimpleName}"))
+          }
+        } yield res
 
-        case other =>
-          ZIO.fail(DynaLensError(posStr,
-            s"Expected Boolean at runtime, got ${other.getClass.getSimpleName} = $other"))
-    yield (res, rLens)
-*/
+      case i: IndexFn =>
+        for {
+          // First, resolve the inner IndexFn
+          innerRes <- i.resolve(ctx)
+          (innerVal, innerLens) = innerRes
+          idxRes <- index.resolve(ctx)
+          idx = idxRes._1
+          res <- innerVal match {
+            case list: List[_] if idx.isInstanceOf[Int] =>
+              ZIO.succeed((list.lift(idx.asInstanceOf[Int]), innerLens))
+            case map: Map[_, _] =>
+              ZIO.succeed((map.asInstanceOf[Map[Any, Any]].get(idx), innerLens))
+            case opt: Option[_] =>
+              opt match {
+                case None =>
+                  ZIO.succeed((None, innerLens))
+                case Some(None) =>
+                  ZIO.succeed((None, innerLens))
+                case Some(inner) =>
+                  inner match {
+                    case list: List[_] if idx.isInstanceOf[Int] =>
+                      ZIO.succeed((list.lift(idx.asInstanceOf[Int]), innerLens))
+                    case map: Map[_, _] =>
+                      ZIO.succeed((map.asInstanceOf[Map[Any, Any]].get(idx), innerLens))
+                    case _ =>
+                      ZIO.fail(DynaLensError(pos, s"Cannot index Option containing ${inner.getClass.getSimpleName}"))
+                  }
+              }
+            case v =>
+              ZIO.fail(DynaLensError(pos, s"Cannot index value of type ${if (v == null) "null" else v.getClass.getSimpleName}"))
+          }
+        } yield res
+
+      // --- Runtime evaluation cases ---
+      case other =>
+        for {
+          recvVal  <- other.resolve(ctx)
+          indexVal <- index.resolve(ctx)
+          res <- (recvVal._1, indexVal._1) match {
+
+            // ===== Option cases =====
+            case (opt: Option[_], key) =>
+              opt match
+                case Some(inner) =>
+                  (inner, key) match
+                    case (list: List[_], i: Int) =>
+                      ZIO.succeed((list.lift(i), recvVal._2))
+                    case (map: Map[_, _], k) =>
+                      ZIO.succeed((map.asInstanceOf[Map[Any,Any]].get(k), recvVal._2))
+                    case _ =>
+                      ZIO.fail(DynaLensError(pos,
+                        s"Cannot index Option containing ${inner.getClass.getSimpleName}"
+                      ))
+                case None =>
+                  ZIO.succeed((None, recvVal._2))
+
+            // ===== Direct List / Map =====
+            case (list: List[_], i: Int) =>
+              ZIO.succeed((list.lift(i), recvVal._2)) // returns Option[Any]
+
+            case (map: Map[_, _], k) =>
+              ZIO.succeed((map.asInstanceOf[Map[Any,Any]].get(k), recvVal._2))
+
+            // ===== Non-indexable receiver =====
+            case (v, _) =>
+              ZIO.fail(DynaLensError(pos,
+                s"Cannot index value of type ${v.getClass.getSimpleName}"
+              ))
+          }
+        } yield res
+    resultZ.map { res =>
+      res
+    }
+  }
+}
