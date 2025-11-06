@@ -82,37 +82,37 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
     // ADD
     // --------------------
     test("Add int + long → long result") {
-      val fn = AddFn(G("i"), List(G("l")), "")
+      val fn = AddFn(G("i"), G("l"), ScalarType("", "scala.Long", false), "")
       for (value, _) <- fn.resolve(buildCtx)
         yield assertTrue(value == 5L)
     },
 
     test("Add int + float → float result") {
-      val fn = AddFn(G("i"), List(G("f")), "")
+      val fn = AddFn(G("i"), G("f"), ScalarType("", "scala.Float", false), "")
       for (value, _) <- fn.resolve(buildCtx)
         yield assertTrue(value == 3.5f)
     },
 
     test("Add int + double → double result") {
-      val fn = AddFn(G("i"), List(G("d")), "")
+      val fn = AddFn(G("i"), G("d"), ScalarType("", "scala.Double", false), "")
       for (value, _) <- fn.resolve(buildCtx)
         yield assertTrue(value == 12.5)
     },
 
     test("Add int + BigInt → BigInt result") {
-      val fn = AddFn(G("i"), List(G("bi")), "")
+      val fn = AddFn(G("i"), G("bi"), ScalarType("", "scala.BigInt", false), "")
       for (value, _) <- fn.resolve(buildCtx)
         yield assertTrue(value == BigInt(102))
     },
 
     test("Add int + BigDecimal → BigDecimal result") {
-      val fn = AddFn(G("i"), List(G("bd")), "")
+      val fn = AddFn(G("i"), G("bd"), ScalarType("", "scala.BigDecimal", false), "")
       for (value, _) <- fn.resolve(buildCtx)
         yield assertTrue(value == BigDecimal(44.7))
     },
 
     test("Add string + int should fail") {
-      val fn = AddFn(G("s"), List(G("i")), "")
+      val fn = AddFn(G("s"), G("i"), ScalarType("", "java.lang.String", false), "")
       for result <- fn.resolve(buildCtx).exit
         yield assertTrue(result.isFailure)
     },
@@ -122,19 +122,19 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
     // SUBTRACT
     // --------------------
     test("Subtract double - int") {
-      val fn = SubtractFn(G("d"), List(G("i")), "")
+      val fn = SubtractFn(G("d"), G("i"), ScalarType("", "scala.Double", false), "")
       for (value, _) <- fn.resolve(buildCtx)
         yield assertTrue(value == 8.5)
     },
 
     test("Subtract BigInt - long") {
-      val fn = SubtractFn(G("bi"), List(G("l")), "")
+      val fn = SubtractFn(G("bi"), G("l"), ScalarType("", "scala.BigInt", false), "")
       for (value, _) <- fn.resolve(buildCtx)
         yield assertTrue(value == BigInt(97))
     },
 
     test("Subtract string - int fails") {
-      val fn = SubtractFn(G("s"), List(G("i")), "")
+      val fn = SubtractFn(G("s"), G("i"), ScalarType("", "java.lang.String", false), "")
       for result <- fn.resolve(buildCtx).exit
         yield assertTrue(result.isFailure)
     },
@@ -144,13 +144,13 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
     // MULTIPLY
     // --------------------
     test("Multiply float * int") {
-      val fn = MultiplyFn(G("f"), List(G("i")), "")
+      val fn = MultiplyFn(G("f"), G("i"), ScalarType("", "scala.Float", false), "")
       for (value, _) <- fn.resolve(buildCtx)
         yield assertTrue(value == 3.0f)
     },
 
     test("Multiply BigDecimal * long") {
-      val fn = MultiplyFn(G("bd"), List(G("l")), "")
+      val fn = MultiplyFn(G("bd"), G("l"), ScalarType("", "scala.BigDecimal", false), "")
       for (value, _) <- fn.resolve(buildCtx)
         yield assertTrue(value == BigDecimal(128.1))
     },
@@ -160,13 +160,13 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
     // DIVIDE
     // --------------------
     test("Divide double / float") {
-      val fn = DivideFn(G("d"), List(G("f")), "")
+      val fn = DivideFn(G("d"), G("f"), ScalarType("", "scala.Double", false), "")
       for (value, _) <- fn.resolve(buildCtx)
         yield assertTrue(math.abs(value.asInstanceOf[Double] - (10.5/1.5)) < 0.0001)
     },
 
     test("Divide int / zero → error") {
-      val fn = DivideFn(G("i"), List(ConstantFn(0)), "")
+      val fn = DivideFn(G("i"), ConstantFn(0), ScalarType("", "scala.Int", false), "")
       for result <- fn.resolve(buildCtx).exit
         yield assertTrue(result.isFailure)
     },
@@ -176,13 +176,13 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
     // MODULO
     // --------------------
     test("Modulo long % int") {
-      val fn = ModuloFn(G("l"), List(G("i")), "")
+      val fn = ModuloFn(G("l"), G("i"), ScalarType("", "scala.Long", false), "")
       for (value, _) <- fn.resolve(buildCtx)
         yield assertTrue(value == 1L)
     },
 
     test("Modulo by zero → error") {
-      val fn = ModuloFn(G("i"), List(ConstantFn(0)), "")
+      val fn = ModuloFn(G("i"), ConstantFn(0), ScalarType("", "scala.Int", false), "")
       for result <- fn.resolve(buildCtx).exit
         yield assertTrue(result.isFailure)
     },
@@ -192,7 +192,7 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
     // Lens Preservation
     // --------------------
     test("Left-hand operand lens preserved") {
-      val fn = AddFn(G("l"), List(G("i")), "") // left = long
+      val fn = AddFn(G("l"), G("i"), ScalarType("", "scala.Long", false), "") // left = long
       for (_, lens) <- fn.resolve(buildCtx)
         yield assertTrue(lens.name == "l")
     },
@@ -203,14 +203,14 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
     // --------------------
     test("Optional Some arithmetic works") {
       val ctx = buildCtx.bind("optI", Some(5), ScalarLens("optI", true, None))
-      val fn = AddFn(GetFn("optI", true, RootFn, "pos"), List(ConstantFn(2)), "")
+      val fn = AddFn(GetFn("optI", true, RootFn, "pos"), ConstantFn(2), ScalarType("", "scala.Int", false), "")
       for result <- fn.resolve(ctx).exit
         yield assertTrue(result.isFailure)
     },
 
     test("Optional None arithmetic returns None") {
       val ctx = buildCtx.bind("optI", None, ScalarLens("optI", true, None))
-      val fn = AddFn(GetFn("optI", true, RootFn, "pos"), List(ConstantFn(2)), "")
+      val fn = AddFn(GetFn("optI", true, RootFn, "pos"), ConstantFn(2), ScalarType("", "scala.Int", false), "")
       for result <- fn.resolve(ctx).exit
         yield assertTrue(result.isFailure)
     }

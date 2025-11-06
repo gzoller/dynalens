@@ -232,42 +232,30 @@ trait Level2 extends Level1 with ValueExprModule:
         case left @ Left(_) => P(Pass(left))
       }
     )
-  
+
   private def baseExprWithFieldType[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    baseExpr0.map {
-      case g @ GetFn(path, isThis, recv, pos, _) =>
+    baseExprRaw.map {
+      case g@GetFn(path, isThis, recv, pos, _) =>
         // 1) Try local val or symbol scope
         val fromSymbols: Option[FieldType] =
           ctx.symbols.collectFirst {
             case scope if scope.contains(path) =>
               scope(path) match
-                case v: ValType   => v.valueType
+                case v: ValType => v.valueType
                 case f: FieldType => f
           }
 
-        // 2) Fall back to schema-based inference
-        val fieldT =
-          fromSymbols
-            .orElse(Some(ctx.resolveSchemaFor(recv)))
-            .getOrElse(ScalarType(path, "scala.Any", false))
+        // 2) Fall back to schema-based inference — look up the field by name
+        val fieldT = fromSymbols.getOrElse {
+          ctx.resolveSchemaFor(recv) match
+            case ct: ClassType =>
+              ct.fields.find(_.name == path).getOrElse(ScalarType(path, "scala.Any", false))
+            case ft: FieldType => ft
+        }
 
-        // ✅ Pass it in via maybeType
         Right(GetFn(path, isThis, recv, pos, Some(fieldT)))
 
       case other => Right(other)
-    }
-
-  // PATCH: baseExpr0 unwraps ParseFnResult safely
-  private def baseExpr0[$: P](using ctx: ExprContext): P[Fn[Any]] =
-    baseExprRaw.map {
-      case e: Either[?, ?] @unchecked =>
-        e match {
-          case Right(fn: Fn[Any] @unchecked) => fn
-          case Left(_)                       => NoOpFn
-          case _                             => NoOpFn
-        }
-      case fn: Fn[Any] @unchecked => fn
-      case _                      => NoOpFn
     }
 
   // PATCH: baseExprRaw now returns ParseFnResult directly and flattens to Fn[Any]

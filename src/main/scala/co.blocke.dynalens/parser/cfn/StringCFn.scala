@@ -15,9 +15,6 @@ object CTrimFn extends CompileFn:
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     receiver.ftype.isStringLike
 
-  def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.lang.String")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "trim() takes no arguments"))
     else Right(TrimFn(recv.fn, ctx.posStr).asInstanceOf[Fn[Any]])
@@ -33,9 +30,6 @@ object CToLowerFn extends CompileFn:
 
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     receiver.ftype.isStringLike
-
-  def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.lang.String")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "toLower() takes no arguments"))
@@ -53,9 +47,6 @@ object CToUpperFn extends CompileFn:
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     receiver.ftype.isStringLike
 
-  def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.lang.String")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "toUpper() takes no arguments"))
     else Right(ToUpperFn(recv.fn, ctx.posStr).asInstanceOf[Fn[Any]])
@@ -71,9 +62,6 @@ object CInterpolateFn extends CompileFn:
 
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     receiver.ftype.isStringLike
-
-  def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.lang.String")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "template() takes no arguments"))
@@ -100,9 +88,6 @@ object CSubstringFn extends CompileFn:
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     receiver.ftype.isStringLike
 
-  def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.lang.String")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     for
       start <- args.headOption.toRight(DLCompileError(ctx.posStr, "substring() missing start arg"))
@@ -124,9 +109,6 @@ object CReplaceFn extends CompileFn:
 
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     receiver.ftype.isStringLike
-
-  def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.lang.String")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     for
@@ -160,9 +142,6 @@ object CConcatFn extends CompileFn:
       case _: ScalarType => true
       case ft if ft.isStringLike => true
       case _ => false
-
-  def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.lang.String")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     Right(ConcatFn(recv.fn, args, ctx.posStr).asInstanceOf[Fn[Any]])

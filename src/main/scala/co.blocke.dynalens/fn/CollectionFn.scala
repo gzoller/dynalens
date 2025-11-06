@@ -42,23 +42,21 @@ object FnUtils {
 /*---------------------------------------------
   :: (cons)
 ---------------------------------------------*/
-case class ConsFn(left: Fn[Any], right: Fn[Any], posStr: String)
+case class ConsFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends BinaryFn[List[Any]]:
-
-  override val recv: Fn[Any] = left
-  override val args: List[Fn[Any]] = List(right)
+  
   val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
   override def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
     copy(
-      left = kids.head.asInstanceOf[Fn[Any]],
-      right = kids(1).asInstanceOf[Fn[Any]],
+      recv = kids.head.asInstanceOf[Fn[Any]],
+      arg = kids(1).asInstanceOf[Fn[Any]],
       posStr = posStr
     )
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
     for
-      l <- left.resolve(ctx)
-      r <- right.resolve(ctx)
+      l <- recv.resolve(ctx)
+      r <- arg.resolve(ctx)
       (lv, lLens) = l
       (rv, _) = r
       result <- ZIO.attempt {
@@ -143,15 +141,14 @@ case class ValuesFn(recv: Fn[Any], posStr: String)
 /*---------------------------------------------
   filter()
 ---------------------------------------------*/
-case class FilterFn(recv: Fn[Any], other: Fn[Any], posStr: String)
+case class FilterFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends BinaryFn[List[Any]]:
 
-  override val args: List[Fn[Any]] = List(other)
   val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
   def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
     copy(
       recv = kids.head.asInstanceOf[Fn[Any]],
-      other = kids(1).asInstanceOf[Fn[Any]],
+      arg = kids(1).asInstanceOf[Fn[Any]],
       posStr = posStr
     )
 
@@ -169,7 +166,7 @@ case class FilterFn(recv: Fn[Any], other: Fn[Any], posStr: String)
         val elemLens = ll.elementLens
         ZIO.foreach(lst.toList) { elem =>
           ctx.withThisScoped(elem, elemLens) { scoped =>
-            other.resolve(scoped).map(_._1)
+            arg.resolve(scoped).map(_._1)
           }.either
         }.map { results =>
           val zipped = lst.toList.zip(results)

@@ -13,9 +13,6 @@ object CFormatDateFn extends CompileFn:
     val t = receiver.ftype.typeName
     Set("java.time.LocalDate", "java.time.LocalDateTime", "java.time.Instant").contains(t)
 
-  def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.lang.String")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, FormatDateFn] =
     args.headOption match
       case Some(patternFn) =>
@@ -45,9 +42,6 @@ object CParseDateFn extends CompileFn:
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     receiver.ftype.typeName == "java.lang.String"
 
-  def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.time.LocalDateTime")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, ParseDateFn] =
     args.headOption match
       case Some(patternFn) =>
@@ -76,9 +70,6 @@ object CNowFn extends CompileFn:
   override val standalone = true
 
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean = true
-
-  def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.time.LocalDateTime")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, NowFn] =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "now() takes no arguments"))

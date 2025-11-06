@@ -41,13 +41,13 @@ object BooleanFnSpec extends ZIOSpecDefault:
     // IF
     // --------------------
     test("IfFn true path") {
-      val fn = IfFn(AndFn(G("foo.flag"), List(B(true)), ""), C("yes"), C("no"), "")
+      val fn = IfFn(AndFn(G("foo.flag"), B(true), ""), C("yes"), C("no"), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v == "yes")
     },
 
     test("IfFn false path") {
-      val fn = IfFn(AndFn(G("foo.flag"), List(B(false)), ""), C("yes"), C("no"), "")
+      val fn = IfFn(AndFn(G("foo.flag"), B(false), ""), C("yes"), C("no"), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v == "no")
     },
@@ -56,19 +56,19 @@ object BooleanFnSpec extends ZIOSpecDefault:
     // AND
     // --------------------
     test("AndFn both true") {
-      val fn = AndFn(G("foo.flag"), List(B(true)), "")
+      val fn = AndFn(G("foo.flag"), B(true), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v)
     },
 
     test("AndFn short-circuits false") {
-      val fn = AndFn(B(false), List(Bad), "")
+      val fn = AndFn(B(false), Bad, "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(!v)
     },
 
     test("AndFn invalid left type errors") {
-      val fn = AndFn(G("foo.s"), List(B(true)), "")
+      val fn = AndFn(G("foo.s"), B(true), "")
       for result <- fn.resolve(buildCtx).exit
         yield assertTrue(result.isFailure)
     },
@@ -77,19 +77,19 @@ object BooleanFnSpec extends ZIOSpecDefault:
     // OR
     // --------------------
     test("OrFn both false") {
-      val fn = OrFn(B(false), List(B(false)), "")
+      val fn = OrFn(B(false), B(false), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(!v)
     },
 
     test("OrFn short-circuits true") {
-      val fn = OrFn(B(true), List(Bad), "")
+      val fn = OrFn(B(true), Bad, "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v)
     },
 
     test("OrFn invalid right type errors") {
-      val fn = OrFn(B(false), List(G("foo.n")), "")
+      val fn = OrFn(B(false), G("foo.n"), "")
       for result <- fn.resolve(buildCtx).exit
         yield assertTrue(result.isFailure)
     },

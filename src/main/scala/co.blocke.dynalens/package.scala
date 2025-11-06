@@ -48,3 +48,10 @@ given ToExpr[FieldType] with
 
     case EnumType(fieldName, validValues, typeName, isOptional) =>
       '{ EnumType(${ Expr(fieldName) }, ${ Expr(validValues) }, ${ Expr(typeName) }, ${ Expr(isOptional) }) }
+
+val numericSet = Set(
+  "scala.Byte", "scala.Short", "scala.Int", "scala.Long", "scala.Float", "scala.Double",
+  "scala.math.BigInt", "scala.math.BigDecimal",
+  "java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long", "java.lang.Float", "java.lang.Double",
+  "int", "long", "float", "double", "byte", "short", "bigint", "bigdecimal"
+)

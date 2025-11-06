@@ -31,7 +31,7 @@ trait Fn[R]:
   def methodName: String = this.getClass.getSimpleName.stripSuffix("Fn").decapitalize
   def posStr: String
 
-  def resultType: FieldType
+  val resultType: FieldType
   
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (R, Lens)]
 
@@ -47,22 +47,18 @@ trait Fn[R]:
     rebuild(kids).asInstanceOf[Fn[R]]
 
 
-trait UnaryFn[R] extends Fn[R] {
+trait UnaryFn[R] extends Fn[R]:
   override def args: List[Fn[Any]] = Nil
-  override def recv: Fn[Any] // must be defined in concrete
   override def isOptional: Boolean = recv.isOptional
-}
 
-trait BinaryFn[R] extends Fn[R] {
-  override def recv: Fn[Any] // left operand
-  override def isOptional: Boolean = recv.isOptional || args.head.isOptional
-}
+trait BinaryFn[R] extends Fn[R]:
+  val arg: Fn[Any]
+  override def args: List[Fn[Any]] = List(arg)
+  override def isOptional: Boolean = recv.isOptional || arg.isOptional
 
 // For methods / n-ary you could still do:
-trait MethodFn[R] extends Fn[R] {
-  override def recv: Fn[Any]
+trait MethodFn[R] extends Fn[R]:
   override def isOptional: Boolean = recv.isOptional || args.exists(_.isOptional)
-}
 
 // Marker trait for boolean-returning functions
 trait BooleanFn extends Fn[Boolean]

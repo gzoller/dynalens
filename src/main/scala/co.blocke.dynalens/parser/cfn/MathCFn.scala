@@ -21,20 +21,6 @@ trait MathCFn[F <: Fn[Any]] extends CompileFn:
   /** Each subclass implements this to create its runtime Fn */
   def construct(recv: Fn[Any], posStr: String): F
 
-  /** Determines the resulting scalar type (list element or numeric fallback) */
-  private def resultElemType(receiver: Receiver)(using ctx: ExprContext): FieldType =
-    receiver.ftype match
-      case ListType(_, elem: FieldType, _, _) => elem
-      case _ =>
-        Utility.rhsType(receiver.fn)(using ctx) match
-          case TypeResult.Known(ft) => ft
-          case TypeResult.Unknown   => ScalarType("", "scala.Double")
-          case TypeResult.Error(_)  => ScalarType("", "scala.Double")
-
-  /** Default resultType: subclasses can override if needed */
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    resultElemType(receiver)
-
   /** Default validate: numeric List only */
   override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
     val recvFT = Utility.rhsType(fn.recv)(using ctx)
@@ -61,22 +47,16 @@ object CMaxFn extends MathCFn[MaxFn]:
 object CMedianFn extends MathCFn[MedianFn]:
   val name = "median"
   def construct(recv: Fn[Any], posStr: String): MedianFn = MedianFn(recv, posStr)
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "scala.Double")
 
 
 object CSumFn extends MathCFn[SumFn]:
   val name = "sum"
   def construct(recv: Fn[Any], posStr: String): SumFn = SumFn(recv, posStr)
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "scala.Double")
 
 
 object CAvgFn extends MathCFn[AvgFn]:
   val name = "avg"
   def construct(recv: Fn[Any], posStr: String): AvgFn = AvgFn(recv, posStr)
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "scala.Double")
 
 
 object CAbsFn extends CompileFn:
@@ -86,12 +66,6 @@ object CAbsFn extends CompileFn:
   override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     Validation.isNumericType(receiver.ftype) ||
       (receiver.ftype.isOptional && Validation.isNumericType(receiver.ftype))
-
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(ft) => ft
-      case TypeResult.Unknown   => ScalarType("", "scala.Double")
-      case TypeResult.Error(_)  => ScalarType("", "scala.Double")
 
   override def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, AbsFn] =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "abs() takes no arguments"))

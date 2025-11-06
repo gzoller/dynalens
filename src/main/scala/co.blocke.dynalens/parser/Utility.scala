@@ -100,7 +100,19 @@ object Utility:
 
       // ---------- GetFn ----------
       case g: GetFn =>
-        TypeResult.Known(g.resultType)
+        g.maybeType match
+          case Some(ct: ClassType) =>
+            println(s"[rhsType:GetFn] matching field '${g.path}' against ${ct.fields.map(_.name)}")
+            // Find the field type within the class by name
+            ct.fields.find(_.name == g.path) match
+              case Some(fieldType) =>
+                TypeResult.Known(fieldType)
+              case None =>
+                TypeResult.Error(DLCompileError(g.posStr,s"Unknown field '${g.path}' in class ${ct.typeName}"))
+          case Some(ft) =>
+            TypeResult.Known(ft)
+          case None =>
+            TypeResult.Unknown
 
       // ---------- Tuple2Fn ----------  (hack--create artificial ClassType that is unpacked in CMapFn.resultType()
       case t2: Tuple2Fn =>
@@ -247,17 +259,91 @@ object Utility:
       case ("scala.Long", _) | (_, "scala.Long") => "scala.Long"
       case _ => "scala.Int"
 
-  def numericPromote( posStr: String, typeNames: String* ): Either[DLCompileError, String] =
-    util.RuntimeUtil.numericPromote(typeNames*).fold(
-      err => Left(DLCompileError(posStr, err)),
-      Right(_)
-    )
-//  def promoteGeneral(a: String, b: String): String =
-//    // reuse your RuntimeUtil.numericPromote
-//    util.RuntimeUtil.numericPromote(a, b)
+  def numericPromote(posStr: String, typeNames: String*): Either[DLCompileError, String] = {
+    if typeNames.isEmpty then
+      Left(DLCompileError(posStr,"numericPromote requires at least one type"))
+    else
+      val normalized = typeNames.map(normalizeNumeric)
+      val rank = Map(
+        "scala.Byte" -> 1,
+        "scala.Short" -> 2,
+        "scala.Int" -> 3,
+        "scala.Long" -> 4,
+        "scala.Float" -> 5,
+        "scala.Double" -> 6,
+        "scala.math.BigInt" -> 7,
+        "scala.math.BigDecimal" -> 8
+      )
+      normalized.find(!rank.contains(_)) match
+        case Some(bad) => Left(DLCompileError(posStr,s"Cannot promote unknown / non-numeric type: $bad"))
+        case None      => Right(normalized.maxBy(rank))
+  }
+
+  def normalizeNumeric(t: String): String = t match
+    // Scala primitives
+    case "Byte" | "scala.Byte" => "scala.Byte"
+    case "Short" | "scala.Short" => "scala.Short"
+    case "Int" | "scala.Int" => "scala.Int"
+    case "Long" | "scala.Long" => "scala.Long"
+    case "Float" | "scala.Float" => "scala.Float"
+    case "Double" | "scala.Double" => "scala.Double"
+
+    // Java boxed types (often appear via reflection)
+    case "java.lang.Byte" => "scala.Byte"
+    case "java.lang.Short" => "scala.Short"
+    case "java.lang.Integer" => "scala.Int"
+    case "java.lang.Long" => "scala.Long"
+    case "java.lang.Float" => "scala.Float"
+    case "java.lang.Double" => "scala.Double"
+
+    // Extended numerics — keep them distinct but normalized to consistent forms
+    case "scala.math.BigDecimal" | "BigDecimal" => "scala.math.BigDecimal"
+    case "scala.math.BigInt" | "BigInt" => "scala.math.BigInt"
+
+    // Anything else: leave untouched
+    case other => other
+
 
   def isNumeric(tn: String): Boolean =
     isIntegral(tn) || isFloating(tn)
 
   def isStringLike(tn: String): Boolean =
     tn == "java.lang.String" || tn == "scala.Predef.String"
+
+  enum ArithOp { case Add, Sub, Mul, Div, Mod }
+
+  def calcNumericResultType(
+                             posStr: String,
+                             recv: FieldType,
+                             arg: FieldType,
+                             op: ArithOp
+                           ): Either[DLCompileError, FieldType] = {
+    val r = normalizeNumeric(recv.typeName)
+    val a = normalizeNumeric(arg.typeName)
+
+    def isNum(t: String) = Validation.isNumericType(ScalarType("", t, false))
+
+    if !(isNum(r) && isNum(a)) then
+      Left(DLCompileError(posStr, s"Incompatible operand types: $r and $a"))
+    else
+      val names = List(r, a)
+      op match
+        case ArithOp.Div =>
+          val isFloaty = Set("scala.Float", "scala.Double", "scala.math.BigDecimal")
+          val out =
+            if names.exists(isFloaty) then
+              numericPromote(posStr, r, a)
+            else
+              Right("scala.Double")
+          out.map(t => ScalarType("", t, false))
+
+        case ArithOp.Mod =>
+          val isIntegral = Set("scala.Byte", "scala.Short", "scala.Int", "scala.Long", "scala.math.BigInt")
+          if names.forall(isIntegral.contains) then
+            numericPromote(posStr, r, a).map(t => ScalarType("", t, false))
+          else
+            Left(DLCompileError(posStr, s"Modulo requires integral operands: $r and $a"))
+
+        case _ =>
+          numericPromote(posStr, r, a).map(t => ScalarType("", t, false))
+  }

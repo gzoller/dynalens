@@ -20,7 +20,7 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(z,AddFn(ConstantFn(2),List(ConstantFn(3)),[1,1]))))"""
+        """BlockStmt(List(ValStmt(z,AddFn(ConstantFn(2),ConstantFn(3),ScalarType(,scala.Int,false),[1,1]))))"""
 
       val expectedResult =
         """top -> Item(5,10,2)
@@ -48,7 +48,7 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,SubtractFn(AddFn(ConstantFn(10),List(ConstantFn(5)),[1,1]),List(ConstantFn(3)),[1,1]))))"""
+        """BlockStmt(List(ValStmt(x,SubtractFn(AddFn(ConstantFn(10),ConstantFn(5),ScalarType(,scala.Int,false),[1,1]),ConstantFn(3),ScalarType(,scala.Int,false),[1,1]))))"""
 
       val expectedResult =
         """top -> Item(1,2,3)
@@ -76,7 +76,7 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(a,DivideFn(MultiplyFn(ConstantFn(8),List(ConstantFn(2)),[1,1]),List(ConstantFn(4)),[1,1]))))"""
+        """BlockStmt(List(ValStmt(a,DivideFn(MultiplyFn(ConstantFn(8),ConstantFn(2),ScalarType(,scala.Int,false),[1,1]),ConstantFn(4),ScalarType(,scala.Double,false),[1,1]))))"""
 
       val expectedResult =
         """top -> Item(19,5,1)
@@ -104,7 +104,7 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(n,MultiplyFn(AddFn(ConstantFn(2),List(ConstantFn(3)),[1,1]),List(ConstantFn(4)),[1,1]))))"""
+        """BlockStmt(List(ValStmt(n,MultiplyFn(AddFn(ConstantFn(2),ConstantFn(3),ScalarType(,scala.Int,false),[1,1]),ConstantFn(4),ScalarType(,scala.Int,false),[1,1]))))"""
 
       val expectedResult =
         """top -> Item(0,0,0)
@@ -132,7 +132,7 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(total,AddFn(MultiplyFn(GetFn(qty,false,RootFn,[1,1]),List(GetFn(price,false,RootFn,[1,1])),[1,1]),List(GetFn(tax,false,RootFn,[1,1])),[1,1]))))"""
+        """BlockStmt(List(ValStmt(total,AddFn(MultiplyFn(GetFn(qty,false,RootFn,[1,1],Some(ScalarType(qty,scala.Int,false))),GetFn(price,false,RootFn,[1,1],Some(ScalarType(price,scala.Int,false))),ScalarType(,scala.Int,false),[1,1]),GetFn(tax,false,RootFn,[1,1],Some(ScalarType(tax,scala.Int,false))),ScalarType(,scala.Int,false),[1,1]))))"""
 
       val expectedResult =
         """top -> Item(2,5,3)
@@ -159,7 +159,6 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
           |  val bad = "abc" * 3
           |""".stripMargin
 
-      val inst = Item(1, 2, 3)
       val lens = into[Item]
 
       for {

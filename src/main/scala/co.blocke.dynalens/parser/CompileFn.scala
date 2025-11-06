@@ -26,10 +26,6 @@ trait CompileFn {
   /** Check if the receiver’s type is acceptable. */
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean
 
-  /** The resulting type after applying this function. */
-  def resultType(receiver: Receiver, args: List[FieldType])
-                (using ctx: ExprContext): FieldType
-
   /** Phase 1: Build the AST node from argument Fns. */
   def build(recv: Receiver, args: List[Fn[Any]])
            (using ctx: ExprContext): Either[DLCompileError, Fn[Any]]

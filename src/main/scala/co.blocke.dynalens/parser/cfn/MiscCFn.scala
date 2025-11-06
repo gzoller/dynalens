@@ -13,9 +13,6 @@ object CUuidFn extends CompileFn:
 
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean = true
 
-  def resultType(receiver: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "java.lang.String")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "uuid() takes no arguments"))
     else Right(UUIDFn(ctx.posStr))
@@ -30,10 +27,6 @@ object CElseFn extends CompileFn:
 
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     receiver.ftype.isOptional
-
-  def resultType(receiver: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType =
-    if receiver.ftype.isOptional then receiver.ftype.cloneWithOptional(false)
-    else ScalarType("", "scala.Any")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args.headOption match
@@ -71,9 +64,6 @@ object CBlockFn extends CompileFn:
         val finalFn = args.last
         Right(BlockFn(statements, finalFn, ctx.posStr))
 
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    if args.nonEmpty then args.last else ScalarType("", "scala.Any")
-
   override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
     fn match
       case b: BlockFn[?] =>
@@ -91,14 +81,6 @@ object CCaseWhenFn extends CompileFn:
 
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     true // case() works with any receiver type
-
-  def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    // Usually same as RHS type if all RHS are consistent, else fallback to Any
-    val rhsTypes = args.tail
-    if rhsTypes.nonEmpty && rhsTypes.distinct.size == 1 then rhsTypes.head
-    else Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(ft) => ft
-      case _ => ScalarType("", "scala.Any")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.isEmpty then
@@ -140,30 +122,6 @@ object CIndexFn extends CompileFn:
       case lt: ListType => true
       case mt: MapType => true
       case _ => false
-
-  /** Result type rules:
-   *   - List[T]                [i:Int] -> T
-   *   - Optional List[T]       [i:Int] -> Optional T
-   *   - Map[K,V]               [k:K]   -> Optional V
-   *   - Optional Map[K,V]      [k:K]   -> Optional V (optional propagated)
-   */
-  override def resultType(recv: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType =
-    recv.ftype match
-      // List[T]            [i:Int] -> T
-      case lt: ListType if !lt.isOptional =>
-        lt.elementType
-
-      // Optional List[T]   [i:Int] -> Optional T  (propagate optionality from the list)
-      case lt: ListType /* lt.isOptional == true */ =>
-        lt.elementType.cloneWithOptional(true)
-
-      // Map[K,V]           [k:K]   -> Optional V
-      case mt: MapType =>
-        mt.valueType.cloneWithOptional(true)
-
-      case _ =>
-        // Defensive; accepts() should have rejected
-        ScalarType("", "scala.Any")
 
   override def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, IndexFn] =
     args.headOption match

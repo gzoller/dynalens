@@ -4,7 +4,6 @@ package cfn
 
 
 import fn.*
-import util.*
 
 
 /**
@@ -23,7 +22,7 @@ trait ComparisonCFn extends CompileFn:
     println(s"[DEBUG] isComparableType called with ft=${ft.typeName}")
     ft match
       case ScalarType(_, t, _) =>
-        val norm = RuntimeUtil.normalizeNumeric(t)
+        val norm = Utility.normalizeNumeric(t)
         println(s"[DEBUG] normalized type: $norm")
         val result = Set(
           "scala.Byte",
@@ -58,8 +57,8 @@ trait ComparisonCFn extends CompileFn:
 
   /** Ensure two FieldTypes are mutually comparable: either both numeric or exactly the same comparable type */
   protected def ensureComparableTypes(ft1: FieldType, ft2: FieldType)(using ctx: ExprContext): Either[DLCompileError, Unit] =
-    val norm1 = RuntimeUtil.normalizeNumeric(ft1.typeName)
-    val norm2 = RuntimeUtil.normalizeNumeric(ft2.typeName)
+    val norm1 = Utility.normalizeNumeric(ft1.typeName)
+    val norm2 = Utility.normalizeNumeric(ft2.typeName)
     println(s"[DEBUG] ensureComparableTypes called with ft1=${ft1.typeName}, ft2=${ft2.typeName}")
     println(s"[DEBUG] normalized to norm1=$norm1, norm2=$norm2")
     val numericTypes = Set(
@@ -96,9 +95,6 @@ trait ComparisonCFn extends CompileFn:
       case _ =>
         println(s"[DEBUG] accepts -> rhsType unknown (cannot resolve)")
         false
-
-  override def resultType(recv: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType =
-    ScalarType("", "scala.Boolean")
 
   override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
     val recvFTOpt = Utility.rhsType(fn.recv)

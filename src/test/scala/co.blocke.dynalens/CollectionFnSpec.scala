@@ -138,7 +138,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
 
     test("MapFn: scalar receiver should fail") {
       val ctx = buildCtx("root", 10)
-      val pred = AddFn(GetFn("this", false, RootFn, "pos"), List(ConstantFn(1)), "pos")
+      val pred = AddFn(GetFn("this", false, RootFn, "pos"), ConstantFn(1), ScalarType("", "scala.Int", false), "pos")
       val fn   = MapFn(GetFn("root", false, RootFn, "pos"), pred, "pos")
       for result <- fn.resolve(ctx).either
       yield assertTrue(result.isLeft)
@@ -146,7 +146,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
 
     test("MapFn: string receiver should fail") {
       val ctx = buildCtx("root", "nope")
-      val pred = AddFn(GetFn("this", false, RootFn, "pos"), List(ConstantFn(1)), "pos")
+      val pred = AddFn(GetFn("this", false, RootFn, "pos"), ConstantFn(1), ScalarType("", "scala.Int", false), "pos")
       val fn   = MapFn(GetFn("root", false, RootFn, "pos"), pred, "pos")
       for result <- fn.resolve(ctx).either
       yield assertTrue(result.isLeft)
@@ -274,7 +274,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
      *───────────────────────────*/
     test("MapFn: list → list via scalar predicate") {
       val ctx = buildCtx("root", List(1, 2))
-      val pred = AddFn(GetFn("this", false, RootFn, "pos"), List(ConstantFn(1)), "pos")
+      val pred = AddFn(GetFn("this", false, RootFn, "pos"), ConstantFn(1), ScalarType("", "scala.Int", false), "pos")
       val fn   = MapFn(GetFn("root", false, RootFn, "pos"), pred, "pos")
 
       for (v, _) <- fn.resolve(ctx)
@@ -288,7 +288,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
       val ctx = buildCtx("root", List(1, 2))
       val pred = Tuple2Fn(
         GetFn("this", false, RootFn, "pos"),
-        List(AddFn(GetFn("this", false, RootFn, "pos"), List(ConstantFn(1)), "pos")),
+        AddFn(GetFn("this", false, RootFn, "pos"), ConstantFn(1), ScalarType("", "scala.Int", false), "pos"),
         "pos"
       )
       val fn = MapFn(GetFn("root", false, RootFn, "pos"), pred, "pos")
@@ -302,7 +302,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
      *───────────────────────────*/
     test("MapFn: map → list via scalar predicate on value") {
       val ctx = buildCtx("root", Map("a" -> 1, "b" -> 2))
-      val pred = AddFn(GetFn("this_value", false, NoOpFn, "pos"), List(ConstantFn(1)), "pos")
+      val pred = AddFn(GetFn("this_value", false, NoOpFn, "pos"), ConstantFn(1), ScalarType("", "scala.Int", false), "pos")
       val fn   = MapFn(GetFn("root", false, RootFn, "pos"), pred, "pos")
 
       for (v, _) <- fn.resolve(ctx)
@@ -317,7 +317,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
       val ctx = buildCtx("root", Map("a" -> 1, "b" -> 2))
       val pred = Tuple2Fn(
         GetFn("this_key", false, RootFn, "pos"),
-        List(AddFn(GetFn("this_value", false, RootFn, "pos"), List(ConstantFn(10)), "pos")),
+        AddFn(GetFn("this_value", false, RootFn, "pos"), ConstantFn(10), ScalarType("", "scala.Int", false), "pos"),
         "pos"
       )
       val fn = MapFn(GetFn("root", false, RootFn, "pos"), pred, "pos")
@@ -333,7 +333,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
       val ctx = buildOptListCtx("root", None)
       val pred = Tuple2Fn(
         GetFn("this", false, RootFn, "pos"),
-        List(AddFn(GetFn("this", false, RootFn, "pos"), List(ConstantFn(1)), "pos")),
+        AddFn(GetFn("this", false, RootFn, "pos"), ConstantFn(1), ScalarType("", "scala.Int", false), "pos"),
         "pos"
       )
       val fn = MapFn(GetFn("root", true, RootFn, "pos"), pred, "pos")
@@ -347,7 +347,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
      *───────────────────────────*/
     test("MapFn: Option[Map] (None) → scalar → List ⇒ value Nil (lens optional)") {
       val ctx = buildOptMapCtx("root", None)
-      val pred = AddFn(GetFn("this_value", false, RootFn, "pos"), List(ConstantFn(1)), "pos")
+      val pred = AddFn(GetFn("this_value", false, RootFn, "pos"), ConstantFn(1), ScalarType("", "scala.Int", false), "pos")
       val fn   = MapFn(GetFn("root", true, RootFn, "pos"), pred, "pos")
 
       for (v, l) <- fn.resolve(ctx)
@@ -360,7 +360,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
     test("MapFn: map[F] → list via field access this_value.a") {
       val data = Map("a" -> Foo(1, "x"), "b" -> Foo(2, "y"))
       val ctx = buildFooMapCtx("root", data)
-      val pred = AddFn(GetFn("this_value.a", false, RootFn, "pos"), List(ConstantFn(5)), "pos")
+      val pred = AddFn(GetFn("this_value.a", false, RootFn, "pos"), ConstantFn(5), ScalarType("", "scala.Int", false), "pos")
       val fn = MapFn(GetFn("root", false, RootFn, "pos"), pred, "pos")
 
       for (v, _) <- fn.resolve(ctx)
@@ -372,7 +372,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
       val ctx = buildFooMapCtx("root", data)
       val pred = Tuple2Fn(
         LenFn(GetFn("this_key", false, RootFn, "pos"), "pos").asInstanceOf[Fn[Any]],
-        List(AddFn(GetFn("this_value.a", false, RootFn, "pos"), List(ConstantFn(10)), "pos")),
+        AddFn(GetFn("this_value.a", false, RootFn, "pos"), ConstantFn(10), ScalarType("", "scala.Int", false), "pos"),
         "pos"
       )
       val fn = MapFn(GetFn("root", false, RootFn, "pos"), pred, "pos")
@@ -384,7 +384,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
     test("MapFn: list[F] → list via field this.a") {
       val data = List(Foo(1,"x"), Foo(2,"y"))
       val ctx = buildFooListCtx("root", data)
-      val pred = AddFn(GetFn("this.a", false, RootFn, "pos"), List(ConstantFn(3)), "pos")
+      val pred = AddFn(GetFn("this.a", false, RootFn, "pos"), ConstantFn(3), ScalarType("", "scala.Int", false), "pos")
       val fn = MapFn(GetFn("root", false, RootFn, "pos"), pred, "pos")
 
       for (v, _) <- fn.resolve(ctx)
@@ -396,7 +396,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
       val ctx = buildFooListCtx("root", data)
       val pred = Tuple2Fn(
         GetFn("this.a", false, RootFn, "pos"),
-        List(GetFn("this.b", false, RootFn, "pos")),
+        GetFn("this.b", false, RootFn, "pos"),
         "pos"
       )
       val fn = MapFn(GetFn("root", false, RootFn, "pos"), pred, "pos")
@@ -408,7 +408,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
     test("MapFn: Option[Map[K,F]] Some → map transform preserves optional lens") {
       val dataOpt = Some(Map("a" -> Foo(1,"x")))
       val ctx = buildOptFooMapCtx("root", dataOpt)
-      val pred = AddFn(GetFn("this_value.a", false, RootFn, "pos"), List(ConstantFn(10)), "pos")
+      val pred = AddFn(GetFn("this_value.a", false, RootFn, "pos"), ConstantFn(10), ScalarType("", "scala.Int", false), "pos")
       val fn = MapFn(GetFn("root", true, RootFn, "pos"), pred, "pos")
 
       for (v, l) <- fn.resolve(ctx)
@@ -417,7 +417,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
 
     test("MapFn: Option[Map[K,F]] None → Nil, lens optional") {
       val ctx = buildOptFooMapCtx("root", None)
-      val pred = AddFn(GetFn("this_value.a", false, RootFn, "pos"), List(ConstantFn(10)), "pos")
+      val pred = AddFn(GetFn("this_value.a", false, RootFn, "pos"), ConstantFn(10), ScalarType("", "scala.Int", false), "pos")
       val fn = MapFn(GetFn("root", true, RootFn, "pos"), pred, "pos")
 
       for (v, l) <- fn.resolve(ctx)
@@ -427,7 +427,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
     test("MapFn: Option[List[F]] Some → list transform preserves optional lens") {
       val dataOpt = Some(List(Foo(1,"z")))
       val ctx = buildOptFooListCtx("root", dataOpt)
-      val pred = AddFn(GetFn("this.a", false, RootFn, "pos"), List(ConstantFn(5)), "pos")
+      val pred = AddFn(GetFn("this.a", false, RootFn, "pos"), ConstantFn(5), ScalarType("", "scala.Int", false), "pos")
       val fn = MapFn(GetFn("root", true, RootFn, "pos"), pred, "pos")
 
       for (v, l) <- fn.resolve(ctx)
@@ -436,7 +436,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
 
     test("MapFn: Option[List[F]] None → Nil, lens optional") {
       val ctx = buildOptFooListCtx("root", None)
-      val pred = AddFn(GetFn("this.a", false, RootFn, "pos"), List(ConstantFn(3)), "pos")
+      val pred = AddFn(GetFn("this.a", false, RootFn, "pos"), ConstantFn(3), ScalarType("", "scala.Int", false), "pos")
       val fn = MapFn(GetFn("root", true, RootFn, "pos"), pred, "pos")
 
       for (v, l) <- fn.resolve(ctx)
@@ -446,7 +446,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
     test("MapFn should NOT attempt ClassLens upgrade for primitive list elements") {
       val data = List(1, 2, 3)
       val ctx = buildCtx("root", data)
-      val pred = AddFn(GetFn("this", false, RootFn, "pos"), List(ConstantFn(1)), "pos")
+      val pred = AddFn(GetFn("this", false, RootFn, "pos"), ConstantFn(1), ScalarType("", "scala.Int", false), "pos")
       val fn = MapFn(GetFn("root", false, RootFn, "pos"), pred, "pos")
 
       for (v, l) <- fn.resolve(ctx)
@@ -461,7 +461,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
       val ctx  = buildCtx("root", data)
       val recv = GetFn("root", false, RootFn, "pos")
       val len  = LenFn(GetFn("this", false, RootFn, "(this)"), "(len)")
-      val pred = Tuple2Fn(len.asInstanceOf[Fn[Any]], List(ConstantFn(1)), "(tuple)")
+      val pred = Tuple2Fn(len.asInstanceOf[Fn[Any]], ConstantFn(1), "(tuple)")
       val m    = MapFn(recv, pred, "(=>)")
 
       for (out, _) <- m.resolve(ctx)
@@ -472,7 +472,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
       val data = List(1,2,3)
       val ctx  = buildCtx("root", data)
       val recv = GetFn("root", false, RootFn, "pos")
-      val pred = AddFn(GetFn("this", false, RootFn, "(this)"), List(ConstantFn(10)), "(+)")
+      val pred = AddFn(GetFn("this", false, RootFn, "(this)"), ConstantFn(10), ScalarType("", "scala.Int", false), "(+)")
       val m    = MapFn(recv, pred, "(=>)")
 
       for (out, _) <- m.resolve(ctx)
@@ -484,8 +484,8 @@ object CollectionFnSpec extends ZIOSpecDefault {
       val ctx  = buildFooMapCtx("root", data)
       val recv = GetFn("root", false, RootFn, "pos")
       val newKey = LenFn(GetFn("this_key", false, RootFn, "(this_key)"), "(len)")
-      val newVal = AddFn(GetFn("this_value.a", false, RootFn, "(this_value.a)"), List(ConstantFn(10)), "a")
-      val pred   = Tuple2Fn(newKey.asInstanceOf[Fn[Any]], List(newVal), "(tuple)")
+      val newVal = AddFn(GetFn("this_value.a", false, RootFn, "(this_value.a)"), ConstantFn(10), ScalarType("", "scala.Int", false), "a")
+      val pred   = Tuple2Fn(newKey.asInstanceOf[Fn[Any]], newVal, "(tuple)")
       val m      = MapFn(recv, pred, "(=>)")
 
       for (out, _) <- m.resolve(ctx)
@@ -509,7 +509,7 @@ object CollectionFnSpec extends ZIOSpecDefault {
       val ctx = buildCtx("root", dataNone)
       val recvNone = GetFn("root", true, RootFn, "pos")
 
-      val tuplePred = Tuple2Fn(ConstantFn(1), List(ConstantFn(2)), "(tuple)")
+      val tuplePred = Tuple2Fn(ConstantFn(1), ConstantFn(2), "(tuple)")
       val m1 = MapFn(recvNone, tuplePred, "(=>)")
 
       for (out1, _) <- m1.resolve(ctx)

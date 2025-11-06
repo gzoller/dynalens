@@ -256,7 +256,7 @@ case class ConstantFn[R](out: R) extends Fn[R]:
     ZIO.succeed((out, ScalarLens("<const>", false, None)))
 
 
-case class Tuple2Fn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
+case class Tuple2Fn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends BinaryFn[Any]:
 
   override val methodName: String = "<tuple2>"
@@ -267,13 +267,13 @@ case class Tuple2Fn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     kids match
       case r :: a :: Nil =>
-        copy(recv = r.asInstanceOf[Fn[Any]], args = List(a.asInstanceOf[Fn[Any]]))
+        copy(recv = r.asInstanceOf[Fn[Any]], arg = a.asInstanceOf[Fn[Any]])
       case _ => this
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, ((Any, Any), Lens)] =
     for
       (a, aLens) <- recv.resolve(ctx)
-      (b, _)     <- args.head.resolve(ctx)
+      (b, _)     <- arg.resolve(ctx)
     yield ((a, b), aLens)
 
 

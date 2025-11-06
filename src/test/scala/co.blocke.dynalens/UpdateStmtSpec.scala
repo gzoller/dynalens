@@ -263,7 +263,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
         "items[1].qty",
         AddFn(
           GetFn("this.items[1].qty", false, RootFn, "<pos>"),
-          List(ConstantFn(10)),
+          ConstantFn(10),
+          ScalarType("", "scala.Int", false),
           "<pos>"
         ),
         "<pos>",

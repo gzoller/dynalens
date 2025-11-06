@@ -28,7 +28,7 @@ case class IfFn[T](condition: BooleanFn, ifTrue: Fn[T], ifFalse: Fn[T], posStr: 
 
 
 /** AND */
-case class AndFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
+case class AndFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends BinaryFn[Boolean]
     with BooleanFn:
 
@@ -39,7 +39,7 @@ case class AndFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
     kids match
       // recv + args list of 1 element
       case r :: a :: Nil =>
-        copy(recv = r.asInstanceOf[Fn[Any]], args = List(a.asInstanceOf[Fn[Any]]))
+        copy(recv = r.asInstanceOf[Fn[Any]], arg = a.asInstanceOf[Fn[Any]])
       case _ =>
         this
 
@@ -53,7 +53,7 @@ case class AndFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
         if !lvBool then ZIO.succeed((false, lLens)) // short-circuit
         else
           for
-            (rv, _) <- args.head.resolve(ctx)
+            (rv, _) <- arg.resolve(ctx)
             rvBool <- rv match
               case b: Boolean => ZIO.succeed(b)
               case other => ZIO.fail(DynaLensError(posStr, s"Right side not Boolean: ${other.getClass.getSimpleName}"))
@@ -62,7 +62,7 @@ case class AndFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
 
 
 /** OR */
-case class OrFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
+case class OrFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends BinaryFn[Boolean]
     with BooleanFn:
 
@@ -73,7 +73,7 @@ case class OrFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
     kids match
       // recv + args list of 1 element
       case r :: a :: Nil =>
-        copy(recv = r.asInstanceOf[Fn[Any]], args = List(a.asInstanceOf[Fn[Any]]))
+        copy(recv = r.asInstanceOf[Fn[Any]], arg = a.asInstanceOf[Fn[Any]])
       case _ =>
         this
 
@@ -87,7 +87,7 @@ case class OrFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
         if lvBool then ZIO.succeed((true, lLens)) // short-circuit
         else
           for
-            (rv, _) <- args.head.resolve(ctx)
+            (rv, _) <- arg.resolve(ctx)
             rvBool <- rv match
               case b: Boolean => ZIO.succeed(b)
               case other => ZIO.fail(DynaLensError(posStr, s"Right side not Boolean: ${other.getClass.getSimpleName}"))
@@ -142,16 +142,15 @@ case class IsDefinedFn(recv: Fn[Any], posStr: String)
 
 
 /** STARTSWITH */
-case class StartsWithFn(recv: Fn[Any], other: Fn[Any], posStr: String)
+case class StartsWithFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends BinaryFn[Boolean]
     with BooleanFn {
   val resultType: FieldType = ScalarType("", "scala.Boolean", false)
-
-  override val args: List[Fn[Any]] = List(other)
+  
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
     for
       (sVal, lLens) <- recv.resolve(ctx)
-      (oVal, _) <- other.resolve(ctx)
+      (oVal, _) <- arg.resolve(ctx)
       result <- ZIO.attempt {
         (Option(sVal).map(_.toString).getOrElse(""))
           .startsWith(Option(oVal).map(_.toString).getOrElse(""))
@@ -159,21 +158,20 @@ case class StartsWithFn(recv: Fn[Any], other: Fn[Any], posStr: String)
     yield (result, lLens)
 
   def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
-    copy(recv = kids.head.asInstanceOf[Fn[Any]], other = kids(1).asInstanceOf[Fn[Any]])
+    copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 }
 
 
 /** ENDSWITH */
-case class EndsWithFn(recv: Fn[Any], other: Fn[Any], posStr: String)
+case class EndsWithFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends BinaryFn[Boolean]
     with BooleanFn {
   val resultType: FieldType = ScalarType("", "scala.Boolean", false)
 
-  override val args: List[Fn[Any]] = List(other)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
     for
       (sVal, lLens) <- recv.resolve(ctx)
-      (oVal, _) <- other.resolve(ctx)
+      (oVal, _) <- arg.resolve(ctx)
       result <- ZIO.attempt {
         (Option(sVal).map(_.toString).getOrElse(""))
           .endsWith(Option(oVal).map(_.toString).getOrElse(""))
@@ -181,11 +179,11 @@ case class EndsWithFn(recv: Fn[Any], other: Fn[Any], posStr: String)
     yield (result, lLens)
 
   def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
-    copy(recv = kids.head.asInstanceOf[Fn[Any]], other = kids(1).asInstanceOf[Fn[Any]])
+    copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 }
 
 /** CONTAINS */
-case class ContainsFn(recv: Fn[Any], other: Fn[Any], posStr: String)
+case class ContainsFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends Fn[Boolean]
     with BinaryFn[Boolean]
     with BooleanFn {
@@ -193,15 +191,14 @@ case class ContainsFn(recv: Fn[Any], other: Fn[Any], posStr: String)
 
   import ContainsFn._
 
-  override val args: List[Fn[Any]] = List(other)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
     for
       (hay, lens) <- recv.resolve(ctx)
-      result <- containsDynamic(hay, other, ctx, posStr, lens)
+      result <- containsDynamic(hay, arg, ctx, posStr, lens)
     yield result
 
   def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
-    copy(recv = kids.head.asInstanceOf[Fn[Any]], other = kids(1).asInstanceOf[Fn[Any]])
+    copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 }
 
 object ContainsFn {
@@ -284,16 +281,15 @@ object ContainsFn {
 
 
 /** EQUALSIGNORECASE */
-case class EqualsIgnoreCaseFn(recv: Fn[Any], other: Fn[Any], posStr: String)
+case class EqualsIgnoreCaseFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends BinaryFn[Boolean]
     with BooleanFn {
   val resultType: FieldType = ScalarType("", "scala.Boolean", false)
 
-  override val args: List[Fn[Any]] = List(other)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
     for
       (rVal, lLens) <- recv.resolve(ctx)
-      (oVal, _) <- other.resolve(ctx)
+      (oVal, _) <- arg.resolve(ctx)
       result <- ZIO.attempt {
         (Option(rVal).map(_.toString).getOrElse(""))
           .equalsIgnoreCase(Option(oVal).map(_.toString).getOrElse(""))
@@ -301,21 +297,20 @@ case class EqualsIgnoreCaseFn(recv: Fn[Any], other: Fn[Any], posStr: String)
     yield (result, lLens)
 
   def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
-    copy(recv = kids.head.asInstanceOf[Fn[Any]], other = kids(1).asInstanceOf[Fn[Any]])
+    copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 }
 
 
 /** MATCHESREGEX */
-case class MatchesRegexFn(recv: Fn[Any], other: Fn[Any], posStr: String)
+case class MatchesRegexFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends BinaryFn[Boolean]
     with BooleanFn {
 
-  override val args: List[Fn[Any]] = List(other)
   val resultType: FieldType = ScalarType("", "scala.Boolean", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
     for
       (sVal, lLens) <- recv.resolve(ctx)
-      (rVal, _) <- other.resolve(ctx)
+      (rVal, _) <- arg.resolve(ctx)
       result <- ZIO.attempt {
         val s = Option(sVal).map(_.toString).getOrElse("")
         val r = Option(rVal).map(_.toString).getOrElse("")
@@ -324,5 +319,5 @@ case class MatchesRegexFn(recv: Fn[Any], other: Fn[Any], posStr: String)
     yield (result, lLens)
 
   def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
-    copy(recv = kids.head.asInstanceOf[Fn[Any]], other = kids(1).asInstanceOf[Fn[Any]])
+    copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 }

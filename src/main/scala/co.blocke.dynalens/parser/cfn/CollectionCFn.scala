@@ -15,27 +15,6 @@ object CConsFn extends CompileFn:
       case TypeResult.Known(ft: ListType) if ft.isOptional => true
       case _ => false
 
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(listType: ListType) =>
-        val isOpt = listType.isOptional
-        (args.headOption, args.lift(1)) match
-          case (Some(elem: ScalarType), Some(ListType(_, e, container, _))) =>
-            val outElem = if e.typeName == "scala.Any" then elem else e
-            ListType("", outElem, container, isOpt)
-          case (Some(ListType(_, e1, c1, _)), Some(ListType(_, e2, c2, _))) =>
-            val outElem =
-              if e1.typeName == "scala.Any" then e2
-              else if e2.typeName == "scala.Any" then e1
-              else e2
-            ListType("", outElem, c2, isOpt)
-          case (Some(_: ScalarType), Some(_: ScalarType)) =>
-            ListType("", ScalarType("", "scala.Any"), "scala.collection.immutable.List", isOpt)
-          case _ =>
-            ListType("", ScalarType("", "scala.Any"), "scala.collection.immutable.List", isOpt)
-      case _ =>
-        ListType("", ScalarType("", "scala.Any"), "scala.collection.immutable.List", false)
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     (args.headOption, args.lift(1)) match
       case (Some(left), Some(right)) =>
@@ -52,7 +31,7 @@ object CConsFn extends CompileFn:
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
       case c: ConsFn =>
-        (Utility.rhsType(c.left)(using ctx), Utility.rhsType(c.right)(using ctx)) match
+        (Utility.rhsType(c.recv)(using ctx), Utility.rhsType(c.arg)(using ctx)) match
           case (TypeResult.Known(elem: ScalarType), TypeResult.Known(ListType(_, e, _, _))) =>
             if e.typeName == "scala.Any" || e.typeName == elem.typeName then Right(())
             else Left(DLCompileError(ctx.posStr, s":: requires matching element/list types, found ${elem.typeName} and List[${e.typeName}]"))
@@ -83,12 +62,6 @@ object CKeysFn extends CompileFn:
       case TypeResult.Known(ft: FieldType) if ft.isOptional && ft.isInstanceOf[MapType] => true
       case _ => false
 
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(mapType: MapType) =>
-        ListType("", mapType.keyType, "scala.collection.immutable.List", mapType.isOptional)
-      case _ => ScalarType("", "scala.Any")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "keys() takes no arguments"))
     else Right(KeysFn(recv.fn, ctx.posStr).asInstanceOf[Fn[Any]])
@@ -116,13 +89,6 @@ object CValuesFn extends CompileFn:
       case TypeResult.Known(ft: FieldType) if ft.isOptional && ft.isInstanceOf[MapType] => true
       case _ => false
 
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(mapType: MapType) =>
-        ListType("", mapType.valueType, "scala.collection.immutable.List", mapType.isOptional)
-      case _ =>
-        ScalarType("", "scala.Any")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "values() takes no arguments"))
     else Right(ValuesFn(recv.fn, ctx.posStr).asInstanceOf[Fn[Any]])
@@ -149,13 +115,6 @@ object CFilterFn extends CompileFn:
     Utility.rhsType(receiver.fn)(using ctx) match
       case TypeResult.Known(ft: ListType) => true
       case _ => false
-
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(listType: ListType) =>
-        ListType("", listType.elementType, listType.typeName, listType.isOptional)
-      case _ =>
-        ScalarType("", "scala.Any")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args.headOption.toRight(DLCompileError(ctx.posStr, "filter() requires a predicate")).flatMap { rawPred =>
@@ -199,7 +158,7 @@ object CFilterFn extends CompileFn:
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
       case f: FilterFn =>
-        Utility.rhsType(f.other)(using ctx) match
+        Utility.rhsType(f.arg)(using ctx) match
           case TypeResult.Known(ft) if ft.typeName == "scala.Boolean" => Right(())
           case TypeResult.Known(ft) => Left(DLCompileError(ctx.posStr, s"filter() requires boolean predicate, got ${ft.typeName}"))
           case TypeResult.Error(e) => Left(e)
@@ -219,13 +178,6 @@ object CSortAscFn extends CompileFn:
     Utility.rhsType(receiver.fn)(using ctx) match
       case TypeResult.Known(ft: ListType) => true
       case _ => false
-
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(listType: ListType) =>
-        ListType("", listType.elementType, listType.typeName, listType.isOptional)
-      case _ =>
-        ScalarType("", "scala.Any")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args match
@@ -262,13 +214,6 @@ object CSortDescFn extends CompileFn:
       case TypeResult.Known(ft: ListType) => true
       case _ => false
 
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(listType: ListType) =>
-        ListType("", listType.elementType, listType.typeName, listType.isOptional)
-      case _ =>
-        ScalarType("", "scala.Any")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args match
       case Nil => Right(SortDescFn(recv.fn, None, ctx.posStr).asInstanceOf[Fn[Any]])
@@ -303,13 +248,6 @@ object CDistinctFn extends CompileFn:
       case TypeResult.Known(ft: ListType) => true
       case _ => false
 
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(listType: ListType) =>
-        ListType("", listType.elementType, listType.typeName, listType.isOptional)
-      case _ =>
-        ScalarType("", "scala.Any")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args match
       case Nil => Right(DistinctFn(recv.fn, None, ctx.posStr).asInstanceOf[Fn[Any]])
@@ -339,13 +277,6 @@ object CLimitFn extends CompileFn:
     Utility.rhsType(receiver.fn)(using ctx) match
       case TypeResult.Known(ft: ListType) => true
       case _ => false
-
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(listType: ListType) =>
-        ListType("", listType.elementType, listType.typeName, listType.isOptional)
-      case _ =>
-        ScalarType("", "scala.Any")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args match
@@ -381,13 +312,6 @@ object CReverseFn extends CompileFn:
       case TypeResult.Known(ft: ListType) => true
       case _ => false
 
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(listType: ListType) =>
-        ListType("", listType.elementType, listType.typeName, listType.isOptional)
-      case _ =>
-        ScalarType("", "scala.Any")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "reverse() takes no arguments"))
     else Right(ReverseFn(recv.fn, ctx.posStr).asInstanceOf[Fn[Any]])
@@ -415,22 +339,6 @@ object CCleanFn extends CompileFn:
     Utility.rhsType(receiver.fn)(using ctx) match
       case TypeResult.Known(ft: ListType) => true
       case _ => false
-
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(listType: ListType) if listType.elementType.isOptional =>
-        val elem = listType.elementType
-        val cleanedElem = elem match
-          case ft: FieldType if ft.isOptional => ft match
-            case lt: ListType => lt
-            case mt: MapType => mt
-            case st: ScalarType => st
-            case ct: ClassType => ct
-            case _ => ScalarType("", "scala.Any")
-          case _ => elem
-        ListType("", cleanedElem, listType.typeName, listType.isOptional)
-      case TypeResult.Known(ft) => ft
-      case _ => ScalarType("", "scala.Any")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "clean() takes no arguments"))
@@ -465,13 +373,6 @@ object CLenFn extends CompileFn:
       case TypeResult.Known(ft) => acceptsField(ft)
       case _ => false
 
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(ft: FieldType) if ft.isOptional =>
-        ScalarType("", "scala.Int").copy(isOptional = true)
-      case _ =>
-        ScalarType("", "scala.Int")
-
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "len() takes no arguments"))
     else Right(LenFn(recv.fn, ctx.posStr).asInstanceOf[Fn[Any]])
@@ -499,12 +400,6 @@ object CMapToFn extends CompileFn:
     Utility.rhsType(receiver.fn)(using ctx) match
       case TypeResult.Known(_: ScalarType) | TypeResult.Known(ListType(_, _: ScalarType, _, _)) => true
       case _ => false
-
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(ListType(_, _: ScalarType, coll, isOpt)) =>
-        ListType("", ScalarType("", "java.lang.String"), coll, isOpt)
-      case _ => ScalarType("", "java.lang.String")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args.headOption match
@@ -535,12 +430,6 @@ object CMapFromFn extends CompileFn:
     Utility.rhsType(receiver.fn)(using ctx) match
       case TypeResult.Known(_: ScalarType) | TypeResult.Known(ListType(_, _: ScalarType, _, _)) => true
       case _ => false
-
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    Utility.rhsType(receiver.fn)(using ctx) match
-      case TypeResult.Known(ListType(_, _: ScalarType, coll, isOpt)) =>
-        ListType("", ScalarType("", "java.lang.String"), coll, isOpt)
-      case _ => ScalarType("", "java.lang.String")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args.headOption match
@@ -576,24 +465,5 @@ object CMapFn extends CompileFn:
     args match
       case transform :: Nil => Right(MapFn(receiver.fn, transform, ctx.posStr))
       case _ => Left(DLCompileError(ctx.posStr, "map() requires exactly one transform argument"))
-
-  override def resultType(receiver: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    (Utility.rhsType(receiver.fn)(using ctx), args.headOption) match
-      // --- Map receiver ---
-      case (TypeResult.Known(mapType: MapType), Some(c: ClassType)) if c.typeName == "scala.Tuple2" && c.fields.size == 2 =>
-        val leftT  = c.fields.head
-        val rightT = c.fields(1)
-        MapType("", leftT, rightT, mapType.typeName, mapType.isOptional)
-
-      case (TypeResult.Known(mapType: MapType), Some(elem)) =>
-        ListType("", elem, "scala.collection.immutable.List", mapType.isOptional)
-
-      // --- List receiver ---
-      case (TypeResult.Known(listType: ListType), Some(elem)) =>
-        ListType("", elem, listType.typeName, listType.isOptional)
-
-      // --- Fallback ---
-      case _ =>
-        ScalarType("", "scala.Any")
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) = Right(())

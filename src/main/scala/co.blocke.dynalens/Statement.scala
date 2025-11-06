@@ -69,15 +69,9 @@ case class BlockStmt(statements: Seq[Statement]) extends Statement:
 
 case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String, updateFieldType: FieldType) extends Statement:
   // Coerce numeric RHS value to the expected field type (when both sides are numeric).
-  private def coerceNumericIfNeeded(rootLens: Lens, pathElems: List[PathElement], value: Any): Any =
+  private def coerceNumericIfNeeded(value: Any): Any =
     println(s"[coerceNumericIfNeeded] ENTER: value=${if value == null then "null" else value} (${if value == null then "null" else value.getClass.getName}) targetType=${updateFieldType.typeName}")
     try
-      val numericSet = Set(
-        "scala.Byte","scala.Short","scala.Int","scala.Long","scala.Float","scala.Double",
-        "scala.math.BigInt","scala.math.BigDecimal",
-        "java.lang.Byte","java.lang.Short","java.lang.Integer","java.lang.Long","java.lang.Float","java.lang.Double",
-        "int", "long", "float", "double", "byte", "short", "bigint", "bigdecimal"
-      )
       // Normalize type name and print debug info
       val rawType = updateFieldType.typeName
       val tn = rawType match {
@@ -94,7 +88,7 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String, updateFie
       println(s"[coerceNumericIfNeeded] normalized typename raw='$rawType' normalized='$tn'")
       val coerced =
         if value != null && numericSet.contains(tn) then
-          val result = co.blocke.dynalens.util.NumPromote.toType(value, tn)
+          val result = util.NumPromote.toType(value, tn)
           println(s"[coerceNumericIfNeeded] Converted: ${value.getClass.getSimpleName} -> ${result.getClass.getSimpleName}  value=$value  result=$result")
           result
         else
@@ -334,7 +328,7 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String, updateFie
       posStr: String,
       path: String
   ): ZIO[Any, DynaLensError, Any] =
-    val coerced = coerceNumericIfNeeded(rootLens, elements, newValue)
+    val coerced = coerceNumericIfNeeded(newValue)
     println(s"[performUpdate] coercing ${newValue} -> ${if coerced == null then "null" else coerced.getClass.getName}")
     ZIO
       .attempt(rootLens.update(

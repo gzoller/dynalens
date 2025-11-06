@@ -23,11 +23,6 @@ trait ArithmeticCFn extends CompileFn:
   override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     Validation.isNumericType(receiver.ftype)
 
-  /** Numeric promotion always via receiver + args. */
-  override def resultType(recv: Receiver, argTypes: List[FieldType])(using ctx: ExprContext): FieldType =
-    val typeNames = recv.ftype.typeName :: argTypes.map(_.typeName)
-    ScalarType("", RuntimeUtil.numericPromote(typeNames*))
-
   /** Phase 2 semantic verification. */
   override def validate(fn: Fn[?])(using ctx: ExprContext): Either[DLCompileError, Unit] =
     val recvFT = Utility.rhsType(fn.recv) match
@@ -58,27 +53,6 @@ object CPlusFn extends CompileFn:
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     receiver.ftype.isStringLike || Validation.isNumericType(receiver.ftype)
 
-  override def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    // Extra normalization: re-resolve receiver type if it's still scala.Any
-    var recvType = recv.ftype
-    if recvType.typeName == "scala.Any" then
-      Utility.rhsType(recv.fn) match
-        case TypeResult.Known(ft) =>
-          recvType = ft
-        case _ =>
-          ()
-    val argType: FieldType = args.headOption.getOrElse(ScalarType("", "scala.Any"))
-    // Use Utility helpers for numeric and string checks
-    if Utility.isNumeric(recvType.typeName) && Utility.isNumeric(argType.typeName) then
-      if Utility.isFloating(recvType.typeName) || Utility.isFloating(argType.typeName) then
-        ScalarType("", Utility.promoteGeneral(recvType.typeName, argType.typeName))
-      else
-        ScalarType("", Utility.promoteIntegral(recvType.typeName, argType.typeName))
-    else if Utility.isStringLike(recvType.typeName) || Utility.isStringLike(argType.typeName) then
-      ScalarType("", "java.lang.String")
-    else
-      ScalarType("", "java.lang.Object")
-
   override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, Fn[Any]] =
     args match
       case arg :: Nil =>
@@ -89,25 +63,19 @@ object CPlusFn extends CompileFn:
               println("[CPlusFn.build] Re-resolved receiver type via Utility.rhsType: " + ft)
               recvType = ft
             case _ =>
-              println("[CPlusFn.build] Receiver still unresolved; using scala.Any")
-              ()
+              () // or log a warning if you want visibility
         // prefer rhsType for correct inference on constants/expressions
         val argType: FieldType = Utility.rhsType(arg) match
           case TypeResult.Known(ft) =>
             println(s"[CPlusFn] argType inferred from Utility.rhsType → $ft")
             ft
           case _ =>
-            arg match
-              case f: Fn[?] =>
-                println(s"[CPlusFn] inferring argType from ${f.getClass.getSimpleName}.resultType → ${f.resultType}")
-                f.resultType
-              case _ =>
-                val resolved = ctx.resolveSchemaFor(arg)
-                println(s"[CPlusFn] fallback to ctx.resolveSchemaFor → $resolved (for $arg)")
-                resolved
+            println(s"[CPlusFn] inferring argType from ${arg.getClass.getSimpleName}.resultType → ${arg.resultType}")
+            arg.resultType
 
         if recvType.isNumeric && argType.isNumeric then
-          Right(AddFn(receiver.fn, args, ctx.posStr))
+          Utility.calcNumericResultType(ctx.posStr, recvType, argType, Utility.ArithOp.Add)
+            .map(rt => AddFn(receiver.fn, arg, rt, ctx.posStr))
         else if recvType.isStringLike || argType.isStringLike then
           Right(ConcatFn(receiver.fn, args, ctx.posStr).asInstanceOf[Fn[Any]])
         else
@@ -164,28 +132,16 @@ object CMinusFn extends CompileFn:
   def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     Validation.isNumericType(receiver.ftype)
 
-  override def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    args match
-      case Nil =>
-        ScalarType("", recv.ftype.typeName)
-      case _ =>
-        val recvType = recv.ftype
-        val argType = args.head
-        if Utility.isNumeric(recvType.typeName) && Utility.isNumeric(argType.typeName) then
-          if Utility.isFloating(recvType.typeName) || Utility.isFloating(argType.typeName) then
-            ScalarType("", Utility.promoteGeneral(recvType.typeName, argType.typeName))
-          else
-            ScalarType("", Utility.promoteIntegral(recvType.typeName, argType.typeName))
-        else
-          val names = recvType.typeName :: args.map(_.typeName)
-          ScalarType("", RuntimeUtil.numericPromote(names*))
-
   override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, Fn[Any]] =
     args match
       case Nil =>
         // Unary minus: just receiver
         println(s"CMinusFn.build (unary): receiver type = ${receiver.ftype}")
-        Right(NegateFn(receiver.fn, ctx.posStr).asInstanceOf[Fn[Any]])
+        Right(
+          NegateFn(
+            receiver.fn,
+            ctx.posStr
+          ).asInstanceOf[Fn[Any]])
       case arg :: Nil =>
         // Infer arg type using rhsType for consistency
         val recvType = receiver.ftype
@@ -193,8 +149,18 @@ object CMinusFn extends CompileFn:
           Utility.rhsType(arg) match
             case TypeResult.Known(ft) => ft
             case _ => ctx.resolveSchemaFor(arg)
+
         println(s"CMinusFn.build (binary): receiver type = $recvType, arg type = $argType")
-        Right(SubtractFn(receiver.fn, args, ctx.posStr).asInstanceOf[Fn[Any]])
+
+        Utility.calcNumericResultType(ctx.posStr, recvType, argType, Utility.ArithOp.Sub)
+          .map(rt =>
+            SubtractFn(
+              receiver.fn,
+              arg,
+              rt,
+              ctx.posStr
+            ).asInstanceOf[Fn[Any]]
+          )
       case _ =>
         Left(DLCompileError(ctx.posStr, "Operator '-' expects 0 or 1 argument(s)"))
 
@@ -236,29 +202,23 @@ object CMultiplyFn extends ArithmeticCFn:
     Validation.isNumericType(receiver.ftype)
   val name = "*"
 
-  override def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    val recvType = recv.ftype
-    val argType = args.headOption.getOrElse(ScalarType("", "scala.Any"))
-    if Utility.isNumeric(recvType.typeName) && Utility.isNumeric(argType.typeName) then
-      if Utility.isFloating(recvType.typeName) || Utility.isFloating(argType.typeName) then
-        ScalarType("", Utility.promoteGeneral(recvType.typeName, argType.typeName))
-      else
-        ScalarType("", Utility.promoteIntegral(recvType.typeName, argType.typeName))
-    else
-      ScalarType("", RuntimeUtil.numericPromote((recvType.typeName :: args.map(_.typeName))*))
-
   override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, MultiplyFn] =
-    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
-    else
-      val recvType = receiver.ftype
-      val argType: FieldType =
-        Utility.rhsType(args.head) match
-          case TypeResult.Known(ft) => ft
-          case _ => ctx.resolveSchemaFor(args.head)
-      if !recvType.isNumeric || !argType.isNumeric then
-        Left(DLCompileError(ctx.posStr, s"Operator '*' requires numeric operands, found ${recvType.typeName} and ${argType.typeName}"))
-      else
-        Right(MultiplyFn(receiver.fn, args, ctx.posStr))
+    println(s"[CMultiplyFn.build] recvType=${receiver.ftype}, argType=${args.head.resultType}")
+    args match
+      case arg :: Nil =>
+        val recvType = receiver.ftype
+        val argType: FieldType =
+          Utility.rhsType(args.head) match
+            case TypeResult.Known(ft) => ft
+            case _ => ctx.resolveSchemaFor(args.head)
+
+        if !recvType.isNumeric || !argType.isNumeric then
+          Left(DLCompileError(ctx.posStr, s"Operator '*' requires numeric operands, found ${recvType.typeName} and ${argType.typeName}"))
+        else
+          Utility.calcNumericResultType(ctx.posStr, recvType, argType, Utility.ArithOp.Mul)
+            .map(rt => MultiplyFn(receiver.fn, arg, rt, ctx.posStr))
+      case _ =>
+        Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
 
 
 /** ---------------------------------
@@ -270,30 +230,21 @@ object CDivideFn extends ArithmeticCFn:
     Validation.isNumericType(receiver.ftype)
   val name = "/"
 
-  override def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext): FieldType =
-    val recvType = recv.ftype
-    val argType = args.headOption.getOrElse(ScalarType("", "scala.Any"))
-    if Utility.isNumeric(recvType.typeName) && Utility.isNumeric(argType.typeName) then
-      val bothIntegral = Utility.isIntegral(recvType.typeName) && Utility.isIntegral(argType.typeName)
-      if bothIntegral then
-        ScalarType("", Utility.promoteIntegral(recvType.typeName, argType.typeName))
-      else
-        ScalarType("", Utility.promoteGeneral(recvType.typeName, argType.typeName))
-    else
-      ScalarType("", "java.lang.Object")
-
   override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, DivideFn] =
-    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
-    else
-      val recvType = receiver.ftype
-      val argType: FieldType =
-        Utility.rhsType(args.head) match
-          case TypeResult.Known(ft) => ft
-          case _ => ctx.resolveSchemaFor(args.head)
-      if !recvType.isNumeric || !argType.isNumeric then
-        Left(DLCompileError(ctx.posStr, s"Operator '/' requires numeric operands, found ${recvType.typeName} and ${argType.typeName}"))
-      else
-        Right(DivideFn(receiver.fn, args, ctx.posStr))
+    args match
+      case arg :: Nil =>
+        val recvType = receiver.ftype
+        val argType: FieldType =
+          Utility.rhsType(args.head) match
+            case TypeResult.Known(ft) => ft
+            case _ => ctx.resolveSchemaFor(args.head)
+        if !recvType.isNumeric || !argType.isNumeric then
+          Left(DLCompileError(ctx.posStr, s"Operator '/' requires numeric operands, found ${recvType.typeName} and ${argType.typeName}"))
+        else
+          Utility.calcNumericResultType(ctx.posStr, recvType, argType, Utility.ArithOp.Div)
+            .map(rt => DivideFn(receiver.fn, arg, rt, ctx.posStr))
+      case _ =>
+        Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
 
 
 /** ---------------------------------
@@ -302,17 +253,22 @@ object CDivideFn extends ArithmeticCFn:
  */
 object CModulusFn extends ArithmeticCFn:
   val name = "%"
-  override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, ModuloFn] =
-    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
-    else
-      val recvType = receiver.ftype
-      val argType: FieldType =
-        Utility.rhsType(args.head) match
-          case TypeResult.Known(ft) => ft
-          case _ => ctx.resolveSchemaFor(args.head)
-      if !recvType.isNumeric || !argType.isNumeric then
-        Left(DLCompileError(ctx.posStr, s"Operator '%' requires numeric operands, found ${recvType.typeName} and ${argType.typeName}"))
-      else
-        Right(ModuloFn(receiver.fn, args, ctx.posStr))
+
   override def accepts(receiver: Receiver)(using ctx: ExprContext): Boolean =
     Validation.isNumericType(receiver.ftype)
+
+  override def build(receiver: Receiver, args: List[Fn[Any]])(using ctx: ExprContext): Either[DLCompileError, ModuloFn] =
+    args match
+      case arg :: Nil =>
+        val recvType = receiver.ftype
+        val argType: FieldType =
+          Utility.rhsType(args.head) match
+            case TypeResult.Known(ft) => ft
+            case _ => ctx.resolveSchemaFor(args.head)
+        if !recvType.isNumeric || !argType.isNumeric then
+          Left(DLCompileError(ctx.posStr, s"Operator '%' requires numeric operands, found ${recvType.typeName} and ${argType.typeName}"))
+        else
+          Utility.calcNumericResultType(ctx.posStr, recvType, argType, Utility.ArithOp.Mod)
+            .map(rt => ModuloFn(receiver.fn, arg, rt, ctx.posStr))
+      case _ =>
+        Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))

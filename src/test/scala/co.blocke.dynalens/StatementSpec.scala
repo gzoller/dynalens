@@ -150,7 +150,7 @@ object StatementSpec extends ZIOSpecDefault:
       test("later statements see earlier results") {
         val block = BlockStmt(Seq(
           ValStmt("a", ConstantFn(5)),
-          ValStmt("sum", AddFn(G("a"), List(ConstantFn(7).asInstanceOf[Fn[Any]]), "here"))
+          ValStmt("sum", AddFn(G("a"), ConstantFn(7).asInstanceOf[Fn[Any]], ScalarType("", "scala.Int", false), "here"))
         ))
         for
           ctx2 <- block.resolve(baseCtx)

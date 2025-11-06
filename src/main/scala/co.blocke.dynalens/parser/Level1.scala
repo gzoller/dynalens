@@ -49,22 +49,6 @@ trait ValueExprModule {
 trait Level1 extends Level0 {
   self: ValueExprModule =>
 
-//  private def identS[$: P]: P[String] =
-//    P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep).!
-//
-//  private def identU[$: P]: P[Unit] =
-//    P(CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").rep)
-
-//  private def indexPart[$: P]: P[String] =
-//    P("[" ~ CharsWhileIn("0-9").! ~ "]").map(i => s"[$i]")
-
-//  private def segment[$: P]: P[String] =
-//    // ident + optional [index] / [] / {}
-//    P(identS.! ~ (indexPart).?).map {
-//      case (name, Some(suffix)) => s"$name$suffix"
-//      case (name, None) => s"$name"
-//    }
-
   private def segmentFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
     P(identifier.!).map { name =>
       Right(GetFn(name, Utility.isPathOptional(name, ctx), RootFn, ctx.posStr))

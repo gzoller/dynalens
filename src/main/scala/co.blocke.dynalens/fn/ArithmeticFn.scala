@@ -15,7 +15,7 @@ case class NegateFn(
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(kids.head.asInstanceOf[Fn[Any]])
 
-  override val resultType: FieldType = recv.resultType
+  val resultType: FieldType = recv.resultType
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for {
@@ -37,7 +37,8 @@ case class NegateFn(
 
 case class AddFn(
                   recv: Fn[Any],
-                  args: List[Fn[Any]],
+                  arg: Fn[Any],
+                  resultType: FieldType,
                   posStr: String
                 ) extends BinaryFn[Any]:
   override val methodName: String = "+"
@@ -45,23 +46,13 @@ case class AddFn(
   def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(
       kids(0).asInstanceOf[Fn[Any]],
-      List(kids(1).asInstanceOf[Fn[Any]])
+      kids(1).asInstanceOf[Fn[Any]]
     )
-
-  override val resultType: FieldType = {
-    val recvType = if recv.resultType.typeName == "scala.Any" then "scala.Int" else recv.resultType.typeName
-    val argType  = if args.head.resultType.typeName == "scala.Any" then "scala.Int" else args.head.resultType.typeName
-    ScalarType(
-      "",
-      RuntimeUtil.numericPromote(recvType, argType),
-      false
-    )
-  }
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for {
       (lv, lLens) <- recv.resolve(ctx)
-      (rv, _) <- args.head.resolve(ctx)
+      (rv, _) <- arg.resolve(ctx)
       result <- (lv, rv) match {
 
         // ----- Int / ... -----
@@ -116,7 +107,8 @@ case class AddFn(
 
 case class SubtractFn(
                        recv: Fn[Any],
-                       args: List[Fn[Any]],
+                       arg: Fn[Any],
+                       resultType: FieldType,
                        posStr: String
                      ) extends BinaryFn[Any]:
   override val methodName: String = "-"
@@ -124,23 +116,13 @@ case class SubtractFn(
   def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(
       kids(0).asInstanceOf[Fn[Any]],
-      List(kids(1).asInstanceOf[Fn[Any]])
+      kids(1).asInstanceOf[Fn[Any]]
     )
-
-  override val resultType: FieldType = {
-    val recvType = if recv.resultType.typeName == "scala.Any" then "scala.Int" else recv.resultType.typeName
-    val argType  = if args.head.resultType.typeName == "scala.Any" then "scala.Int" else args.head.resultType.typeName
-    ScalarType(
-      "",
-      RuntimeUtil.numericPromote(recvType, argType),
-      false
-    )
-  }
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for {
       (lv, lLens) <- recv.resolve(ctx)
-      (rv, _) <- args.head.resolve(ctx)
+      (rv, _) <- arg.resolve(ctx)
       result <- (lv, rv) match {
 
         // ----- Int / ... -----
@@ -197,7 +179,8 @@ case class SubtractFn(
 
 case class MultiplyFn(
                        recv: Fn[Any],
-                       args: List[Fn[Any]],
+                       arg: Fn[Any],
+                       resultType: FieldType,
                        posStr: String
                      ) extends BinaryFn[Any]:
   override val methodName: String = "*"
@@ -205,23 +188,13 @@ case class MultiplyFn(
   def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(
       kids(0).asInstanceOf[Fn[Any]],
-      List(kids(1).asInstanceOf[Fn[Any]])
+      kids(1).asInstanceOf[Fn[Any]]
     )
-
-  override val resultType: FieldType = {
-    val recvType = if recv.resultType.typeName == "scala.Any" then "scala.Int" else recv.resultType.typeName
-    val argType  = if args.head.resultType.typeName == "scala.Any" then "scala.Int" else args.head.resultType.typeName
-    ScalarType(
-      "",
-      RuntimeUtil.numericPromote(recvType, argType),
-      false
-    )
-  }
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for {
       (lv, lLens) <- recv.resolve(ctx)
-      (rv, _) <- args.head.resolve(ctx)
+      (rv, _) <- arg.resolve(ctx)
       result <- (lv, rv) match {
         // --- Int cases
         case (a: Int, b: Int)       => ZIO.succeed(a * b)
@@ -270,7 +243,8 @@ case class MultiplyFn(
 
 case class DivideFn(
                      recv: Fn[Any],
-                     args: List[Fn[Any]],
+                     arg: Fn[Any],
+                     resultType: FieldType,
                      posStr: String
                    ) extends BinaryFn[Any]:
   override val methodName: String = "/"
@@ -278,26 +252,13 @@ case class DivideFn(
   def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(
       kids(0).asInstanceOf[Fn[Any]],
-      List(kids(1).asInstanceOf[Fn[Any]])
+      kids(1).asInstanceOf[Fn[Any]]
     )
-
-  override val resultType: FieldType = {
-    val recvType = if recv.resultType.typeName == "scala.Any" then "scala.Int" else recv.resultType.typeName
-    val argType  = if args.head.resultType.typeName == "scala.Any" then "scala.Int" else args.head.resultType.typeName
-    ScalarType(
-      "",
-      RuntimeUtil.numericPromote(
-        RuntimeUtil.numericPromote(recvType, argType),
-        "scala.Double" // force widening to fractional
-      ),
-      false
-    )
-  }
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for {
       (lv, lLens) <- recv.resolve(ctx)
-      (rv, _) <- args.head.resolve(ctx)
+      (rv, _) <- arg.resolve(ctx)
       // Instrumentation: print operand types and values
       result <- (lv, rv) match {
         // --- Guard divide by zero for numeric types ---
@@ -362,7 +323,8 @@ case class DivideFn(
 
 case class ModuloFn(
                      recv: Fn[Any],
-                     args: List[Fn[Any]],
+                     arg: Fn[Any],
+                     resultType: FieldType,
                      posStr: String
                    ) extends BinaryFn[Any]:
   override val methodName: String = "%"
@@ -370,23 +332,13 @@ case class ModuloFn(
   def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(
       kids(0).asInstanceOf[Fn[Any]],
-      List(kids(1).asInstanceOf[Fn[Any]])
+      kids(1).asInstanceOf[Fn[Any]]
     )
-
-  override val resultType: FieldType = {
-    val recvType = if recv.resultType.typeName == "scala.Any" then "scala.Int" else recv.resultType.typeName
-    val argType  = if args.head.resultType.typeName == "scala.Any" then "scala.Int" else args.head.resultType.typeName
-    ScalarType(
-      "",
-      RuntimeUtil.numericPromote(recvType, argType),
-      false
-    )
-  }
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for {
       (lv, lLens) <- recv.resolve(ctx)
-      (rv, _) <- args.head.resolve(ctx)
+      (rv, _) <- arg.resolve(ctx)
       result <- (lv, rv) match {
         // --- Prevent divide/mod by zero ---
         case (_, 0 | 0L | 0f | 0d) =>
