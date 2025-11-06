@@ -10,6 +10,7 @@ case class TrimFn(recv: Fn[Any], posStr: String)
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
 
+  val resultType: FieldType = ScalarType("trim", "java.lang.String", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
     for
       (raw, rawLens) <- recv.resolve(ctx)
@@ -25,6 +26,7 @@ case class ToLowerFn(recv: Fn[Any], posStr: String)
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
 
+  val resultType: FieldType = ScalarType("toLower", "java.lang.String", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
     for
       (raw, rawLens) <- recv.resolve(ctx)
@@ -40,6 +42,7 @@ case class ToUpperFn(recv: Fn[Any], posStr: String)
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
 
+  val resultType: FieldType = ScalarType("toUpper", "java.lang.String", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
     for
       (raw, rawLens) <- recv.resolve(ctx)
@@ -58,6 +61,7 @@ case class InterpolateFn(
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
 
+  val resultType: FieldType = ScalarType("interpolate", "java.lang.String", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
     for
       (raw, rawLens) <- recv.resolve(ctx)
@@ -81,6 +85,7 @@ case class SubstringFn(
                       ) extends MethodFn[String]:
   override def args: List[Fn[Any]] = end.map(e => List(start, e)).getOrElse(List(start))
 
+  val resultType: FieldType = ScalarType("substring", "java.lang.String", false)
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
     kids match
       case r :: s :: e :: Nil => copy(recv = r.asInstanceOf[Fn[Any]], start = s.asInstanceOf[Fn[Any]], end = Some(e.asInstanceOf[Fn[Any]]), posStr = posStr)
@@ -134,6 +139,7 @@ case class ReplaceFn(
                     ) extends MethodFn[String]:
   override def args: List[Fn[Any]] = List(target, replacement)
 
+  val resultType: FieldType = ScalarType("replace", "java.lang.String", false)
   override def rebuild(kids: List[Fn[?]]): Fn[String] =
     kids match
       case r :: t :: rp :: Nil =>
@@ -177,6 +183,7 @@ case class ConcatFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
       case _ =>
         copy(args = Nil, posStr = posStr)
 
+  val resultType: FieldType = ScalarType("concat", "java.lang.String", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
     for
       (recvVal, recvLens) <- recv.resolve(ctx)

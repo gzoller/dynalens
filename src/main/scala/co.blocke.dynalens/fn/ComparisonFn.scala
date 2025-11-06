@@ -30,6 +30,7 @@ case class LessThanFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends Binar
 
   override val methodName = "<"
   override val args: List[Fn[Any]] = List(arg)
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 
@@ -47,6 +48,7 @@ case class GreaterThanFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends Bi
 
   override val methodName = ">"
   override val args: List[Fn[Any]] = List(arg)
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 
@@ -64,6 +66,7 @@ case class LessThanOrEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extend
 
   override val methodName = "<="
   override val args: List[Fn[Any]] = List(arg)
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 
@@ -81,6 +84,7 @@ case class GreaterThanOrEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) ext
 
   override val methodName = ">="
   override val args: List[Fn[Any]] = List(arg)
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 
@@ -98,6 +102,7 @@ case class EqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends BinaryFn
 
   override val methodName = "=="
   override val args: List[Fn[Any]] = List(arg)
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 
@@ -112,6 +117,7 @@ case class NotEqualFn(recv: Fn[Any], arg: Fn[Any], posStr: String) extends Binar
 
   override val methodName = "!="
   override val args: List[Fn[Any]] = List(arg)
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
 

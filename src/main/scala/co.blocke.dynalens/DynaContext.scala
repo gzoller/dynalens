@@ -109,3 +109,41 @@ final case class DynaContext(
       )
     }
 }
+
+
+object DynaContext:
+  def apply(target: Any, lens: DynaLens[?]): DynaContext =
+    DynaContext(
+      symbols = Map(
+        "top" -> (target, lens.topLens),
+        "this" -> (target, lens.topLens)
+      ),
+      dynaLens = lens
+    )
+
+  def empty(lens: DynaLens[?]): DynaContext =
+    DynaContext(Map.empty, lens)
+
+
+
+object CtxStrings:
+  /** Pretty-print ctx. Ephemeral keys (`this`, `name[]`) are hidden by default. */
+  def toStringCtx(ctx: DynaContext, includeEphemeral: Boolean = false): String = {
+    inline def isEphemeral(k: String): Boolean = k == "this" || k == "this_key" || k == "this_value"
+
+    // (key, valueOnly) sequence, filtered
+    val base: Seq[(String, Any)] =
+      ctx.symbols.iterator
+        .filterNot { case (k, _) => !includeEphemeral && isEphemeral(k) }
+        .map { case (k, (v, _)) => (k, v) }
+        .toSeq
+
+    // order: "top" first, then alpha
+    val ordered =
+      base.sortBy { case (k, _) => if k == "top" then "\u0000" else k }
+
+    // match your test snapshots: "key -> value.toString"
+    ordered
+      .map { case (k, v) => s"$k -> ${Option(v).fold("null")(_.toString)}" }
+      .mkString("", "\n", "\n")
+  }

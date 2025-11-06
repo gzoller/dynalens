@@ -35,6 +35,8 @@ dependencyOverrides ++= Seq(
   "org.scala-lang" %% "scala3-tasty-inspector" % "3.7.1"
 )
 
+ThisBuild / usePipelining := false
+
 //ThisBuild / version := "1.0.0-SNAPSHOT" // <-- Comment this line out for real releases!
 
 ThisBuild / name := "dynalens"

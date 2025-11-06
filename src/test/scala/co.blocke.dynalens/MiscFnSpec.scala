@@ -66,7 +66,7 @@ object MiscFnSpec extends ZIOSpecDefault:
     suite("BlockFn")(
       test("BlockFn executes statements and returns final Fn result") {
         val ctx = DynaContext(Map.empty, TestHelpers.emptyDL).bind("a", 1, ScalarLens("a", false, None))
-        val stmt = UpdateStmt("a", C(2), "pos")  // assume UpdateStmt exists and tested elsewhere
+        val stmt = UpdateStmt("a", C(2), "pos", ScalarType("", "scala.Int", false))  // assume UpdateStmt exists and tested elsewhere
         val block = BlockFn(Seq(stmt), G("a"), "pos")
         for exit <- block.resolve(ctx).exit
           yield assertTrue(exit == Exit.succeed((2, ScalarLens("a", false, None))))
@@ -80,7 +80,7 @@ object MiscFnSpec extends ZIOSpecDefault:
           ),
           dynalens
         )
-        val stmt1 = UpdateStmt("x", ConstantFn(20), "pos")
+        val stmt1 = UpdateStmt("x", ConstantFn(20), "pos", ScalarType("", "scala.Int", false))
         val block = BlockFn(Seq(stmt1), GetFn("x", false, RootFn, "pos"), "pos")
 
         for exit <- block.resolve(ctx).exit

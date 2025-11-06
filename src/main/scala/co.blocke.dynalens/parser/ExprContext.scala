@@ -1,8 +1,7 @@
 package co.blocke.dynalens
 package parser
 
-import co.blocke.dynalens.fn.GetFn
-import co.blocke.dynalens.fn.{RootFn, NoOpFn}
+import co.blocke.dynalens.fn.{GetFn, RootFn, NoOpFn}
 
 case class ExprContext(
                         scriptText: String,
@@ -21,18 +20,21 @@ case class ExprContext(
   def resolveSchemaFor(receiver: Fn[?]): FieldType =
     receiver match
       case RootFn | NoOpFn =>
-        schema
+        val res = this.receiver.map(_.ftype).getOrElse(schema)
+        res
 
       case g: GetFn =>
         val baseSchema =
-          if g.path.startsWith("this.") && this.receiver.nonEmpty then
+          if g.path.startsWith("this.") && this.receiver.nonEmpty then {
             this.receiver.get.ftype
-          else
-            symbols.iterator.flatMap(_.get(g.path)).toList.headOption.getOrElse(schema)
-
-        util.PathUtil
+          } else {
+            val fromSymbols = symbols.iterator.flatMap(_.get(g.path)).toList.headOption
+            fromSymbols.getOrElse(schema)
+          }
+        val finalType = util.PathUtil
           .getPathType(g.path, baseSchema)
           .getOrElse(ScalarType("", "scala.Any"))
+        finalType
 
       case _ =>
         schema
@@ -40,7 +42,8 @@ case class ExprContext(
   /** Add value bindings immutably. */
   def withVals(newVals: (String, FieldType)*): ExprContext =
     val updatedHead = symbols.headOption.getOrElse(Map.empty) ++ newVals
-    copy(symbols = updatedHead :: symbols.drop(1))
+    val tail = if symbols.nonEmpty then symbols.tail else Nil
+    copy(symbols = updatedHead :: tail)
 
   // For error messages
   val posStr: String = posStrFrom(pos)
@@ -54,19 +57,30 @@ case class ExprContext(
   def withReceiverFromPath(path: String): Either[DLCompileError, ExprContext] =
     val baseReceiver =
       if path.startsWith("this.") then
-        receiver.map(_.fn).getOrElse(co.blocke.dynalens.fn.RootFn)
+        receiver.map(_.fn).getOrElse(RootFn)
+      else if path == "this_key" then
+        receiver match
+          case Some(NamedReceiver(_, mapType: MapType, fn)) =>
+            GetFn(path, mapType.keyType.isOptional, fn, posStr)
+          case _ =>
+            RootFn
+      else if path == "this_value" then
+        receiver match
+          case Some(NamedReceiver(_, mapType: MapType, fn)) =>
+            GetFn(path, mapType.valueType.isOptional, fn, posStr)
+          case _ =>
+            RootFn
       else
-        co.blocke.dynalens.fn.GetFn(path, false, co.blocke.dynalens.fn.RootFn, posStr)
-
+        GetFn(path, false, RootFn, posStr)
+  
     val baseSchema = resolveSchemaFor(baseReceiver)
-
+  
     util.PathUtil.getPathType(path, baseSchema) match
       case Left(msg) =>
         Left(DLCompileError(posStr, msg))
       case Right(ft) =>
         val fn = co.blocke.dynalens.fn.GetFn(path, ft.isOptional, co.blocke.dynalens.fn.RootFn, posStr)
-        Right(copy(receiver = Some(NamedReceiver(path, ft, fn))))
-
+        Right(copy(receiver = Some(NamedReceiver(path, ft, fn))))        
 
   /** Directly set a receiver object. */
   def withReceiver(recv: Receiver): ExprContext =

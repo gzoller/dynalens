@@ -66,10 +66,8 @@ trait Level1 extends Level0 {
 //    }
 
   private def segmentFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(identifier.!).flatMap { name =>
-      val recvOpt = ctx.receiver.map(_.fn).getOrElse(NoOpFn)
-      val gf = GetFn(name, isOptional = Utility.isPathOptional(name, ctx), recvOpt, ctx.posStr)
-      maybeIndex(gf)
+    P(identifier.!).map { name =>
+      Right(GetFn(name, Utility.isPathOptional(name, ctx), RootFn, ctx.posStr))
     }
 
   def pathFn[$: P](using ctx: ExprContext): P[ParseFnResult] =

@@ -5,7 +5,7 @@ package cfn
 import co.blocke.dynalens.fn.*
 
 /** Shared logic for numeric binary / unary operators. */
-trait ArithmeticCFn[R <: Fn[?]] extends CompileFn[R]:
+trait ArithmeticCFn[R <: Fn[?]] extends CompileFn:
 
   override val minArgs: Int = 1
   override val maxArgs: Int = 1

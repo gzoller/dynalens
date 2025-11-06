@@ -56,8 +56,10 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
       dynalens
     )
 
-  def G(path: String): GetFn =
-    GetFn(path, false, RootFn, "pos")
+  def G(path: String): GetFn = {
+    val fieldType = util.PathUtil.getPathType(path,fooSchema).getOrElse(ScalarType(path, "scala.Any", false))
+    GetFn(path, false, RootFn, "pos", Some(fieldType))
+  }
 
   override def spec = suite("ArithmeticFn") (
 

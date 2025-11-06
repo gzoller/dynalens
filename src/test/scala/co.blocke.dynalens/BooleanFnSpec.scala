@@ -26,10 +26,10 @@ object BooleanFnSpec extends ZIOSpecDefault:
   def Bad: Fn[Any] = new UnaryFn[Any]:
     override val recv: Fn[Any] = RootFn
     override val posStr: String = "bad"
+    override val resultType: FieldType = ScalarType("", "scala.Any", false)
 
     override def args: List[Fn[Any]] = Nil
 
-    // Must use wildcard type (?) to match abstract signature
     override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
 
     override def resolve(ctx: DynaContext) =

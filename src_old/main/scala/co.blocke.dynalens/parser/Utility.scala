@@ -194,6 +194,12 @@ object Utility:
     }
   }
 
+  def requireStringArg(fn: Fn[?], posStr: String): Either[DLCompileError, Unit] =
+    Utility.rhsType(fn) match
+      case TypeResult.Known(ft) if ft.isStringLike => Right(())
+      case TypeResult.Known(ft) => Left(DLCompileError(posStr, s"requires String argument, found ${ft.typeName}"))
+      case TypeResult.Error(e) => Left(e)
+      case _ => Left(DLCompileError(posStr, "cannot determine argument type"))
 
   /**
    * If the path ends with a fixed index (e.g. [3] or ["key"]), unwrap the

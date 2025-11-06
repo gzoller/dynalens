@@ -47,6 +47,7 @@ case class ConsFn(left: Fn[Any], right: Fn[Any], posStr: String)
 
   override val recv: Fn[Any] = left
   override val args: List[Fn[Any]] = List(right)
+  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
   override def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
     copy(
       left = kids.head.asInstanceOf[Fn[Any]],
@@ -83,6 +84,8 @@ case class KeysFn(recv: Fn[Any], posStr: String)
       posStr = posStr
     )
 
+  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
+
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
     recv.resolve(ctx).flatMap {
       case (null | None, mLens) => ZIO.succeed((Nil, mLens))
@@ -115,6 +118,8 @@ case class ValuesFn(recv: Fn[Any], posStr: String)
       posStr = posStr
     )
 
+  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
+
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
     recv.resolve(ctx).flatMap {
       case (null | None, mLens) => ZIO.succeed((Nil, mLens))
@@ -142,6 +147,7 @@ case class FilterFn(recv: Fn[Any], other: Fn[Any], posStr: String)
   extends BinaryFn[List[Any]]:
 
   override val args: List[Fn[Any]] = List(other)
+  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
   def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
     copy(
       recv = kids.head.asInstanceOf[Fn[Any]],
@@ -181,6 +187,7 @@ case class SortAscFn(recv: Fn[Any], fieldOpt: Option[String], posStr: String)
   extends MethodFn[List[Any]]:
 
   override def args: List[Fn[Any]] = Nil
+  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
 
   def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
     copy(
@@ -221,6 +228,7 @@ case class SortDescFn(recv: Fn[Any], fieldOpt: Option[String], posStr: String)
   extends MethodFn[List[Any]]:
 
   override def args: List[Fn[Any]] = Nil
+  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
 
   def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
     copy(
@@ -261,6 +269,7 @@ case class DistinctFn(recv: Fn[Any], fieldOpt: Option[String], posStr: String)
   extends MethodFn[List[Any]]:
 
   override def args: List[Fn[Any]] = Nil
+  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
 
   def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
     copy(
@@ -308,6 +317,7 @@ case class LimitFn(recv: Fn[Any], count: Int, posStr: String)
       count = count,
       posStr = posStr
     )
+  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
     recv.resolve(ctx).flatMap {
@@ -329,6 +339,7 @@ case class ReverseFn(recv: Fn[Any], posStr: String)
       recv = kids.head.asInstanceOf[Fn[Any]],
       posStr = posStr
     )
+  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
     recv.resolve(ctx).flatMap {
@@ -350,6 +361,7 @@ case class CleanFn(recv: Fn[Any], posStr: String)
       recv = kids.head.asInstanceOf[Fn[Any]],
       posStr = posStr
     )
+  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
     recv.resolve(ctx).flatMap {
@@ -385,6 +397,7 @@ case class LenFn(recv: Fn[Any], posStr: String)
       recv = kids.head.asInstanceOf[Fn[Any]],
       posStr = posStr
     )
+  val resultType: FieldType = ScalarType("", "scala.Int", false)
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Int, Lens)] =
     recv.resolve(ctx).flatMap {
@@ -409,6 +422,7 @@ case class MapToFn(mapName: String, recv: Fn[Any], posStr: String)
   override val isOptional: Boolean = recv.isOptional
 
   override def args: List[Fn[Any]] = Nil
+  override val resultType: FieldType = recv.resultType
 
   def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(
@@ -458,6 +472,7 @@ case class MapFromFn(mapName: String, recv: Fn[Any], posStr: String)
   override val methodName: String = "mapFrom"
   override val isOptional: Boolean = recv.isOptional
   override def args: List[Fn[Any]] = Nil
+  override val resultType: FieldType = recv.resultType
 
   def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(
@@ -503,6 +518,12 @@ case class MapFn(recv: Fn[Any], fn: Fn[Any], posStr: String)
   override val methodName = "=>"
 
   override def args: List[Fn[Any]] = List(fn)
+
+  val resultType: FieldType = fn.resultType match
+    case l: ListType => l
+    case m: MapType => m
+    case s: ScalarType => s
+    case _ => ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
 
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     kids match
@@ -601,12 +622,10 @@ case class MapFn(recv: Fn[Any], fn: Fn[Any], posStr: String)
       }
     }.flatMap { vals =>
       // Validation: ensure all resolved values are scalar or Tuple2
-      ZIO.foreach(vals) { v =>
-        v match {
-          case _: Iterable[?] | _: Map[?, ?] =>
-            ZIO.fail(DynaLensError(posStr, s"=> body must return scalar or tuple2, got ${v.getClass.getSimpleName}"))
-          case _ => ZIO.unit
-        }
+      ZIO.foreach(vals) {
+        case v@(_: Iterable[?] | _: Map[?, ?]) =>
+          ZIO.fail(DynaLensError(posStr, s"=> body must return scalar or tuple2, got ${v.getClass.getSimpleName}"))
+        case _ => ZIO.unit
       }.as {
         val tuples = vals.collect { case t: (Any, Any) => t }
         val allTuples = tuples.size == vals.size

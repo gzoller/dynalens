@@ -65,7 +65,7 @@ object DateFnSpec extends ZIOSpecDefault {
       },
 
       test("error: null source") {
-        val badFn = ParseDateFn(C(null), C("yyyy-MM-dd"), "")
+        val badFn = ParseDateFn(NullFn, C("yyyy-MM-dd"), "")
         for exit <- badFn.resolve(ctx).exit
           yield assertTrue(exit.isFailure)
       }

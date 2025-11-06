@@ -23,8 +23,6 @@ object RegistryMacro:
           m
       }
 //    report.info(s"[RegistryMacro] Found CompileFn objects: ${modules.map(_.fullName).mkString("\n")}")
-    // TODO: Remove this line for full system--here only to force macro to run during stripped tests
-    val _ = modules.foreach(_.fullName) // forces evaluation
 
     if modules.isEmpty then
       report.errorAndAbort(

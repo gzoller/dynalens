@@ -67,7 +67,45 @@ case class BlockStmt(statements: Seq[Statement]) extends Statement:
     }
 
 
-case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends Statement:
+case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String, updateFieldType: FieldType) extends Statement:
+  // Coerce numeric RHS value to the expected field type (when both sides are numeric).
+  private def coerceNumericIfNeeded(rootLens: Lens, pathElems: List[PathElement], value: Any): Any =
+    println(s"[coerceNumericIfNeeded] ENTER: value=${if value == null then "null" else value} (${if value == null then "null" else value.getClass.getName}) targetType=${updateFieldType.typeName}")
+    try
+      val numericSet = Set(
+        "scala.Byte","scala.Short","scala.Int","scala.Long","scala.Float","scala.Double",
+        "scala.math.BigInt","scala.math.BigDecimal",
+        "java.lang.Byte","java.lang.Short","java.lang.Integer","java.lang.Long","java.lang.Float","java.lang.Double",
+        "int", "long", "float", "double", "byte", "short", "bigint", "bigdecimal"
+      )
+      // Normalize type name and print debug info
+      val rawType = updateFieldType.typeName
+      val tn = rawType match {
+        case "int" | "java.lang.Integer" => "scala.Int"
+        case "long" | "java.lang.Long" => "scala.Long"
+        case "float" | "java.lang.Float" => "scala.Float"
+        case "double" | "java.lang.Double" => "scala.Double"
+        case "byte" | "java.lang.Byte" => "scala.Byte"
+        case "short" | "java.lang.Short" => "scala.Short"
+        case "bigint" | "scala.math.BigInt" => "scala.math.BigInt"
+        case "bigdecimal" | "scala.math.BigDecimal" => "scala.math.BigDecimal"
+        case other => other
+      }
+      println(s"[coerceNumericIfNeeded] normalized typename raw='$rawType' normalized='$tn'")
+      val coerced =
+        if value != null && numericSet.contains(tn) then
+          val result = co.blocke.dynalens.util.NumPromote.toType(value, tn)
+          println(s"[coerceNumericIfNeeded] Converted: ${value.getClass.getSimpleName} -> ${result.getClass.getSimpleName}  value=$value  result=$result")
+          result
+        else
+          println(s"[coerceNumericIfNeeded] No conversion performed. valueClass=${if value == null then "null" else value.getClass.getName}")
+          value
+      println(s"[coerceNumericIfNeeded] EXIT returning ${if coerced == null then "null" else coerced.getClass.getName}")
+      coerced
+    catch
+      case e: Throwable =>
+        println(s"[coerceNumericIfNeeded] ERROR during coercion: ${e.getMessage}")
+        value
 
   /** Walk the full path and return (parentObj, parentLens, lastElement)
    * where:
@@ -83,6 +121,9 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                             path: List[PathElement]
                           ): ZIO[Any, DynaLensError, (Any, Lens, PathElement)] =
 
+    // DEBUG: At the very start
+    println(s"[walkToParent] ENTER lens=${lens.name}, objType=${if obj == null then "null" else obj.getClass.getName}, path=${path.map(_.name).mkString(".")}")
+
     val normalizedPath =
       path match
         case PathElement(Some("this"), None) :: rest => rest
@@ -90,6 +131,7 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
 
     normalizedPath match
       case Nil | _ :: Nil =>
+        println(s"[walkToParent] ERROR: path too short for lens=${lens.name}")
         ZIO.dieMessage("walkToParent: must be called only when path has >=2 elements")
 
       case init :+ lastElem =>
@@ -100,14 +142,17 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                   rem: List[PathElement]
                 ): ZIO[Any, DynaLensError, (Any, Lens)] = {
           // DEBUG: Entering loop in walkToParent
+          println(s"[walkToParent.loop] lens=${curLens.name}, objType=${if curObj == null then "null" else curObj.getClass.getName}, rem=${rem.map(_.name).mkString(".")}")
           rem match
             case Nil =>
+              println(s"[walkToParent.loop] SUCCESS returning lens=${curLens.name}")
               ZIO.succeed((curObj, curLens)) // done
             case PathElement(fieldNameOpt, indexOpt) :: tail =>
               curLens match
                 case cl: ClassLens =>
                   curObj match
                     case None if cl.isOptional =>
+                      println(s"[walkToParent.loop] SUCCESS returning lens=${cl.name}")
                       // Parent missing: safe no-op position reached, stop walking
                       ZIO.succeed((None, cl))
                     case _ =>
@@ -118,6 +163,7 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                             case None => ZIO.succeed(None) // Optional parent missing
                             case other => ZIO.succeed(other)
                         else if curObj == null then
+                          println(s"[walkToParent.loop] FAIL: Cannot descend into null for required class '${cl.name}'")
                           ZIO.fail(DynaLensError("", s"Cannot descend into null for required class '${cl.name}'"))
                         else ZIO.succeed(curObj)
                       for
@@ -131,20 +177,23 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                           else if fieldName == "this_key" then
                             curObj match
                               case (k: Any, kvLens: Lens) =>
-                                // Treat key as scalar lens; remain at same lens but change object to key
                                 loop(ScalarLens("this_key", false, Some(curLens)), k, tail).flatMap(res => ZIO.succeed(res)).asInstanceOf[ZIO[Any, DynaLensError, Unit]]
                               case _ =>
+                                println(s"[walkToParent.loop] FAIL: this_key used outside map key context")
                                 ZIO.fail(DynaLensError("", "this_key used outside map key context")).asInstanceOf[ZIO[Any, DynaLensError, Unit]]
                           else if fieldName == "this_value" then
                             curObj match
                               case (_, v: Any) =>
-                                // Treat value as object itself; keep current lens for traversal
                                 loop(curLens, v, tail).flatMap(res => ZIO.succeed(res)).asInstanceOf[ZIO[Any, DynaLensError, Unit]]
                               case _ =>
+                                println(s"[walkToParent.loop] FAIL: this_value used outside map value context")
                                 ZIO.fail(DynaLensError("", "this_value used outside map value context")).asInstanceOf[ZIO[Any, DynaLensError, Unit]]
                           else ZIO.unit
                         fieldLens <- ZIO.fromOption(cl.fields.get(fieldName))
-                          .orElseFail(DynaLensError("", s"No such field: $fieldName"))
+                          .orElse {
+                            println(s"[walkToParent.loop] FAIL: No such field '$fieldName' in ${cl.name}")
+                            ZIO.fail(DynaLensError("", s"No such field: $fieldName"))
+                          }
                         fieldValue <- cl._get(fieldName, baseObj)
                         res <-
                           indexOpt match
@@ -154,55 +203,79 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                             case Some(rawIdxOrKey) =>
                               fieldLens match
                                 case ll: ListLens =>
-                                  // items[<idx>] — unwrap, pick element, continue with element lens
                                   ReflectUtil.unwrapOptionList(fieldValue, ll.isOptional).flatMap { list =>
                                     val idx = rawIdxOrKey.toIntOption.getOrElse(-1)
                                     if idx < 0 || idx >= list.size then
-                                      if ll.isOptional then ZIO.succeed((None, ll)) // missing optional parent -> treat as None
-                                      else ZIO.fail(DynaLensError("", s"Index $idx out of bounds for list '${ll.name}'"))
+                                      if ll.isOptional then {
+                                        println(s"[walkToParent.loop] SUCCESS returning lens=${ll.name}")
+                                        ZIO.succeed((None, ll)) // missing optional parent -> treat as None
+                                      }
+                                      else {
+                                        println(s"[walkToParent.loop] FAIL: Index $idx out of bounds for ${ll.name}")
+                                        ZIO.fail(DynaLensError("", s"Index $idx out of bounds for list '${ll.name}'"))
+                                      }
                                     else
-                                      val elemObj  = list(idx)
-                                      val elemLens = ll.elementLens
-                                      loop(elemLens, elemObj, tail)
+                                      loop(ll.elementLens, list(idx), tail)
                                   }
                                 case ml: MapLens =>
-                                  // things["key"] — coerce key, fetch entry (or None), continue with value lens
                                   val typedKeyZ: ZIO[Any, DynaLensError, Any] = ml.keyKind match
                                     case MapKeyKind.StringKey       => ZIO.succeed(rawIdxOrKey)
-                                    case MapKeyKind.IntKey          => ZIO.fromOption(rawIdxOrKey.toIntOption)
-                                      .orElseFail(DynaLensError("", s"Invalid Int key '$rawIdxOrKey' for map '${ml.name}'"))
-                                    case MapKeyKind.LongKey         => ZIO.attempt(rawIdxOrKey.toLong)
-                                      .mapError(_ => DynaLensError("", s"Invalid Long key '$rawIdxOrKey' for map '${ml.name}'"))
-                                    case MapKeyKind.EnumKey(eName)  => ZIO.attempt(ReflectUtil.coerceEnumKey(rawIdxOrKey, eName))
-                                      .mapError(e => DynaLensError("", s"Invalid enum key: ${e.getMessage}"))
+                                    case MapKeyKind.IntKey          =>
+                                      ZIO.fromOption(rawIdxOrKey.toIntOption)
+                                        .orElse {
+                                          println(s"[walkToParent.loop] FAIL: Invalid Int key '$rawIdxOrKey' for map '${ml.name}'")
+                                          ZIO.fail(DynaLensError("", s"Invalid Int key '$rawIdxOrKey' for map '${ml.name}'"))
+                                        }
+                                    case MapKeyKind.LongKey         =>
+                                      ZIO.attempt(rawIdxOrKey.toLong)
+                                        .mapError { _ =>
+                                          println(s"[walkToParent.loop] FAIL: Invalid Long key '$rawIdxOrKey' for map '${ml.name}'")
+                                          DynaLensError("", s"Invalid Long key '$rawIdxOrKey' for map '${ml.name}'")
+                                        }
+                                    case MapKeyKind.EnumKey(eName)  =>
+                                      ZIO.attempt(ReflectUtil.coerceEnumKey(rawIdxOrKey, eName))
+                                        .mapError { e =>
+                                          println(s"[walkToParent.loop] FAIL: Invalid enum key: ${e.getMessage}")
+                                          DynaLensError("", s"Invalid enum key: ${e.getMessage}")
+                                        }
                                   for
                                     typedKey <- typedKeyZ
                                     map     <- ReflectUtil.unwrapOptionMap[Any, Any](fieldValue, ml.isOptional)
                                     nextObj   = map.getOrElse(typedKey, None)
                                     nextLens  = ml.valueLens
-                                    // Inserted type check for missing optional key
                                     out <-
                                       if nextObj == None then
-                                        if ml.isOptional then
-                                        // optional parent missing → no-op
+                                        if ml.isOptional then {
+                                          println(s"[walkToParent.loop] SUCCESS returning lens=${ml.name}")
                                           ZIO.succeed((None, ml))
-                                        else
-                                          // required -> proper error
+                                        }
+                                        else {
+                                          println(s"[walkToParent.loop] FAIL: Missing map key '$typedKey' for required map '${ml.name}'")
                                           ZIO.fail(DynaLensError("", s"Missing map key '$typedKey' for required map '${ml.name}'"))
-                                        else
-                                          loop(nextLens, nextObj, tail)
+                                        }
+                                      else
+                                        loop(nextLens, nextObj, tail)
                                   yield out
                                 case _ =>
-                                  // Index/key provided for a non-collection field
+                                  println(s"[walkToParent.loop] FAIL: Index/key specified for non-collection field '$fieldName'")
                                   ZIO.fail(DynaLensError("", s"Index/key specified for non-collection field '$fieldName'"))
-                      yield res
+                      yield {
+                        println(s"[walkToParent.loop] SUCCESS returning lens=${fieldLens.name}")
+                        res
+                      }
 
                 case ll: ListLens =>
                   val idx = indexOpt.flatMap(_.toIntOption).getOrElse(-1)
                   ReflectUtil.unwrapOptionList(curObj, ll.isOptional).flatMap { list =>
                     if idx < 0 || idx >= list.size then
-                      if ll.isOptional then ZIO.succeed((None, ll))
-                      else ZIO.fail(DynaLensError("", s"Index $idx out of bounds for list '${ll.name}'"))
+                      if ll.isOptional then {
+                        println(s"[walkToParent.loop] SUCCESS returning lens=${ll.name}")
+                        ZIO.succeed((None, ll))
+                      }
+                      else {
+                        println(s"[walkToParent.loop] FAIL: Index $idx out of bounds for ${ll.name}")
+                        ZIO.fail(DynaLensError("", s"Index $idx out of bounds for list '${ll.name}'"))
+                      }
                     else
                       loop(ll.elementLens, list(idx), tail)
                   }
@@ -212,30 +285,77 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                       case MapKeyKind.StringKey => ZIO.succeed(indexOpt.get)
                       case MapKeyKind.IntKey =>
                         ZIO.fromOption(indexOpt.get.toIntOption)
-                          .orElseFail(DynaLensError("", s"Invalid Int key '${indexOpt.get}' for map '${ml.name}'"))
+                          .orElse {
+                            println(s"[walkToParent.loop] FAIL: Invalid Int key '${indexOpt.get}' for map '${ml.name}'")
+                            ZIO.fail(DynaLensError("", s"Invalid Int key '${indexOpt.get}' for map '${ml.name}'"))
+                          }
                       case MapKeyKind.LongKey =>
                         ZIO.attempt(indexOpt.get.toLong)
-                          .mapError(_ => DynaLensError("", s"Invalid Long key '${indexOpt.get}' for map '${ml.name}'"))
+                          .mapError { _ =>
+                            println(s"[walkToParent.loop] FAIL: Invalid Long key '${indexOpt.get}' for map '${ml.name}'")
+                            DynaLensError("", s"Invalid Long key '${indexOpt.get}' for map '${ml.name}'")
+                          }
                       case MapKeyKind.EnumKey(enumName) =>
                         ZIO.attempt(ReflectUtil.coerceEnumKey(indexOpt.get, enumName))
-                          .mapError(e => DynaLensError("", s"Invalid enum key: ${e.getMessage}"))
+                          .mapError { e =>
+                            println(s"[walkToParent.loop] FAIL: Invalid enum key: ${e.getMessage}")
+                            DynaLensError("", s"Invalid enum key: ${e.getMessage}")
+                          }
                       )
                     map <- ReflectUtil.unwrapOptionMap[Any, Any](curObj, ml.isOptional)
                     nextObj = map.getOrElse(typedKey, None)
                     res <- loop(ml.valueLens, nextObj, tail)
-                  yield res
+                  yield {
+                    println(s"[walkToParent.loop] SUCCESS returning lens=${ml.valueLens.name}")
+                    res
+                  }
                 case sl: ScalarLens =>
+                  println(s"[walkToParent.loop] FAIL: Cannot descend into scalar '${sl.name}'")
                   ZIO.fail(DynaLensError("", s"Cannot descend into scalar '${sl.name}'"))
                 case el: EnumLens =>
+                  println(s"[walkToParent.loop] FAIL: Cannot descend into enum '${el.name}'")
                   ZIO.fail(DynaLensError("", s"Cannot descend into enum '${el.name}'"))
         }
         loop(lens, obj, init).map { (parentObj, parentLens) =>
+          println(s"[walkToParent] EXIT parentLens=${parentLens.name}, lastElem=${lastElem.name.getOrElse("<none>")}")
           (parentObj, parentLens, lastElem)
         }
 
       case _ =>
         // This case is unreachable under normal circumstances, but makes the match exhaustive
-        ZIO.fail(DynaLensError("", s"Unexpected path structure: ${normalizedPath.mkString("/")}"))  
+        ZIO.fail(DynaLensError("", s"Unexpected path structure: ${normalizedPath.mkString("/")}"))
+
+  // Helper to perform update with error handling and coercion
+  private def performUpdate(
+      rootLens: Lens,
+      rootObj: Any,
+      elements: List[PathElement],
+      newValue: Any,
+      posStr: String,
+      path: String
+  ): ZIO[Any, DynaLensError, Any] =
+    val coerced = coerceNumericIfNeeded(rootLens, elements, newValue)
+    println(s"[performUpdate] coercing ${newValue} -> ${if coerced == null then "null" else coerced.getClass.getName}")
+    ZIO
+      .attempt(rootLens.update(
+        elements.filterNot(pe =>
+          pe.name.contains("this") ||
+          pe.name.contains("this_key") ||
+          pe.name.contains("this_value")
+        ),
+        coerced,
+        rootObj
+      ))
+      .flatten
+      .mapError {
+        case _: ClassCastException =>
+          DynaLensError(
+            posStr,
+            s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
+          )
+        case e =>
+          DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
+      }
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, DynaContext] =
     ctx.get("top") match
@@ -258,40 +378,21 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                 if elements.lengthCompare(1) > 0 then
                   walkToParent(rootLens, rootObj, elements).flatMap {
                     case (None, parentLens, lastElem) if parentLens.isOptional =>
+                      println(s"[updateStmt] Early return: optional parent missing for path=$path")
                       ZIO.succeed(rootObj)
                     case (parentObj0, parentLens0, lastElem0) =>
+                      println(s"[updateStmt] Proceeding with update for path=$path")
                       val (parent, parentLens, lastElem) = (parentObj0, parentLens0, lastElem0)
                       val ctxForRhs = ctx.bind("this", parent, parentLens)
-                      for
-                        (newValue, _) <-
-                          valueFn.resolve(ctxForRhs).catchAll { e1 =>
-                            // Fallback to resolving from root context when missing field on element-this
-                            valueFn.resolve(ctxWithThis).catchAll { _ =>
-                              ZIO.fail(e1) // original error if root also fails
-                            }
-                          }
-                        // Important: perform the full update through the root lens so child update bubbles back into containers
-                        updated <- {
-                          val cleaned = elements.filterNot(pe =>
-                            pe.name.contains("this") ||
-                              pe.name.contains("this_key") ||
-                              pe.name.contains("this_value")
-                          )
-                          ZIO
-                            .attempt(rootLens.update(cleaned, newValue, rootObj))
-                            .flatten
-                            .mapError {
-                              case _: ClassCastException =>
-                                DynaLensError(
-                                  posStr,
-                                  s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
-                                )
-                              case e =>
-                                DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
-                            }
+                      for {
+                        res <- valueFn.resolve(ctxForRhs).catchAll { e1 =>
+                          valueFn.resolve(ctxWithThis).catchAll { _ => ZIO.fail(e1) }
                         }
-                      yield updated
+                        (newValue, _) = res
+                        updatedObj <- performUpdate(rootLens, rootObj, elements, newValue, posStr, path)
+                      } yield updatedObj
                     case null =>
+                      println(s"[updateStmt] walkToParent returned null for path=$path")
                       ZIO.dieMessage("walkToParent returned unexpected tuple")
                   }
                 else
@@ -301,28 +402,11 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                     case None =>
                       ZIO.fail(DynaLensError(posStr, s"Cannot update '$path': parent is missing"))
                     case _ =>
-                      for
-                        (newValue, _) <- valueFn.resolve(ctxWithThis)
-                        updated <- {
-                          val cleaned = elements.filterNot(pe =>
-                            pe.name.contains("this") ||
-                              pe.name.contains("this_key") ||
-                              pe.name.contains("this_value")
-                          )
-                          ZIO
-                            .attempt(rootLens.update(cleaned, newValue, rootObj))
-                            .flatten
-                            .mapError {
-                              case _: ClassCastException =>
-                                DynaLensError(
-                                  posStr,
-                                  s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
-                                )
-                              case e =>
-                                DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
-                            }
-                        }
-                      yield updated
+                      for {
+                        res <- valueFn.resolve(ctxWithThis)
+                        (newValue, _) = res
+                        updatedObj <- performUpdate(rootLens, rootObj, elements, newValue, posStr, path)
+                      } yield updatedObj
               else
                 elements match
                   case lastElem :: Nil =>
@@ -330,55 +414,24 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String) extends S
                       case None =>
                         ZIO.succeed(rootObj)
                       case _ =>
-                        for
-                          (newValue, _) <- valueFn.resolve(ctxWithThis)
-                          updated <- ZIO
-                            .attempt(rootLens.update(List(lastElem), newValue, rootObj))
-                            .flatten
-                            .mapError {
-                              case _: ClassCastException =>
-                                DynaLensError(posStr,
-                                  s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
-                                )
-                              case e =>
-                                DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
-                            }
-                        yield updated
+                        for {
+                          res <- valueFn.resolve(ctxWithThis)
+                          (newValue, _) = res
+                          updatedObj <- performUpdate(rootLens, rootObj, List(lastElem), newValue, posStr, path)
+                        } yield updatedObj
                   case _ =>
                     walkToParent(rootLens, rootObj, elements).flatMap {
                       case (None, parentLens, lastElem) =>
                         ZIO.succeed(rootObj)
                       case (Some(parent), parentLens, lastElem) =>
                         val ctxForRhs = ctx.bind("this", parent, parentLens)
-                        for
-                          (newValue, _) <-
-                            valueFn.resolve(ctxForRhs).catchAll { e1 =>
-                              // Fallback to resolving from root context when missing field on element-this
-                              valueFn.resolve(ctxWithThis).catchAll { _ =>
-                                ZIO.fail(e1) // original error if root also fails
-                              }
-                            }
-                          // Important: perform the full update through the root so the mutation bubbles up the full object graph
-                          updated <- {
-                            val cleaned = elements.filterNot(pe =>
-                              pe.name.contains("this") ||
-                                pe.name.contains("this_key") ||
-                                pe.name.contains("this_value")
-                            )
-                            ZIO
-                              .attempt(rootLens.update(cleaned, newValue, rootObj))
-                              .flatten
-                              .mapError {
-                                case _: ClassCastException =>
-                                  DynaLensError(
-                                    posStr,
-                                    s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
-                                  )
-                                case e =>
-                                  DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
-                              }
+                        for {
+                          res <- valueFn.resolve(ctxForRhs).catchAll { e1 =>
+                            valueFn.resolve(ctxWithThis).catchAll { _ => ZIO.fail(e1) }
                           }
-                        yield updated
+                          (newValue, _) = res
+                          updatedObj <- performUpdate(rootLens, rootObj, elements, newValue, posStr, path)
+                        } yield updatedObj
                       case _ =>
                         ZIO.dieMessage("walkToParent returned unexpected tuple")
                     }

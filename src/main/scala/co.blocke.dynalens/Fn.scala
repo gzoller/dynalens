@@ -31,6 +31,8 @@ trait Fn[R]:
   def methodName: String = this.getClass.getSimpleName.stripSuffix("Fn").decapitalize
   def posStr: String
 
+  def resultType: FieldType
+  
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (R, Lens)]
 
   /** Default: no sub-nodes. Override in composite nodes. */

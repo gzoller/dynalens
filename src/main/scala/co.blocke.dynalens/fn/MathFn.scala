@@ -3,11 +3,16 @@ package fn
 
 import zio.*
 import util.NumPromote.*
+import util.*
 
 
 case class AbsFn(recv: Fn[Any], posStr: String) extends UnaryFn[Any]:
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
+
+  val resultType: FieldType = recv.resultType match
+    case s: ScalarType => s
+    case _ => ScalarType("", "scala.Double", false)
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for
@@ -28,6 +33,7 @@ case class MinFn(recv: Fn[Any], posStr: String) extends UnaryFn[Any]:
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
 
+  val resultType: FieldType = ScalarType("", "scala.Double", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for
       (rawAny, rawLens) <- recv.resolve(ctx)
@@ -45,6 +51,7 @@ case class MaxFn(recv: Fn[Any], posStr: String) extends UnaryFn[Any]:
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
 
+  val resultType: FieldType = ScalarType("", "scala.Double", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for
       (rawAny, rawLens) <- recv.resolve(ctx)
@@ -62,6 +69,7 @@ case class SumFn(recv: Fn[Any], posStr: String) extends UnaryFn[Any]:
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
 
+  val resultType: FieldType = ScalarType("", "scala.Double", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for
       rawResult <- recv.resolve(ctx).either
@@ -85,6 +93,7 @@ case class AvgFn(recv: Fn[Any], posStr: String) extends UnaryFn[Any]:
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
 
+  val resultType: FieldType = ScalarType("", "scala.Double", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for
       (rawAny, rawLens) <- recv.resolve(ctx)
@@ -110,6 +119,7 @@ case class MedianFn(recv: Fn[Any], posStr: String) extends UnaryFn[Any]:
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], posStr = posStr)
 
+  val resultType: FieldType = ScalarType("", "scala.Double", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     for
       (rawAny, rawLens) <- recv.resolve(ctx)

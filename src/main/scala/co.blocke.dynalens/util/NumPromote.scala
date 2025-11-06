@@ -26,16 +26,20 @@ import scala.annotation.tailrec
 
 object NumPromote {
   sealed trait Kind
+
   case object KInt extends Kind // Byte/Short/Int
+
   case object KLong extends Kind
+
   case object KFloat extends Kind
+
   case object KDouble extends Kind
 
   private def kindOf(x: Any): Option[Kind] = x match {
     case _: java.lang.Byte | _: java.lang.Short | _: java.lang.Integer => Some(KInt)
-    case _: java.lang.Long                                             => Some(KLong)
-    case _: java.lang.Float                                            => Some(KFloat)
-    case _: java.lang.Double                                           => Some(KDouble)
+    case _: java.lang.Long => Some(KLong)
+    case _: java.lang.Float => Some(KFloat)
+    case _: java.lang.Double => Some(KDouble)
     // If you want to allow BigInt/BigDecimal/String, handle here (or reject).
     case _ => None
   }
@@ -51,9 +55,9 @@ object NumPromote {
     case null => Right(Box()) // treat null/None as empty
     case o: Option[?] =>
       o match {
-        case None                  => Right(Box())
+        case None => Right(Box())
         case Some(it: Iterable[?]) => collect(it, op, posStr)
-        case Some(x)               => Left(DynaLensError(posStr, s"$op() expects a list, got ${x.getClass.getSimpleName} in Some(...)"))
+        case Some(x) => Left(DynaLensError(posStr, s"$op() expects a list, got ${x.getClass.getSimpleName} in Some(...)"))
       }
     case it: Iterable[?] =>
       var hasDouble = false
@@ -79,8 +83,8 @@ object NumPromote {
             hasLong = true; longs += v.asInstanceOf[Long]
           case Some(KInt) =>
             ints += (v match {
-              case b: java.lang.Byte    => b.toInt
-              case s: java.lang.Short   => s.toInt
+              case b: java.lang.Byte => b.toInt
+              case s: java.lang.Short => s.toInt
               case i: java.lang.Integer => i.intValue
             })
         }
@@ -109,5 +113,56 @@ object NumPromote {
 
     case KInt =>
       b.ints
+  }
+
+  // Smart typecast for arithmetic values
+  def toType(value: Any, targetType: String): Any = {
+    println(s"[toType] input=${value.getClass.getName}, targetType=$targetType")
+    val z = targetType match {
+      case "scala.Int" =>
+        value match {
+          case d: Double => d.toInt
+          case f: Float => f.toInt
+          case l: Long => l.toInt
+          case bi: BigInt => bi.toInt
+          case bd: BigDecimal => bd.toInt
+          case i: Int => i
+          case _ => value
+        }
+      case "scala.Long" =>
+        value match {
+          case i: Int => i.toLong
+          case d: Double => d.toLong
+          case f: Float => f.toLong
+          case bi: BigInt => bi.toLong
+          case bd: BigDecimal => bd.toLong
+          case l: Long => l
+          case _ => value
+        }
+      case "scala.Float" =>
+        value match {
+          case i: Int => i.toFloat
+          case l: Long => l.toFloat
+          case d: Double => d.toFloat
+          case bd: BigDecimal => bd.toFloat
+          case f: Float => f
+          case _ => value
+        }
+      case "scala.Double" =>
+        value match {
+          case i: Int => i.toDouble
+          case l: Long => l.toDouble
+          case f: Float => f.toDouble
+          case bd: BigDecimal => bd.toDouble
+          case bi: BigInt => bi.toDouble
+          case d: Double => d
+          case _ => value
+        }
+      case "scala.math.BigInt" => BigInt(value.toString)
+      case "scala.math.BigDecimal" => BigDecimal(value.toString)
+      case _ => value
+    }
+    println(s"[toType] returning=${z.getClass.getName}")
+    z
   }
 }

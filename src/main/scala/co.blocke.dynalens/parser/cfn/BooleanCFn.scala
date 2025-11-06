@@ -7,7 +7,7 @@ import co.blocke.dynalens.fn.*
 
 
 // ---------------------- IF ----------------------
-object CIfFn extends CompileFn[IfFn[?]]:
+object CIfFn extends CompileFn:
   val name = "if"
   val minArgs = 3
 
@@ -20,27 +20,19 @@ object CIfFn extends CompileFn[IfFn[?]]:
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.lengthCompare(3) == 0 then
-      Right(IfFn(args(0).asInstanceOf[BooleanFn], args(1), args(2), ctx.posStr))
+      Right(IfFn(args(0).asInstanceOf[BooleanFn], args(1), args(2), ctx.posStr).asInstanceOf[Fn[Any]])
     else
       Left(DLCompileError(ctx.posStr, "if(cond, then, else) requires 3 arguments"))
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
       case i: IfFn[?] =>
-        for {
-          _ <- Validation.requireBoolean1(i.condition.asInstanceOf[Fn[Any]], "if", ctx.posStr)
-          ifTrueType = Utility.rhsType(i.ifTrue)
-          ifFalseType = Utility.rhsType(i.ifFalse)
-          res <- (ifTrueType, ifFalseType) match
-            case (TypeResult.Known(t1), TypeResult.Known(t2)) if t1 != t2 =>
-              Left(DLCompileError(ctx.posStr, s"if branches have mismatched types: then is ${t1.typeName}, else is ${t2.typeName}"))
-            case _ => Right(())
-        } yield res
+        Validation.requireBoolean1(i.condition.asInstanceOf[Fn[Any]], "if", ctx.posStr)
       case _ => Right(())
 
 
 // ---------------------- AND ----------------------
-object CAndFn extends CompileFn[AndFn]:
+object CAndFn extends CompileFn:
   val name = "&&"
   val minArgs = 1        // one explicit rhs arg, recv is lhs
 
@@ -58,7 +50,7 @@ object CAndFn extends CompileFn[AndFn]:
     if args.size == 1 then
       (recv.fn.asInstanceOf[Fn[Any]], args.head) match
         case (l: BooleanFn, r: BooleanFn) =>
-          Right(AndFn(l, List(r), ctx.posStr))
+          Right(AndFn(l, List(r), ctx.posStr).asInstanceOf[Fn[Any]])
         case _ =>
           Left(DLCompileError(ctx.posStr, "&& requires two boolean expressions"))
     else
@@ -73,7 +65,7 @@ object CAndFn extends CompileFn[AndFn]:
 
 
 // ---------------------- OR ----------------------
-object COrFn extends CompileFn[OrFn]:
+object COrFn extends CompileFn:
   val name = "||"
   val minArgs = 1        // one explicit rhs arg, recv is lhs
 
@@ -91,7 +83,7 @@ object COrFn extends CompileFn[OrFn]:
     if args.size == 1 then
       (recv.fn.asInstanceOf[Fn[Any]], args.head) match
         case (l: BooleanFn, r: BooleanFn) =>
-          Right(OrFn(l, List(r), ctx.posStr))
+          Right(OrFn(l, List(r), ctx.posStr).asInstanceOf[Fn[Any]])
         case _ =>
           Left(DLCompileError(ctx.posStr, "|| requires two boolean expressions"))
     else
@@ -106,7 +98,7 @@ object COrFn extends CompileFn[OrFn]:
 
 
 // ---------------------- NOT ----------------------
-object CNotFn extends CompileFn[NotFn]:
+object CNotFn extends CompileFn:
   val name = "!"
   val minArgs = 1
 
@@ -122,7 +114,7 @@ object CNotFn extends CompileFn[NotFn]:
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args.headOption match
-      case Some(arg) => Validation.expectBoolean1(arg, "!", ctx.posStr).map(b => NotFn(b.asInstanceOf[Fn[Any]], ctx.posStr))
+      case Some(arg) => Validation.expectBoolean1(arg, "!", ctx.posStr).map(b => NotFn(b.asInstanceOf[Fn[Any]], ctx.posStr).asInstanceOf[Fn[Any]])
       case None      => Left(DLCompileError(ctx.posStr, "! requires a single argument"))
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
@@ -133,25 +125,29 @@ object CNotFn extends CompileFn[NotFn]:
 
 
 // ---------------------- ISDEFINED ----------------------
-object CIsDefinedFn extends CompileFn[IsDefinedFn]:
+object CIsDefinedFn extends CompileFn:
   val name = "isDefined"
   val minArgs = 0
   override val maxArgs = 0
 
   def accepts(recv: Receiver)(using ctx: ExprContext): Boolean =
-    recv.ftype.isOptional
+    recv.ftype match
+      case ft if ft.isOptional => true
+      case ListType(_, _, _, _)   => true
+      case MapType(_, _, _, _, _) => true
+      case _                   => false
 
   def resultType(recv: Receiver, args: List[FieldType])(using ctx: ExprContext) =
     ScalarType("", "scala.Boolean")
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
-    Right(IsDefinedFn(recv.fn.asInstanceOf[Fn[Any]], ctx.posStr))
+    Right(IsDefinedFn(recv.fn.asInstanceOf[Fn[Any]], ctx.posStr).asInstanceOf[Fn[Any]])
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) = Right(())
 
 
 // ---------------------- STARTSWITH ----------------------
-object CStartsWithFn extends CompileFn[StartsWithFn]:
+object CStartsWithFn extends CompileFn:
   val name = "startsWith"
   val minArgs = 1
   override val maxArgs = 1
@@ -165,17 +161,21 @@ object CStartsWithFn extends CompileFn[StartsWithFn]:
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args.headOption
       .toRight(DLCompileError(ctx.posStr, "startsWith requires one argument"))
-      .map(arg => StartsWithFn(recv.fn.asInstanceOf[Fn[Any]], arg, ctx.posStr))
+      .map(arg => StartsWithFn(recv.fn.asInstanceOf[Fn[Any]], arg, ctx.posStr).asInstanceOf[Fn[Any]])
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
       case s: StartsWithFn =>
-        Utility.requireStringArg(s.other, ctx.posStr)
+        Utility.rhsType(s.other) match
+          case TypeResult.Known(ft) if ft.isStringLike => Right(())
+          case TypeResult.Known(ft)                    => Left(DLCompileError(ctx.posStr, s"startsWith requires String argument, found ${ft.typeName}"))
+          case TypeResult.Error(e)                      => Left(e)
+          case _                                       => Left(DLCompileError(ctx.posStr, "startsWith cannot determine argument type"))
       case _ => Right(())
 
 
 // ---------------------- ENDSWITH ----------------------
-object CEndsWithFn extends CompileFn[EndsWithFn]:
+object CEndsWithFn extends CompileFn:
   val name = "endsWith"
   val minArgs = 1
   override val maxArgs = 1
@@ -189,17 +189,21 @@ object CEndsWithFn extends CompileFn[EndsWithFn]:
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args.headOption
       .toRight(DLCompileError(ctx.posStr, "endsWith requires one argument"))
-      .map(arg => EndsWithFn(recv.fn.asInstanceOf[Fn[Any]], arg, ctx.posStr))
+      .map(arg => EndsWithFn(recv.fn.asInstanceOf[Fn[Any]], arg, ctx.posStr).asInstanceOf[Fn[Any]])
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
       case e: EndsWithFn =>
-        Utility.requireStringArg(e.other, ctx.posStr)
+        Utility.rhsType(e.other) match
+          case TypeResult.Known(ft) if ft.isStringLike => Right(())
+          case TypeResult.Known(ft)                    => Left(DLCompileError(ctx.posStr, s"endsWith requires String argument, found ${ft.typeName}"))
+          case TypeResult.Error(e)                      => Left(e)
+          case _                                       => Left(DLCompileError(ctx.posStr, "endsWith cannot determine argument type"))
       case _ => Right(())
 
 
 // ---------------------- CONTAINS ----------------------
-object CContainsFn extends CompileFn[ContainsFn]:
+object CContainsFn extends CompileFn:
   val name = "contains"
   val minArgs = 1
   override val maxArgs = 1
@@ -221,7 +225,7 @@ object CContainsFn extends CompileFn[ContainsFn]:
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args.headOption
       .toRight(DLCompileError(ctx.posStr, "contains requires one argument"))
-      .map(arg => ContainsFn(recv.fn.asInstanceOf[Fn[Any]], arg, ctx.posStr))
+      .map(arg => ContainsFn(recv.fn.asInstanceOf[Fn[Any]], arg, ctx.posStr).asInstanceOf[Fn[Any]])
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
@@ -239,7 +243,7 @@ object CContainsFn extends CompileFn[ContainsFn]:
 
 
 // ---------------------- EQUALSIGNORECASE ----------------------
-object CEqualsIgnoreCaseFn extends CompileFn[EqualsIgnoreCaseFn]:
+object CEqualsIgnoreCaseFn extends CompileFn:
   val name = "equalsIgnoreCase"
   val minArgs = 1
   override val maxArgs = 1
@@ -253,17 +257,21 @@ object CEqualsIgnoreCaseFn extends CompileFn[EqualsIgnoreCaseFn]:
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args.headOption
       .toRight(DLCompileError(ctx.posStr, "equalsIgnoreCase requires one argument"))
-      .map(arg => EqualsIgnoreCaseFn(recv.fn.asInstanceOf[Fn[Any]], arg, ctx.posStr))
+      .map(arg => EqualsIgnoreCaseFn(recv.fn.asInstanceOf[Fn[Any]], arg, ctx.posStr).asInstanceOf[Fn[Any]])
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
       case e: EqualsIgnoreCaseFn =>
-        Utility.requireStringArg(e.other, ctx.posStr)
+        Utility.rhsType(e.other) match
+          case TypeResult.Known(ft) if ft.isStringLike => Right(())
+          case TypeResult.Known(ft)                    => Left(DLCompileError(ctx.posStr, s"equalsIgnoreCase requires String argument, found ${ft.typeName}"))
+          case TypeResult.Error(e)                      => Left(e)
+          case _                                       => Left(DLCompileError(ctx.posStr, "equalsIgnoreCase cannot determine argument type"))
       case _ => Right(())
 
 
 // ---------------------- MATCHESREGEX ----------------------
-object CMatchesRegexFn extends CompileFn[MatchesRegexFn]:
+object CMatchesRegexFn extends CompileFn:
   val name = "matchesRegex"
   val minArgs = 1
   override val maxArgs = 1
@@ -277,11 +285,14 @@ object CMatchesRegexFn extends CompileFn[MatchesRegexFn]:
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     args.headOption
       .toRight(DLCompileError(ctx.posStr, "matchesRegex requires one argument"))
-      .map(arg => MatchesRegexFn(recv.fn.asInstanceOf[Fn[Any]], arg, ctx.posStr))
+      .map(arg => MatchesRegexFn(recv.fn.asInstanceOf[Fn[Any]], arg, ctx.posStr).asInstanceOf[Fn[Any]])
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
       case m: MatchesRegexFn =>
-        Utility.requireStringArg(m.other, ctx.posStr)
+        Utility.rhsType(m.other) match
+          case TypeResult.Known(ft) if ft.isStringLike => Right(())
+          case TypeResult.Known(ft)                    => Left(DLCompileError(ctx.posStr, s"matchesRegex requires String argument, found ${ft.typeName}"))
+          case TypeResult.Error(e)                      => Left(e)
+          case _                                       => Left(DLCompileError(ctx.posStr, "matchesRegex cannot determine argument type"))
       case _ => Right(())
-

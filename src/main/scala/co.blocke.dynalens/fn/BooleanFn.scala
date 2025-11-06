@@ -23,6 +23,7 @@ case class IfFn[T](condition: BooleanFn, ifTrue: Fn[T], ifFalse: Fn[T], posStr: 
       ifTrue = kids(1).asInstanceOf[Fn[T]],
       ifFalse = kids(2).asInstanceOf[Fn[T]]
     )
+  val resultType: FieldType = ifTrue.resultType
 }
 
 
@@ -32,6 +33,7 @@ case class AndFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
     with BooleanFn:
 
   override val methodName: String = "&&"
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
 
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     kids match
@@ -65,6 +67,7 @@ case class OrFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
     with BooleanFn:
 
   override val methodName: String = "||"
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
 
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     kids match
@@ -96,6 +99,7 @@ case class OrFn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
 case class NotFn(recv: Fn[Any], posStr: String)
   extends UnaryFn[Boolean]
     with BooleanFn {
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
     for
@@ -117,6 +121,7 @@ case class NotFn(recv: Fn[Any], posStr: String)
 case class IsDefinedFn(recv: Fn[Any], posStr: String)
   extends UnaryFn[Boolean]
     with BooleanFn {
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
     for
@@ -140,6 +145,7 @@ case class IsDefinedFn(recv: Fn[Any], posStr: String)
 case class StartsWithFn(recv: Fn[Any], other: Fn[Any], posStr: String)
   extends BinaryFn[Boolean]
     with BooleanFn {
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
 
   override val args: List[Fn[Any]] = List(other)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
@@ -161,6 +167,7 @@ case class StartsWithFn(recv: Fn[Any], other: Fn[Any], posStr: String)
 case class EndsWithFn(recv: Fn[Any], other: Fn[Any], posStr: String)
   extends BinaryFn[Boolean]
     with BooleanFn {
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
 
   override val args: List[Fn[Any]] = List(other)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
@@ -182,6 +189,7 @@ case class ContainsFn(recv: Fn[Any], other: Fn[Any], posStr: String)
   extends Fn[Boolean]
     with BinaryFn[Boolean]
     with BooleanFn {
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
 
   import ContainsFn._
 
@@ -279,6 +287,7 @@ object ContainsFn {
 case class EqualsIgnoreCaseFn(recv: Fn[Any], other: Fn[Any], posStr: String)
   extends BinaryFn[Boolean]
     with BooleanFn {
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
 
   override val args: List[Fn[Any]] = List(other)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
@@ -302,6 +311,7 @@ case class MatchesRegexFn(recv: Fn[Any], other: Fn[Any], posStr: String)
     with BooleanFn {
 
   override val args: List[Fn[Any]] = List(other)
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
     for
       (sVal, lLens) <- recv.resolve(ctx)

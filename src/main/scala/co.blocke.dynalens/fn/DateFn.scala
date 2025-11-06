@@ -7,6 +7,7 @@ import zio.*
 case class FormatDateFn(recv: Fn[Any], pattern: Fn[Any], posStr: String) extends MethodFn[Any]:
   override val methodName = "formatDate"
   def args: List[Fn[Any]] = List(pattern)
+  val resultType: FieldType = ScalarType("", "java.lang.String", false)
   def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids(0).asInstanceOf[Fn[Any]], pattern = kids(1).asInstanceOf[Fn[Any]])
 
@@ -30,6 +31,7 @@ case class FormatDateFn(recv: Fn[Any], pattern: Fn[Any], posStr: String) extends
 case class ParseDateFn(recv: Fn[Any], pattern: Fn[Any], posStr: String) extends MethodFn[Any]:
   override val methodName = "parseDate"
   def args: List[Fn[Any]] = List(pattern)
+  val resultType: FieldType = ScalarType("", "java.time.LocalDateTime", false)
   def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids(0).asInstanceOf[Fn[Any]], pattern = kids(1).asInstanceOf[Fn[Any]])
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
@@ -49,6 +51,7 @@ case class ParseDateFn(recv: Fn[Any], pattern: Fn[Any], posStr: String) extends 
 case class NowFn(posStr: String) extends Fn[Any]:
   override val methodName = "now"
   override val recv: Fn[Any] = RootFn
+  val resultType: FieldType = ScalarType("", "java.time.LocalDateTime", false)
   def args: List[Fn[Any]] = Nil
   def rebuild(kids: List[Fn[?]]): Fn[Any] = this
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =

@@ -27,7 +27,7 @@ final case class DynaLens[T](
                                 script: BlockStmt,
                                 target: T
                               ): ZIO[RuntimeEnv, DynaLensError, (T, DynaContext)] =
-    val ctx: DynaContext = this.initialContext(target)
+    val ctx: DynaContext = DynaContext(target, this)
     for {
       resultCtx <- script.resolve(ctx)
       (resultObj, _) = resultCtx.getTop.getOrElse((target, topLens))
@@ -41,16 +41,6 @@ final case class DynaLens[T](
         )
         .getOrThrow()
     }
-
-
-extension [T](dl: DynaLens[T])
-  /** Creates an initial context with the top-level value bound to 'this', 'this_value', and 'this_key'. */
-  def initialContext(topValue: Any): DynaContext =
-    val base = DynaContext(Map.empty, dl)
-      .bind("this", topValue, dl.topLens)
-      .bind("this_value", topValue, dl.topLens)
-      .bind("this_key", null, ScalarLens("this_key", false, None))
-    base
 
 
 object DynaLens:

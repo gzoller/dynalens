@@ -4,6 +4,7 @@ package fn
 import zio.*
 
 import scala.annotation.tailrec
+import util.NumPromote
 
 
 // (For ElseFn)
@@ -15,6 +16,7 @@ case class UUIDFn(posStr: String) extends Fn[Any]:
   override val methodName = "uuid"
   override val recv: Fn[Any] = RootFn
   override val args: List[Fn[Any]] = Nil
+  val resultType: FieldType = ScalarType("uuid", "java.lang.String", false)
   override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (String, Lens)] =
     ZIO.succeed((java.util.UUID.randomUUID().toString, ScalarLens("uuid", false, None)))
@@ -24,6 +26,7 @@ case class ElseFn(recv: Fn[Any], default: Fn[Any], posStr: String) extends Metho
   override val methodName = "else"
   override def args: List[Fn[Any]] = List(default)
 
+  val resultType: FieldType = recv.resultType
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(recv = kids(0).asInstanceOf[Fn[Any]], default = kids(1).asInstanceOf[Fn[Any]], posStr = posStr)
 
@@ -87,6 +90,7 @@ case class BlockFn[R](statements: Seq[Statement], finalFn: Fn[R], posStr: String
   // Only the final function is a child argument in the expression tree.
   override def args: List[Fn[Any]] = List(finalFn.asInstanceOf[Fn[Any]])
 
+  val resultType: FieldType = finalFn.resultType
   override def children: List[Fn[?]] = List(finalFn)
 
   // Rebuild with a (single) final function child.
@@ -118,11 +122,11 @@ case class BlockFn[R](statements: Seq[Statement], finalFn: Fn[R], posStr: String
           stmt match
             case u: UpdateStmt[_] =>
               u match
-                case UpdateStmt(symPath, valueFn, _) if !symPath.contains(".") && accCtx.get(symPath).isDefined =>
-                  // Direct symbol update without top
+                case UpdateStmt(symPath, valueFn, _, updateFieldType) if !symPath.contains(".") && accCtx.get(symPath).isDefined =>
                   valueFn.resolve(accCtx).map { case (newVal, _) =>
-                    val (_, existingLens) = accCtx.get(symPath).getOrElse(newVal -> ScalarLens(symPath, false, None))
-                    accCtx.bind(symPath, newVal, existingLens)
+                    val coerced = NumPromote.toType(newVal, updateFieldType.typeName)
+                    val (_, existingLens) = accCtx.get(symPath).getOrElse(coerced -> ScalarLens(symPath, false, None))
+                    accCtx.bind(symPath, coerced, existingLens)
                   }
                 case _ =>
                   u.resolve(accCtx)
@@ -158,6 +162,10 @@ case class CaseWhenFn(
   override def args: List[Fn[Any]] =
     receiver :: (cases.map(_._2).toList ++ default.toList)
 
+  val resultType: FieldType =
+    (cases.headOption.map(_._2.resultType))
+      .orElse(default.map(_.resultType))
+      .getOrElse(ScalarType("", "java.lang.Object", true))
   override def children: List[Fn[?]] = args
 
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
@@ -199,6 +207,7 @@ case object RootFn extends Fn[Any]:
   // Since RootFn is the origin of all trees, its receiver is itself.
   override val recv: Fn[Any] = this
   override val args: List[Fn[Any]] = Nil
+  val resultType: FieldType = ScalarType("<root>", "scala.Unit", false)
   override val methodName: String = "<root>"
   override val posStr: String = "<root>"
   override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
@@ -209,6 +218,7 @@ case object RootFn extends Fn[Any]:
 case object NoneFn extends Fn[Any]:
   override val recv: Fn[Any] = RootFn
   override val args: List[Fn[Any]] = Nil
+  val resultType: FieldType = ScalarType("<none>", "scala.Option[scala.Any]", true)
   override val methodName: String = "<none>"
   val posStr = ""
   override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
@@ -218,6 +228,7 @@ case object NoneFn extends Fn[Any]:
 case object NullFn extends Fn[Any]:
   override val recv: Fn[Any] = RootFn
   override val args: List[Fn[Any]] = Nil
+  val resultType: FieldType = ScalarType("<null>", "scala.Any", true)
   override val methodName: String = "<null>"
   val posStr = ""
   override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
@@ -227,6 +238,7 @@ case object NullFn extends Fn[Any]:
 case class BooleanConstantFn(value: Boolean) extends Fn[Boolean] with BooleanFn:
   override val recv: Fn[Any] = RootFn
   override val args: List[Fn[Any]] = Nil
+  val resultType: FieldType = ScalarType("<bool>", "scala.Boolean", false)
   override val methodName: String = "<bool>"
   val posStr = ""
   override def rebuild(kids: List[Fn[?]]): Fn[Boolean] = this
@@ -236,6 +248,7 @@ case class BooleanConstantFn(value: Boolean) extends Fn[Boolean] with BooleanFn:
 case class ConstantFn[R](out: R) extends Fn[R]:
   override val recv: Fn[Any] = RootFn
   override val args: List[Fn[Any]] = Nil
+  val resultType: FieldType = ScalarType("<const>", out.getClass.getName, false)
   override val methodName: String = "<const>"
   val posStr = ""
   override def rebuild(kids: List[Fn[?]]): Fn[R] = this
@@ -249,6 +262,7 @@ case class Tuple2Fn(recv: Fn[Any], args: List[Fn[Any]], posStr: String)
   override val methodName: String = "<tuple2>"
   override val isOptional: Boolean =
     recv.isOptional || args.exists(_.isOptional)
+  val resultType: FieldType = ScalarType("<tuple2>", "(scala.Any, scala.Any)", false)
 
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     kids match
@@ -267,12 +281,14 @@ case class GetFn(
                   path: String,
                   override val isOptional: Boolean,
                   recv: Fn[Any],     // always defined, never None
-                  posStr: String
+                  posStr: String,
+                  maybeType: Option[FieldType] = None
                 ) extends Fn[Any]:
 
   import Path.* // for parsePath, PathElement, Field, IndexedField, partialPath
 
   override val args: List[Fn[Any]] = Nil
+  val resultType: FieldType = maybeType.getOrElse(ScalarType(path, "scala.Any", isOptional))
   override val methodName: String = "<get>"
 
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
@@ -474,6 +490,7 @@ object NoOpFn extends Fn[Any]:
   override val methodName: String = "<noop>"
   override val recv: Fn[Any] = this
   override val args: List[Fn[Any]] = Nil
+  val resultType: FieldType = ScalarType("<noop>", "scala.Unit", false)
   override val posStr: String = "<noop>"
 
   override def children: List[Fn[?]] = Nil
@@ -487,6 +504,7 @@ object NoOpFn extends Fn[Any]:
 case class IndexFn(recv: Fn[Any], index: Fn[Any], pos: String) extends Fn[Any] {
   override def posStr: String = pos
   override def args: List[Fn[Any]] = List(recv, index)
+  val resultType: FieldType = ScalarType("<index>", "scala.Any", true)
   override def rebuild(kids: List[Fn[?]]): Fn[Any] =
     IndexFn(kids.head.asInstanceOf[Fn[Any]], kids(1).asInstanceOf[Fn[Any]], pos)
 

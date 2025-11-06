@@ -3,7 +3,8 @@ package parser
 package cfn
 
 
-import co.blocke.dynalens.fn.*
+import fn.*
+import util.*
 
 
 /**
@@ -11,7 +12,7 @@ import co.blocke.dynalens.fn.*
  * Handles the two-phase validation pattern (defer until both operand types known),
  * and standard numeric + non-optional enforcement.
  */
-trait ComparisonCFn[R <: Fn[?]] extends CompileFn[R]:
+trait ComparisonCFn extends CompileFn:
 
   override val minArgs: Int = 1
   override val maxArgs: Int = 1
@@ -22,7 +23,7 @@ trait ComparisonCFn[R <: Fn[?]] extends CompileFn[R]:
     println(s"[DEBUG] isComparableType called with ft=${ft.typeName}")
     ft match
       case ScalarType(_, t, _) =>
-        val norm = Utility.normalizeNumeric(t)
+        val norm = RuntimeUtil.normalizeNumeric(t)
         println(s"[DEBUG] normalized type: $norm")
         val result = Set(
           "scala.Byte",
@@ -57,8 +58,8 @@ trait ComparisonCFn[R <: Fn[?]] extends CompileFn[R]:
 
   /** Ensure two FieldTypes are mutually comparable: either both numeric or exactly the same comparable type */
   protected def ensureComparableTypes(ft1: FieldType, ft2: FieldType)(using ctx: ExprContext): Either[DLCompileError, Unit] =
-    val norm1 = Utility.normalizeNumeric(ft1.typeName)
-    val norm2 = Utility.normalizeNumeric(ft2.typeName)
+    val norm1 = RuntimeUtil.normalizeNumeric(ft1.typeName)
+    val norm2 = RuntimeUtil.normalizeNumeric(ft2.typeName)
     println(s"[DEBUG] ensureComparableTypes called with ft1=${ft1.typeName}, ft2=${ft2.typeName}")
     println(s"[DEBUG] normalized to norm1=$norm1, norm2=$norm2")
     val numericTypes = Set(
@@ -129,7 +130,7 @@ trait ComparisonCFn[R <: Fn[?]] extends CompileFn[R]:
         Left(DLCompileError(ctx.posStr, s"Cannot determine operand type(s) for '$name'"))
 
 
-object CLessThanFn extends ComparisonCFn[LessThanFn]:
+object CLessThanFn extends ComparisonCFn:
   val name = "<"
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     println(s"[DEBUG] CLessThanFn.build recv=${recv}, args=${args.map(_.getClass.getSimpleName)}")
@@ -137,35 +138,35 @@ object CLessThanFn extends ComparisonCFn[LessThanFn]:
     else Right(LessThanFn(recv.fn, args.head, ctx.posStr).asInstanceOf[Fn[Any]])
 
 
-object CLessThanOrEqualFn extends ComparisonCFn[LessThanOrEqualFn]:
+object CLessThanOrEqualFn extends ComparisonCFn:
   val name = "<="
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
     else Right(LessThanOrEqualFn(recv.fn, args.head, ctx.posStr).asInstanceOf[Fn[Any]])
 
 
-object CGreaterThanFn extends ComparisonCFn[GreaterThanFn]:
+object CGreaterThanFn extends ComparisonCFn:
   val name = ">"
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
     else Right(GreaterThanFn(recv.fn, args.head, ctx.posStr).asInstanceOf[Fn[Any]])
 
 
-object CGreaterThanOrEqualFn extends ComparisonCFn[GreaterThanOrEqualFn]:
+object CGreaterThanOrEqualFn extends ComparisonCFn:
   val name = ">="
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
     else Right(GreaterThanOrEqualFn(recv.fn, args.head, ctx.posStr).asInstanceOf[Fn[Any]])
 
 
-object CEqualFn extends ComparisonCFn[EqualFn]:
+object CEqualFn extends ComparisonCFn:
   val name = "=="
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
     else Right(EqualFn(recv.fn, args.head, ctx.posStr).asInstanceOf[Fn[Any]])
 
 
-object CNotEqualFn extends ComparisonCFn[NotEqualFn]:
+object CNotEqualFn extends ComparisonCFn:
   val name = "!="
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
