@@ -143,9 +143,20 @@ object CLessThanOrEqualFn extends ComparisonCFn:
 
 object CGreaterThanFn extends ComparisonCFn:
   val name = ">"
-  def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
-    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
-    else Right(GreaterThanFn(recv.fn, args.head, ctx.posStr).asInstanceOf[Fn[Any]])
+  def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext)
+  : Either[DLCompileError, Fn[Any]] =
+    println(s"[CGreaterThanFn.build] ENTER recv=${recv} args.size=${args.size} args=${args}")
+    if args.size != 1 then
+      println(s"[CGreaterThanFn.build] BAD args: ${args}")
+      Left(DLCompileError(ctx.posStr, s"'>' expects 1 argument"))
+    else
+      val lhs = recv.fn
+      val rhs = args.head
+      println(s"[CGreaterThanFn.build] lhs=${lhs} rhs=${rhs}")
+      Right(GreaterThanFn(lhs, rhs, ctx.posStr).asInstanceOf[Fn[Any]])
+//  def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
+//    if args.size != 1 then Left(DLCompileError(ctx.posStr, s"'$name' expects 1 argument"))
+//    else Right(GreaterThanFn(recv.fn, args.head, ctx.posStr).asInstanceOf[Fn[Any]])
 
 
 object CGreaterThanOrEqualFn extends ComparisonCFn:

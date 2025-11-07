@@ -50,8 +50,10 @@ trait Level1 extends Level0 {
   self: ValueExprModule =>
 
   private def segmentFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(identifier.!).map { name =>
-      Right(GetFn(name, Utility.isPathOptional(name, ctx), RootFn, ctx.posStr))
+    // Match a plain path segment ONLY if it is *not* immediately followed by a method call "("
+    // This lets `pathFn` stop before a method name so that `methodChain` can parse `.foo(...)`.
+    P(Index ~ identifier.! ~ ! (WS0 ~ "(") ).map { (pos,name) =>
+      Right(GetFn(name, Utility.isPathOptional(name, ctx), RootFn, ctx.posStrFrom(pos)))
     }
 
   def pathFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
@@ -75,7 +77,7 @@ trait Level1 extends Level0 {
   // -----------------------------------------------------
   private def maybeIndex[$: P](base: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] =
     // Match zero or more bracketed index expressions, each containing one valueExpr
-    P(("[" ~/ valueExpr ~ "]").rep(0)).map { indexExprs =>
+    P(Index ~ ("[" ~/ valueExpr ~ "]").rep(0)).map { (pos,indexExprs) =>
       if indexExprs.isEmpty then
         Right(base)
       else {
@@ -86,38 +88,12 @@ trait Level1 extends Level0 {
         else {
           // Fold successive IndexFn wrappers for curried access: foo[3][wow]
           val folded = oks.foldLeft(base) { (recv, idxFn) =>
-            IndexFn(recv, idxFn, ctx.posStr)
+            IndexFn(recv, idxFn, ctx.posStrFrom(pos))
           }
           Right(folded)
         }
       }
     }
-
-//  def pathBase[$: P]: P[String] =
-//    P(segment ~ (!("." ~ identU ~ "(") ~ "." ~ segment).rep).map { case (head, tail) =>
-//      (head +: tail.toList).mkString(".")
-//    }
-
-//  // 1) Non-failing path parser that *returns* the semantic error
-//  private def pathEither[$: P](using ctx: ExprContext): P[Either[DLCompileError, String]] =
-//    P(Index ~ pathBase).map { case (offset, rawPath) =>
-//      // Ensure position accuracy for any potential DLCompileError
-//      val validation = Utility.getPathType(rawPath)(using ctx.copy(pos = offset))
-//
-//      validation match
-//        case Left(err) =>
-//          // Preserve existing error type so Level2 callers work unchanged
-//          Left(err.copy(msg = s"Invalid path '$rawPath': ${err.msg}"))
-//        case Right(_) =>
-//          Right(rawPath)
-//    }
-
-//  // 2) Keep a strict version (for places where you *want* a hard parse error)
-//  def path[$: P](using ctx: ExprContext): P[String] =
-//    pathEither.flatMap {
-//      case Right(clean) => P(Pass(clean))
-//      case Left(err)    => P(Fail.opaque(err.msg)) // <- only use where a hard parse failure is desired
-//    }
 
 
 //    println(s"[pathFn] offset=$offset")
@@ -130,7 +106,7 @@ trait Level1 extends Level0 {
       Index ~ // capture offset *before* the dot
         WS0 ~ "." ~ identifier.! ~
         "(" ~/ WS0 ~
-        valueExpr.rep(sep = "," ~/ WS0) ~
+        (!")" ~ valueExpr).rep(sep = "," ~/ WS0) ~
         WS0 ~ ")"
     ).map { case (off, name, argsRaw) =>
       println(s"[methodCall args] $argsRaw")
@@ -148,7 +124,7 @@ trait Level1 extends Level0 {
   def methodChain[$: P](base: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] =
     def loop(current: Fn[Any]): P[Either[DLCompileError, Fn[Any]]] =
       P(methodCall).flatMap {
-        case Left((err, name, off)) =>
+        case Left((err, _, _)) =>
           P(Pass(Left(err)))
 
         case Right((name, args, off)) =>
@@ -166,7 +142,7 @@ trait Level1 extends Level0 {
               P(Pass(Left(DLCompileError(ctx.posStrFrom(off), s"Unknown method: $name"))))
       } | P(Pass(Right(current)))
 
-    // 🔹 Keep this — enables foo.do()[3]
+    // Keep this — enables foo.do()[3]
     loop(base).flatMap {
       case Left(err) => P(Pass(Left(err)))
       case Right(fn0) => maybeIndex(fn0)

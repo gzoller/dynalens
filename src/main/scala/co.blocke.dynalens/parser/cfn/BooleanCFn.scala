@@ -7,6 +7,7 @@ import co.blocke.dynalens.fn.*
 
 
 // ---------------------- IF ----------------------
+// TODO: Deprecated. Level2 constructs IfFn directly
 object CIfFn extends CompileFn:
   val name = "if"
   val minArgs = 3

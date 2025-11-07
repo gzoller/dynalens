@@ -146,7 +146,7 @@ case class StartsWithFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends BinaryFn[Boolean]
     with BooleanFn {
   val resultType: FieldType = ScalarType("", "scala.Boolean", false)
-  
+
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
     for
       (sVal, lLens) <- recv.resolve(ctx)
@@ -320,4 +320,28 @@ case class MatchesRegexFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
 
   def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
     copy(recv = kids.head.asInstanceOf[Fn[Any]], arg = kids(1).asInstanceOf[Fn[Any]])
+}
+
+
+case class ToBooleanFn(inner: Fn[Any], posStr: String)
+  extends UnaryFn[Boolean]
+    with BooleanFn {
+
+  val resultType: FieldType = ScalarType("", "scala.Boolean", false)
+
+  override val recv: Fn[Any] = inner
+  override val args: List[Fn[Any]] = Nil
+
+  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
+    for
+      (v, lens) <- inner.resolve(ctx)
+      typedResult <- v match
+        case b: Boolean => ZIO.succeed(b)
+        case other =>
+          ZIO.fail(DynaLensError(posStr,
+            s"Expected Boolean result at runtime, but got: ${other.getClass.getSimpleName} = $other"))
+    yield (typedResult, lens)
+
+  def rebuild(kids: List[Fn[?]]): Fn[Boolean] =
+    copy(inner = kids.head.asInstanceOf[Fn[Any]])
 }

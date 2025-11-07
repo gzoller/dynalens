@@ -80,6 +80,7 @@ object Utility:
   }
 
   def rhsType(fn: Fn[?])(using ctx: ExprContext): TypeResult[FieldType] =
+    println(s"[Utility.rhsType] called with ${fn.getClass.getSimpleName}: ${fn}")
     if fn != null then
       println(s"[Utility.rhsType] called for ${fn.getClass.getSimpleName}: $fn")
     else

@@ -41,8 +41,10 @@ trait Level0:
   private def comment[$: P]: P[Unit] =
     P("#" ~ CharsWhile(c => c != '\n' && c != '\r').rep ~ ("\r\n" | "\n" | End))
 
-  def identifier[$: P]: P[String] =
-    P((CharIn("a-zA-Z_") ~ CharsWhileIn("a-zA-Z0-9_").?).!).map(_.trim)
+  private val reservedKeywords = Set("if", "then", "else", "case", "val", "default", "map", "block")
+
+  def identifier[$: P]: P[Unit] =
+    P(CharIn("a-zA-Z_", "a-zA-Z0-9_").rep(1).!).filter(!reservedKeywords.contains(_))
 
   // Handle escaped ", \n, \t
   def stringLiteral[$: P]: P[ParseFnResult] =

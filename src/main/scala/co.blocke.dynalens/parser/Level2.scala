@@ -38,72 +38,96 @@ trait Level2 extends Level1 with ValueExprModule:
 
   // ---- Boolean ----
 
-  /** Helpers to combine boolean results left-to-right, short-circuiting on the first Left */
-  private inline def andCombine(a: ParseBoolResult, b: ParseBoolResult)(using ctx: ExprContext): ParseBoolResult =
-    (a, b) match
-      case (Left(e), _) => Left(e)
-      case (Right(_), Left(e)) => Left(e)
-      case (Right(a1), Right(b1)) =>
-        CAndFn.build(
-          NamedReceiver("&&", ScalarType("", "scala.Boolean"), NoOpFn),
-          List(a1.asInstanceOf[Fn[Any]], b1.asInstanceOf[Fn[Any]])
-        ) match
-          case Left(err) => Left(err)
-          case Right(fn) =>
-            CAndFn.validate(fn)(using ctx).map(_ => fn.asInstanceOf[BooleanFn])
-
-  private inline def orCombine(a: ParseBoolResult, b: ParseBoolResult)(using ctx: ExprContext): ParseBoolResult =
-    (a, b) match
-      case (Left(e), _) => Left(e)
-      case (Right(_), Left(e)) => Left(e)
-      case (Right(a1), Right(b1)) =>
-        COrFn.build(
-          NamedReceiver("||", ScalarType("", "scala.Boolean"), NoOpFn),
-          List(a1.asInstanceOf[Fn[Any]], b1.asInstanceOf[Fn[Any]])
-        ) match
-          case Left(err) => Left(err)
-          case Right(fn) =>
-            COrFn.validate(fn)(using ctx).map(_ => fn.asInstanceOf[BooleanFn])
-
   /** atom := '(' booleanExpr ')' | comparisonExpr | booleanLiteral | ToBoolean(arithmeticExpr) */
   private def booleanAtom[$: P](using ctx: ExprContext): P[ParseBoolResult] =
     P(
-      WS0 ~ (
+      Index ~ WS0 ~ (
         "(" ~/ booleanExpr ~ ")" |
           comparisonExpr |
-          booleanLiteral.map(b => Right(b): ParseBoolResult)
+          booleanLiteral.map(b => Right(b): ParseBoolResult) |
+          arithmeticExpr
         )
-    )
+    ).map { (off, expr) =>
+      expr match
+        case Left(err) => Left(err)
+
+        case Right(fn) =>
+          Utility.rhsType(fn) match
+            // Already Boolean
+            case TypeResult.Known(ScalarType(_, "scala.Boolean", _)) =>
+              fn match
+                case bf: BooleanFn => Right(bf)
+                case other         => Right(ToBooleanFn(other.asInstanceOf[Fn[Any]], ctx.posStrFrom(off)))
+
+            // Anything else — coerce via ToBooleanFn wrapper and include position
+            case TypeResult.Known(_) | TypeResult.Unknown =>
+              Right(ToBooleanFn(fn.asInstanceOf[Fn[Any]], ctx.posStrFrom(off)))
+
+            // Propagate compile-time type errors
+            case TypeResult.Error(e) =>
+              Left(e.copy(posStr = ctx.posStrFrom(off)))
+    }
 
   /** booleanExpr := booleanAnd ('||' booleanAnd)* */
   def booleanExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
-    P(booleanAnd ~ (WS0 ~ "||" ~ WS0 ~ booleanAnd).rep).map {
-      case (first, rest) =>
-        rest.foldLeft(first) {
-          case (Left(e), _) => Left(e)
-          case (Right(acc), Right(rhs)) =>
-            orCombine(Right(acc), Right(rhs))
-          case (Right(_), Left(e)) => Left(e)
+    P(Index ~ booleanAnd.rep(sep = WS0 ~ "||" ~ WS0)).map { (off,terms) =>
+      given ExprContext = ctx.copy(pos = off)
+      if terms.isEmpty then Left(DLCompileError(ctx.posStr, "Empty boolean expression"))
+      else {
+        val oks = terms.collect { case Right(fn) => fn }
+        if oks.isEmpty then terms.head
+        else if oks.size == 1 then Right(oks.head.asInstanceOf[BooleanFn])
+        else {
+          val lhs = oks.head.asInstanceOf[Fn[Any]]
+          val rhs = oks.tail.map(_.asInstanceOf[Fn[Any]])
+          // build OR chain left-associatively
+          val combined = rhs.foldLeft[Either[DLCompileError, BooleanFn]](Right(lhs.asInstanceOf[BooleanFn])) {
+            case (Left(e), _) => Left(e)
+            case (Right(acc), next) =>
+              COrFn
+                .build(NamedReceiver("||", ScalarType("", "scala.Boolean"), acc.asInstanceOf[Fn[Any]]), List(next))
+                .flatMap { built =>
+                  COrFn.validate(built).map(_ => built.asInstanceOf[BooleanFn])
+                }
+          }
+          combined
         }
+      }
     }
 
   /** booleanAnd := booleanNot ('&&' booleanNot)* */
   private def booleanAnd[$: P](using ctx: ExprContext): P[ParseBoolResult] =
-    P(booleanNot ~ (WS0 ~ "&&" ~ WS0 ~ booleanNot).rep).map {
-      case (first, rest) =>
-        rest.foldLeft(first) {
-          case (Left(e), _) => Left(e)
-          case (Right(acc), Right(rhs)) =>
-            andCombine(Right(acc), Right(rhs))
-          case (Right(_), Left(e)) => Left(e)
+    P(Index ~ booleanNot.rep(sep = WS0 ~ "&&" ~ WS0)).map { (off,terms) =>
+      given ExprContext = ctx.copy(pos = off)
+      if terms.isEmpty then Left(DLCompileError(ctx.posStr, "Empty boolean expression"))
+      else {
+        val oks = terms.collect { case Right(fn) => fn }
+        if oks.isEmpty then terms.head
+        else if oks.size == 1 then Right(oks.head.asInstanceOf[BooleanFn])
+        else {
+          val lhs = oks.head.asInstanceOf[Fn[Any]]
+          val rhs = oks.tail.map(_.asInstanceOf[Fn[Any]])
+          // build AND chain left-associatively so each build has one rhs
+          val combined = rhs.foldLeft[Either[DLCompileError, BooleanFn]](Right(lhs.asInstanceOf[BooleanFn])) {
+            case (Left(e), _) => Left(e)
+            case (Right(acc), next) =>
+              CAndFn
+                .build(NamedReceiver("&&", ScalarType("", "scala.Boolean"), acc.asInstanceOf[Fn[Any]]), List(next))
+                .flatMap { built =>
+                  CAndFn.validate(built).map(_ => built.asInstanceOf[BooleanFn])
+                }
+          }
+          combined
         }
+      }
     }
 
   /** booleanNot := '!' booleanNot | atom */
   private def booleanNot[$: P](using ctx: ExprContext): P[ParseBoolResult] =
     P(
-      ("!" ~ WS0 ~ booleanNot).map {
-        case Right(b) =>
+      (Index ~ "!" ~ WS0 ~ booleanNot).map {
+        case (off, Right(b)) =>
+          given ExprContext = ctx.copy(pos = off)
           b match
             case bf: BooleanFn =>
               CNotFn.build(
@@ -112,15 +136,18 @@ trait Level2 extends Level1 with ValueExprModule:
               ) match
                 case Left(err) => Left(err)
                 case Right(fn) =>
-                  CNotFn.validate(fn)(using ctx).map(_ => fn.asInstanceOf[BooleanFn])
-        case Left(e) => Left(e)
+                  // Use ctx.posStrFrom(off) if you want to embed source location later
+                  CNotFn.validate(fn).map(_ => fn.asInstanceOf[BooleanFn])
+        case (_, Left(e)) => Left(e)
       } | booleanAtom
     )
 
   /** comparisonExpr := arithmeticExpr (==|!=|>=|<=|>|<) arithmeticExpr */
   private def comparisonExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
-    P(arithmeticExpr ~ WS0 ~ StringIn("==", "!=", ">=", "<=", ">", "<").! ~ WS0 ~ arithmeticExpr)
-      .map { case (lE, op, rE) =>
+    println(s"[comparisonExpr] ENTER: parsing lhs/rhs around operator")
+    P(Index ~ !StringIn("if", "then", "else") ~ arithmeticExpr ~ WS0 ~ StringIn("==", "!=", ">=", "<=", ">", "<").! ~ WS0 ~ arithmeticExpr)
+      .map { case (off, lE, op, rE) =>
+        given ExprContext = ctx.copy(pos = off)
         val cfn: CompileFn = op match
           case ">"  => CGreaterThanFn
           case ">=" => CGreaterThanOrEqualFn
@@ -129,11 +156,18 @@ trait Level2 extends Level1 with ValueExprModule:
           case "==" => CEqualFn
           case "!=" => CNotEqualFn
 
+        println(s"[comparisonExpr] op=$op lE=$lE rE=$rE")
         for
           left  <- lE
           right <- rE
+          _ <- Right({
+            println(s"[comparisonExpr] op=$op")
+            println(s"[comparisonExpr]  left=${left.getClass.getSimpleName} (${left})")
+            println(s"[comparisonExpr]  right=${right.getClass.getSimpleName} (${right})")
+            println(s"[comparisonExpr]  about to call ${cfn.getClass.getSimpleName}.build with args: ${List(left, right)}")
+          })
           built <- cfn
-            .build(NamedReceiver(op, ScalarType("", "scala.Boolean"), NoOpFn), List(left, right))
+            .build(NamedReceiver(op, ScalarType("", "scala.Boolean"), left), List(right))
             .asInstanceOf[Either[DLCompileError, BooleanFn]]
           _     <- cfn.validate(built)(using ctx)
         yield built
@@ -146,6 +180,7 @@ trait Level2 extends Level1 with ValueExprModule:
     println(s"[Level2:arithmeticExpr] ENTER ctx=${ctx.hashCode()}")
     P(Index ~ arithmeticTerm ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticTerm).rep).map {
       case (off, first, rest) =>
+        given ExprContext = ctx.copy(pos = off)
         first match
           case Right(fn) if containsIllegalThis(fn) =>
             Left(DLCompileError(ctx.posStrFrom(off), "Use of 'this' with no receiver in scope"))
@@ -192,6 +227,7 @@ trait Level2 extends Level1 with ValueExprModule:
     println("[Level2:arithmeticTerm] ENTER")
     P(Index ~ arithmeticFactor ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ arithmeticFactor).rep).map {
       case (off, first, rest) =>
+        given ExprContext = ctx.copy(pos = off)
         first match
           case Right(fn) if containsIllegalThis(fn) =>
             Left(DLCompileError(ctx.posStrFrom(off), "Use of 'this' with no receiver in scope"))
@@ -274,7 +310,7 @@ trait Level2 extends Level1 with ValueExprModule:
           for {
             built <- CMinusFn.build(NamedReceiver("-", ScalarType("", "scala.Double"), NoOpFn), List(fn))
             _     <- CMinusFn.validate(built)(using ctx)
-          } yield built.asInstanceOf[Fn[Any]]
+          } yield built
         P(Pass(result))
       case (_, Left(err)) =>
         P(Pass(Left(err)))
@@ -346,17 +382,16 @@ trait Level2 extends Level1 with ValueExprModule:
     }
 
   // ---- valueExpr => Top-Level Expr ----
-
   def valueExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
     println("[Level2:valueExpr] ENTER")
     P(
       ifFn |
         blockFn |
         mapExpr |
-        consExpr | // this already handles arithmetic and path+method stuff
+        consExpr | // arithmetic, path, etc.
         booleanExpr
     ).flatMap {
-      case Left(err)   => P(Pass.map(_ => Left(err)))
+      case Left(err) => P(Pass.map(_ => Left(err)))
       case Right(base) => maybeCaseTail(base.asInstanceOf[Fn[Any]])
     }
 
@@ -647,7 +682,7 @@ trait Level2 extends Level1 with ValueExprModule:
 
   private def ifStmt[$: P](using ctx: ExprContext): P[ParseStmtResult] =
     P(
-      "if" ~/ WS ~ booleanExpr ~ WS0 ~
+      "if" ~/ WS ~ (("(" ~/ booleanExpr ~ ")") | booleanExpr) ~ WS0 ~
         "then" ~ WS0 ~ statement ~
         (WS0 ~ "else" ~ WS0 ~ statement).?
     ).map { case (condRes, thenRes, elseOptRes) =>
@@ -669,23 +704,18 @@ trait Level2 extends Level1 with ValueExprModule:
     }
 
   private def ifFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(
-      "if" ~/ WS ~ booleanExpr ~ WS0 ~
+    P( Index ~
+      "if" ~/ WS ~ (
+        ("(" ~/ booleanExpr ~ ")") | booleanExpr
+      ) ~ WS0 ~
         "then" ~/ WS0 ~ valueExpr ~ WS0 ~
         "else" ~/ WS0 ~ valueExpr
-    ).map { case (condRes, thenRes, elseRes) =>
-      for {
-        cond <- condRes
-        thenB <- thenRes
-        elseB <- elseRes
-        _ = {
-          println(s"[ifFn] cond parsed as: $cond, rhsType=${Utility.rhsType(cond)}")
-          println(s"[ifFn] then branch: $thenB, rhsType=${Utility.rhsType(thenB)}")
-          println(s"[ifFn] else branch: $elseB, rhsType=${Utility.rhsType(elseB)}")
-        }
-        built <- CIfFn.build(NamedReceiver("if", ScalarType("", "scala.Boolean"), NoOpFn), List(cond.asInstanceOf[Fn[Any]], thenB, elseB))
-        _     <- CIfFn.validate(built)(using ctx)
-      } yield built.asInstanceOf[Fn[Any]]
+    ).map { case (pos, condRes, thenRes, elseRes) =>
+      for
+        c <- condRes
+        t <- thenRes
+        e <- elseRes
+      yield IfFn(c, t, e, ctx.posStrFrom(pos))
     }
 
   private def defaultCase[$: P](using ctx: ExprContext): P[Either[DLCompileError, (String, Fn[Any])]] =
@@ -703,12 +733,12 @@ trait Level2 extends Level1 with ValueExprModule:
 
   // Parse whole block: { line (\n line)* [\n default -> expr] }
   private def caseBlock[$: P](using ctx: ExprContext): P[Either[DLCompileError, (Vector[(Any, Fn[Any])], Option[Fn[Any]])]] =
-    P(
+    P( Index ~
       "{" ~ WS0 ~
         normalCase.rep(sep = WS0) ~
         defaultCase.? ~
         WS0 ~ "}"
-    ).map { (caseLines, maybeDefault) =>
+    ).map { (pos, caseLines, maybeDefault) =>
       val errors = caseLines.collect { case Left(e) => e }
       if errors.nonEmpty then Left(errors.head)
       else
@@ -719,7 +749,7 @@ trait Level2 extends Level1 with ValueExprModule:
             Left(e)
           case Some(Right((key, fn))) if key != "__default__" =>
             // Should never happen, but defensive
-            Left(DLCompileError(ctx.posStrFrom(implicitly[ParsingRun[?]].index), s"Expected 'default', found: $key"))
+            Left(DLCompileError(ctx.posStrFrom(pos), s"Expected 'default', found: $key"))
           case Some(Right((_, fn))) =>
             Right((regularCases.toVector, Some(fn)))
           case None =>
@@ -731,16 +761,16 @@ trait Level2 extends Level1 with ValueExprModule:
 
   // after you produce a base: P(valueExprCore).flatMap { base => ... }
   private def maybeCaseTail[$: P](base: Fn[Any])(using ctx: ExprContext): P[Either[DLCompileError, Fn[Any]]] =
-    P(WS0 ~ "case" ~ WS0 ~ permissiveMode ~ WS0 ~ caseBlock).?.map {
+    P(Index ~ WS0 ~ "case" ~ WS0 ~ permissiveMode ~ WS0 ~ caseBlock).?.map {
       case None =>
         Right(base)
 
-      case Some((permissive, Right((pairs, df)))) =>
+      case Some((pos, permissive, Right((pairs, df)))) =>
         val bad = pairs.collectFirst {
           case (p, _)
-              if !(p.isInstanceOf[String] || p.isInstanceOf[Boolean] || p.isInstanceOf[Byte] ||
-                p.isInstanceOf[Short] || p.isInstanceOf[Int] || p.isInstanceOf[Long] ||
-                p.isInstanceOf[Float] || p.isInstanceOf[Double]) =>
+            if !(p.isInstanceOf[String] || p.isInstanceOf[Boolean] || p.isInstanceOf[Byte] ||
+              p.isInstanceOf[Short] || p.isInstanceOf[Int] || p.isInstanceOf[Long] ||
+              p.isInstanceOf[Float] || p.isInstanceOf[Double]) =>
             s"case pattern must be a literal (string/number/boolean), got: ${p.getClass.getSimpleName}"
         }
 
@@ -748,10 +778,10 @@ trait Level2 extends Level1 with ValueExprModule:
           case Some(msg) =>
             Left(DLCompileError(ctx.posStrFrom(implicitly[ParsingRun[?]].index), msg))
           case None =>
-            Right(CaseWhenFn(base, pairs, df, permissive, ctx.posStrFrom(implicitly[ParsingRun[?]].index)))
+            Right(CaseWhenFn(base, pairs, df, permissive, ctx.posStrFrom(pos)))
         }
 
-      case Some((_, Left(e))) =>
+      case Some((_, _, Left(e))) =>
         Left(e)
     }
 

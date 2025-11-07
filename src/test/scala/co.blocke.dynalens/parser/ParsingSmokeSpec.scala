@@ -20,7 +20,7 @@ object ParsingSmokeSpec extends ZIOSpecDefault {
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(x,ConstantFn(42)), ValStmt(y,AddFn(GetFn(x,false,RootFn,[1,1],Some(ScalarType(x,scala.Int,false))),ConstantFn(8),ScalarType(,scala.Int,false),[1,1]))))"""
+        """BlockStmt(List(ValStmt(x,ConstantFn(42)), ValStmt(y,AddFn(GetFn(x,false,RootFn,[3,11],Some(ScalarType(x,scala.Int,false))),ConstantFn(8),ScalarType(,scala.Int,false),[3,11]))))"""
 
       val expectedResult =
         """top -> Item(abc,2,5)
@@ -48,7 +48,7 @@ object ParsingSmokeSpec extends ZIOSpecDefault {
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(num,MultiplyFn(GetFn(num,false,RootFn,[1,1],Some(ScalarType(num,scala.Int,false))),ConstantFn(2),ScalarType(,scala.Int,false),[1,1]),[2,9],ScalarType(num,scala.Int,false))))"""
+        """BlockStmt(List(UpdateStmt(num,MultiplyFn(GetFn(num,false,RootFn,[2,9],Some(ScalarType(num,scala.Int,false))),ConstantFn(2),ScalarType(,scala.Int,false),[2,9]),[2,9],ScalarType(num,scala.Int,false))))"""
 
       val expectedResult =
         """top -> Item(abc,2,10)
