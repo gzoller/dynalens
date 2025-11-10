@@ -177,43 +177,45 @@ trait Level2 extends Level1 with ValueExprModule:
 
   // arithmeticExpr := arithmeticTerm (('+'|'-') arithmeticTerm)*
   private def arithmeticExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    println(s"[Level2:arithmeticExpr] ENTER ctx=${ctx.hashCode()}")
-    P(Index ~ arithmeticTerm ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticTerm).rep).map {
-      case (off, first, rest) =>
+    P(Index ~ arithmeticTerm ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticTerm).rep ~
+      (WS0 ~ StringIn("==", "!=", ">=", "<=", ">", "<").! ~ WS0 ~ arithmeticTerm).?).map {
+      case (off, first, addSubs, maybeComp) =>
         given ExprContext = ctx.copy(pos = off)
-        first match
-          case Right(fn) if containsIllegalThis(fn) =>
-            Left(DLCompileError(ctx.posStrFrom(off), "Use of 'this' with no receiver in scope"))
-          case _ =>
-            rest.foldLeft(first) {
-              case (Left(e), _) => Left(e)
-              case (Right(acc), (op, rightE)) =>
-                rightE.flatMap { r =>
-                  if containsIllegalThis(r) then
-                    Left(DLCompileError(ctx.posStrFrom(off), "Use of 'this' with no receiver in scope"))
-                  else
-                    val cfn = op match
-                      case "+" => CPlusFn
-                      case "-" => CMinusFn
-                    // Debug prints for operator, function class names, and inferred types
-                    println(s"[Level2:arithmeticExpr] op='$op'  recv=${acc.getClass.getSimpleName}  rhs=${r.getClass.getSimpleName}")
-                    println(s"[Level2:arithmeticExpr] recvType=${acc.resultType}")
-                    println(s"[Level2:arithmeticExpr] rhsType=${Utility.rhsType(r)}")
-                    val recvType =
-                      acc.resultType match
-                        case s if s == null || s.typeName == "scala.Any" =>
-                          Utility.rhsType(acc) match
-                            case TypeResult.Known(ft) => ft
-                            case _                    => ScalarType("", "scala.Any", false)
-                        case other => other
-                    val rhsFieldType = Utility.rhsType(r)
-                    println(s"[Level2:arithmeticExpr] recv=$acc (${recvType})")
-                    println(s"[Level2:arithmeticExpr] rhs=$r (${rhsFieldType})")
-                    cfn
-                      .build(NamedReceiver(op, recvType, acc), List(r))
-                      .flatMap(fn => cfn.validate(fn)(using ctx).map(_ => fn.asInstanceOf[Fn[Any]]))
-                }
+
+        // Fold any + or - first (normal arithmetic chain)
+        val sumExpr: ParseFnResult = addSubs.foldLeft(first) {
+          case (Left(e), _) => Left(e)
+          case (Right(acc), (op, rightE)) =>
+            rightE.flatMap { r =>
+              val cfn = op match
+                case "+" => CPlusFn
+                case "-" => CMinusFn
+              val recvType = Utility.rhsType(acc) match
+                case TypeResult.Known(ft) => ft
+                case _                    => ScalarType("", "scala.Any")
+              cfn.build(NamedReceiver(op, recvType, acc), List(r))
+                .flatMap(fn => cfn.validate(fn)(using ctx).map(_ => fn))
             }
+        }
+
+        // Then, if a comparison follows (>, <, ==, etc.), build that BooleanFn
+        maybeComp match
+          case None => sumExpr
+          case Some((op, rhsExpr)) =>
+            (sumExpr, rhsExpr) match
+              case (Right(lhsFn), Right(rhsFn)) =>
+                val cfn: CompileFn = op match
+                  case ">"  => CGreaterThanFn
+                  case ">=" => CGreaterThanOrEqualFn
+                  case "<"  => CLessThanFn
+                  case "<=" => CLessThanOrEqualFn
+                  case "==" => CEqualFn
+                  case "!=" => CNotEqualFn
+                cfn
+                  .build(NamedReceiver(op, ScalarType("", "scala.Boolean"), lhsFn), List(rhsFn))
+                  .flatMap(fn => cfn.validate(fn)(using ctx).map(_ => fn))
+              case (Left(err), _) => Left(err)
+              case (_, Left(err)) => Left(err)
     }
 
   // Utility for 'this' enforcement in arithmetic
@@ -224,7 +226,6 @@ trait Level2 extends Level1 with ValueExprModule:
 
   // arithmeticTerm := arithmeticFactor (('*'|'/'|'%') arithmeticFactor)*
   private def arithmeticTerm[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    println("[Level2:arithmeticTerm] ENTER")
     P(Index ~ arithmeticFactor ~ (WS0 ~ CharIn("*/%").! ~ WS0 ~ arithmeticFactor).rep).map {
       case (off, first, rest) =>
         given ExprContext = ctx.copy(pos = off)
@@ -253,21 +254,27 @@ trait Level2 extends Level1 with ValueExprModule:
 
   // arithmeticFactor := unaryMinus | arithmeticAtom
   private def arithmeticFactor[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    println("[Level2:arithmeticFactor] ENTER")
-    unaryMinus
+    P(unaryMinus | arithmeticAtom)
+
+  private def parenExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
+    P("(" ~/ valueExpr ~ ")")
+
+  private def primaryExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
+    P(
+      baseExprWithFieldType |
+        numberLiteral |
+        stringLiteral |
+        parenExpr
+    ).flatMap {
+      case Right(expr) =>
+        methodChain(expr)
+      case left@Left(_) =>
+        P(Pass(left))
+    }
 
   // arithmeticAtom := baseExpr | numberLiteral | stringLiteral | '(' valueExpr ')' [.methodChain]
   private def arithmeticAtom[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(
-      // --- PATCH: resolve GetFn field type eagerly in baseExpr ---
-      baseExprWithFieldType |
-      numberLiteral |
-      stringLiteral |
-      ("(" ~/ valueExpr ~ ")").flatMap {
-        case Right(expr)    => methodChain(expr)
-        case left @ Left(_) => P(Pass(left))
-      }
-    )
+    primaryExpr
 
   private def baseExprWithFieldType[$: P](using ctx: ExprContext): P[ParseFnResult] =
     baseExprRaw.map {
@@ -291,7 +298,8 @@ trait Level2 extends Level1 with ValueExprModule:
 
         Right(GetFn(path, isOptional, recv, pos, Some(fieldT)))
 
-      case other => Right(other)
+      case other =>
+        Right(other)
     }
 
   // PATCH: baseExprRaw now returns ParseFnResult directly and flattens to Fn[Any]
@@ -389,6 +397,7 @@ trait Level2 extends Level1 with ValueExprModule:
         blockFn |
         mapExpr |
         consExpr | // arithmetic, path, etc.
+        primaryExpr |
         booleanExpr
     ).flatMap {
       case Left(err) => P(Pass.map(_ => Left(err)))

@@ -9,21 +9,21 @@ import co.blocke.testkit.ZioTestKit.*
 
 object ParsingCollectionSpec extends ZIOSpecDefault {
 
-  case class Wrap(list: List[Any], map: Map[String,Int], nums: List[Int], nested: List[Option[Int]])
+  case class Wrap(list: List[Any], mmap: Map[String,Int], nums: List[Int], nested: List[Option[Int]])
+  val lens = into[Wrap]
 
   def spec = suite("Parsing CollectionFn Tests")(
 
     test("keys() extracts all map keys") {
       val script =
         """
-          |  val ks = map.keys()
+          |  val ks = mmap.keys()
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(ks,KeysFn(GetFn(map,false,RootFn,[2,13],Some(MapType(map,ScalarType(,java.lang.String,false),ScalarType(,scala.Int,false),java.util.Map))),[2,13]))))"""
+        """BlockStmt(List(ValStmt(ks,KeysFn(GetFn(mmap,false,RootFn,[2,12],Some(MapType(mmap,ScalarType(mmap,java.lang.String,false),ScalarType(mmap,scala.Int,false),scala.collection.immutable.Map[java.lang.String,scala.Int],false))),[1,1]))))"""
 
       val inst = Wrap(Nil, Map("a" -> 1, "b" -> 2), Nil, Nil)
-      val lens = into[Wrap]
 
       val expectedResult =
         """top -> Wrap(List(),Map(a -> 1, b -> 2),List(),List())
@@ -44,14 +44,13 @@ object ParsingCollectionSpec extends ZIOSpecDefault {
     test("values() extracts all map values") {
       val script =
         """
-          |  val vs = map.values()
+          |  val vs = mmap.values()
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(ValStmt(vs,ValuesFn(GetFn(map,false,RootFn,[2,13],Some(MapType(map,ScalarType(,java.lang.String,false),ScalarType(,scala.Int,false),java.util.Map))),[2,13]))))"""
+        """BlockStmt(List(ValStmt(vs,ValuesFn(GetFn(mmap,false,RootFn,[2,12],Some(MapType(mmap,ScalarType(mmap,java.lang.String,false),ScalarType(mmap,scala.Int,false),scala.collection.immutable.Map[java.lang.String,scala.Int],false))),[1,1]))))"""
 
       val inst = Wrap(Nil, Map("a" -> 1, "b" -> 2), Nil, Nil)
-      val lens = into[Wrap]
       val expectedResult =
         """top -> Wrap(List(),Map(a -> 1, b -> 2),List(),List())
           |vs -> List(1, 2)
@@ -66,19 +65,18 @@ object ParsingCollectionSpec extends ZIOSpecDefault {
         resultStr == expectedResult,
         compiled.toString == expectedCompiled
       )
-    } @@only,
+    },
 
     test("filter() retains matching list elements") {
       val script =
         """
-          |  nums = nums.filter(_ > 2)
+          |  nums = nums.filter(this > 2)
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(nums,FilterFn(GetFn(nums,false,RootFn,[2,11],Some(ListType(nums,ScalarType(,scala.Int,false),scala.List[Int]))),LambdaFn(_,GreaterThanFn(GetFn(_,false,RootFn,[2,23],Some(ScalarType(,scala.Int,false))),ConstantFn(2),ScalarType(,scala.Boolean,false),[2,23]),[2,23]),[2,11]),[2,11],ListType(nums,ScalarType(,scala.Int,false),scala.List[Int]))))"""
+        """BlockStmt(List(UpdateStmt(nums,FilterFn(GetFn(nums,false,RootFn,[2,10],Some(ListType(nums,ScalarType(nums,scala.Int,false),scala.collection.immutable.List[scala.Int],false))),GreaterThanFn(IterThisFn,ConstantFn(2),[2,22]),[2,21]),[2,10],ListType(nums,ScalarType(nums,scala.Int,false),scala.collection.immutable.List[scala.Int],false))))"""
 
       val inst = Wrap(Nil, Map(), List(1, 3, 2, 5), Nil)
-      val lens = into[Wrap]
       val expectedResult =
         """top -> Wrap(List(),Map(),List(3, 5),List())
           |""".stripMargin
@@ -104,7 +102,6 @@ object ParsingCollectionSpec extends ZIOSpecDefault {
         """BlockStmt(List(UpdateStmt(nums,ReverseFn(GetFn(nums,false,RootFn,[2,11],Some(ListType(nums,ScalarType(,scala.Int,false),scala.List[Int]))),[2,11]),[2,11],ListType(nums,ScalarType(,scala.Int,false),scala.List[Int]))))"""
 
       val inst = Wrap(Nil, Map(), List(1,2,3), Nil)
-      val lens = into[Wrap]
       val expectedResult =
         """top -> Wrap(List(),Map(),List(3, 2, 1),List())
           |""".stripMargin
@@ -130,7 +127,6 @@ object ParsingCollectionSpec extends ZIOSpecDefault {
         """BlockStmt(List(UpdateStmt(nested,CleanFn(GetFn(nested,false,RootFn,[2,12],Some(ListType(nested,ScalarType(nested,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],false))),ListType(nested,ScalarType(nested,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],false),[1,1]),[2,12],ListType(nested,ScalarType(nested,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],false))))"""
 
       val inst = Wrap(Nil, Map(), Nil, List(Some(5), None, null, Some(9)))
-      val lens = into[Wrap]
       val expectedResult =
         """top -> Wrap(List(),Map(),List(),List(Some(5), Some(9)))
           |""".stripMargin

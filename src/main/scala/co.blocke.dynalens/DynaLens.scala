@@ -99,9 +99,21 @@ object DynaLens:
     val classSchemaExpr: Expr[ClassType] = Expr(Schema.build(cls))
     val classLensExpr: Expr[ClassLens] = '{
       var self: ClassLens = null.asInstanceOf[ClassLens]
+      // First create a non-null shell so children can safely capture parent = Some(self)
+      self = ClassLens(
+        name = $nameExpr,
+        isOptional = false,
+        fields = Map.empty,
+        parent = $parentOptExpr,
+        _get = $getFn,
+        _update = $updFn,
+        schema = $classSchemaExpr
+      )
+      // Now that self is non-null, build children with parent = Some(self)
       val fieldPairs: List[(String, Lens)] = ${ fieldPairsWithParent(cls, '{ self }) }
       val fields: Map[String, Lens] = Map.from(fieldPairs)
-      self = ClassLens(name = $nameExpr, isOptional = false, fields = fields, parent = $parentOptExpr, _get = $getFn, _update = $updFn, schema = $classSchemaExpr)
+      // Finalize by injecting the real fields map
+      self = self.copy(fields = fields)
       self
     }
 

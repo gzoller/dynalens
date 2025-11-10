@@ -63,15 +63,7 @@ trait Level1 extends Level0 {
       val pathIsOptional = Schema.resolvePath(ctx.schema, path).exists {
         case ResolvedType(ft, _) => ft.isOptional
       }
-      Right(
-        GetFn(
-          path,
-          pathIsOptional,
-          RootFn,
-          ctx.posStrFrom(pos),
-          ftypeOpt // include known type if available
-        )
-      )
+      Right(GetFn(path, pathIsOptional, RootFn, ctx.posStrFrom(pos), ftypeOpt))
     }
 
   def pathFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
@@ -117,8 +109,69 @@ trait Level1 extends Level0 {
 //    println(s"[pathFn] offset=$offset")
 //    println(s"[pathFn] base=$base")
 //    println(s"[pathFn] ctx.schema.fields=${ctx.schema.fields.map(_.name)}")
-  
+
+  // Only consumes `.identifier` and captures the index after the name.
+  // Leaves the input right before '(' so we can re-parse args with the right ctx.
+  private def methodNameOnly[$: P](using ctx: ExprContext): P[(String, Int)] =
+    P(WS0 ~ "." ~ identifier.! ~ Index)
+
+  // Parse "( ... )" and return the args as a List[Fn[Any]] (or a DLCompileError)
+//  private def parseArgs[$: P](using ctx: ExprContext): P[Either[DLCompileError, List[Fn[Any]]]] =
+//    P(WS0 ~ "(" ~/ WS0 ~ valueExpr.rep(sep = "," ~/ WS0) ~ WS0 ~ ")").map { argsRaw =>
+//      val (errs, oks) = argsRaw.partitionMap(identity)
+//      if errs.nonEmpty then Left(errs.head)
+//      else Right(oks.toList)
+//    }
+
+  // Parse a comma-separated list of full expressions as args.
+  private def parseArgs[$: P](using ctx: ExprContext): P[Either[DLCompileError, List[Fn[Any]]]] =
+    P(WS0 ~ "(" ~/ WS0 ~ valueExpr.rep(sep = WS0 ~ "," ~ WS0) ~ WS0 ~ ")").map { args =>
+      val (errs, oks) = args.partitionMap(identity)
+      if errs.nonEmpty then Left(errs.head)
+      else Right(oks.map(_.asInstanceOf[Fn[Any]]).toList)
+    }
+
+  def methodChain[$: P](base: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] =
+    def loop(current: Fn[Any]): P[Either[DLCompileError, Fn[Any]]] =
+      // first, just get the method name; do not parse args yet
+      P(methodNameOnly).flatMap { case (name, off) =>
+        CompileFnRegistry.lookup(name) match
+          case None =>
+            P(Pass(Left(DLCompileError(ctx.posStrFrom(off), s"Unknown method: $name"))))
+
+          case Some(cfn) =>
+            val recvType = Utility.rhsType(current).toKnownType
+            val elemTypeForThis =
+              recvType match
+                case lt: ListType => lt.elementType
+                case mt: MapType  => mt.valueType
+                case other        => other
+
+            // introduce the given *inside its own block* after elemTypeForThis is known
+            {
+              given ExprContext =
+                ctx.copy(pos = off, receiver = Some(NamedReceiver("this", elemTypeForThis, current)))
+
+              // now parse "( ... )" with the correct receiver context
+              parseArgs.flatMap {
+                case Left(err) => P(Pass(Left(err)))
+                case Right(args) =>
+                  val recvType = Utility.rhsType(current).toKnownType
+                  cfn.build(NamedReceiver("anon", recvType, current), args) match
+                    case Left(e) => P(Pass(Left(e)))
+                    case Right(b) => loop(b) // continue chaining on the built fn
+              }
+            }
+      } | P(Pass(Right(current)))
+
+    // keep index after chain: foo.do()[3]
+    loop(base).flatMap {
+      case Left(err) => P(Pass(Left(err)))
+      case Right(fn0) => maybeIndex(fn0)
+    }
+
   // Parses: "." ident "(" args ")"
+    /*
   private def methodCall[$: P](using ctx: ExprContext): P[Either[(DLCompileError, String, Int), (String, List[Fn[Any]], Int)]] =
     P(
       WS0 ~ "." ~ identifier.! ~ Index ~ // capture offset *after* method name, before '('
@@ -164,6 +217,7 @@ trait Level1 extends Level0 {
       case Left(err) => P(Pass(Left(err)))
       case Right(fn0) => maybeIndex(fn0)
     }
+     */
 
   def baseExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
     (standaloneFn | constant | pathFn).flatMap {

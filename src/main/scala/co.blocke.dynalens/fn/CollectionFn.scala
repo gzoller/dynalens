@@ -144,7 +144,11 @@ case class ValuesFn(recv: Fn[Any], posStr: String)
 case class FilterFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   extends BinaryFn[List[Any]]:
 
-  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
+  override val resultType: FieldType = recv.resultType match
+    case l: ListType => l.copy(isOptional = false) // preserve element type, normalize optional
+    case _ =>
+      ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
+      
   def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
     copy(
       recv = kids.head.asInstanceOf[Fn[Any]],
@@ -360,8 +364,6 @@ case class CleanFn(recv: Fn[Any], resultType: FieldType, posStr: String) extends
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     recv.resolve(ctx).map { case (resolved, lLens) =>
-      println("!!! RECV: "+recv)
-      println("!!! RESOLVED: "+resolved)
       val cleaned = resolved match
         case null | None => Nil
         case xs: Iterable[_] =>
@@ -370,10 +372,8 @@ case class CleanFn(recv: Fn[Any], resultType: FieldType, posStr: String) extends
           val cleaned = iterable.filterNot(e => e == null || e == None)
           Some(cleaned)
         case x =>
-          println("HOOO "+x)
           Nil
 
-      println("!!! CLEANED: "+cleaned)
       (cleaned, lLens)
     }
 

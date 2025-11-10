@@ -616,3 +616,19 @@ case class IndexFn(recv: Fn[Any], index: Fn[Any], pos: String) extends Fn[Any] {
     }
   }
 }
+
+
+case object IterThisFn extends Fn[Any]:
+  override val recv: Fn[Any] = RootFn
+  override val args: List[Fn[Any]] = Nil
+  val resultType: FieldType = ScalarType("<iter-this>", "scala.Any", false)
+  override val methodName: String = "<iter-this>"
+  override val posStr: String = "<iter-this>"
+  override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
+
+  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
+    ctx.get("this") match
+      case Some((v, l)) =>
+        ZIO.succeed((v, l))
+      case None =>
+        ZIO.fail(DynaLensError(posStr, s"No 'this' bound for iteration element"))

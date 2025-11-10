@@ -353,3 +353,29 @@ object Utility:
         case _ =>
           numericPromote(posStr, r, a).map(t => ScalarType("", t, false))
   }
+
+  def replaceThis(fn: Fn[Any], substitute: Fn[Any]): Fn[Any] =
+    fn match
+      // Replace any bare `this`
+      case g: GetFn if g.path == "this" => substitute
+
+      // BinaryFn (e.g., AddFn, GreaterThanFn, etc.)
+      case f: BinaryFn[_] =>
+        val newArgs = f.args.map(a => replaceThis(a, substitute))
+        try
+          val ctor = f.getClass.getConstructors.head
+          ctor.newInstance((newArgs :+ f.posStr)*).asInstanceOf[Fn[Any]]
+        catch
+          case _: Throwable => f
+
+      // UnaryFn (e.g., NotFn, NegateFn)
+      case f: UnaryFn[_] =>
+        val newArgs = f.args.map(a => replaceThis(a, substitute))
+        try
+          val ctor = f.getClass.getConstructors.head
+          ctor.newInstance((newArgs :+ f.posStr)*).asInstanceOf[Fn[Any]]
+        catch
+          case _: Throwable => f
+
+      // Any other Fn
+      case other => other

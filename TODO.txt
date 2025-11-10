@@ -11,6 +11,8 @@ Features for 1.2.0:
 
 * var, w/assignment (maybe val -> var?)
 
+* Test non-std 'this' remplacement in predicate:  foo(bar(5,this))   <-- nested and not the receiver
+
 
 ==== New Compiler Features ====
 

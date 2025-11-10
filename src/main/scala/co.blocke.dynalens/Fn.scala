@@ -22,6 +22,7 @@
 package co.blocke.dynalens
 
 import zio.*
+import fn.GetFn
 
 
 trait Fn[R]:
@@ -38,13 +39,42 @@ trait Fn[R]:
   /** Default: no sub-nodes. Override in composite nodes. */
   def children: List[Fn[?]] = recv :: args
 
+  /** Replace just the receiver. Default = rebuild with new recv. */
+  def replaceRecv(newRecv: Fn[Any]): Fn[R] =
+    rebuild(newRecv :: args).asInstanceOf[Fn[R]]
+
+  /** Replace the ith argument (0-based). */
+  def replaceArg(i: Int, newArg: Fn[Any]): Fn[R] =
+    val updatedArgs = args.zipWithIndex.map {
+      case (_, idx) if idx == i => newArg
+      case (a, _) => a
+    }
+    rebuild(recv :: updatedArgs).asInstanceOf[Fn[R]]
+
   /** Rebuild with new children (in the same order as `children`). */
   def rebuild(kids: List[Fn[?]]): Fn[R]
 
   /** Walk the tree and patch every `GetFn("this")` with the given receiver. */
   def withReceiver(newRecv: Fn[?]): Fn[R] =
     val kids: List[Fn[Any]] = newRecv.asInstanceOf[Fn[Any]] :: args
-    rebuild(kids).asInstanceOf[Fn[R]]
+    rebuild(kids)
+
+// TODO: May be unused...
+extension (fn: Fn[Any])
+  /** Replace `GetFn("this")` with a substitute Fn, used in predicates or collection iterations. */
+  def replaceThisWith(substitute: Fn[Any]): Fn[Any] =
+    fn match
+      // Use safe reflection to handle field name check, since GetFn may not expose it directly
+      case g: GetFn =>
+        val field = try {
+          val f = g.getClass.getDeclaredField("name")
+          f.setAccessible(true)
+          f.get(g).toString
+        } catch {
+          case _: Throwable => ""
+        }
+        if field == "this" then substitute else fn
+      case _ => fn
 
 
 trait UnaryFn[R] extends Fn[R]:

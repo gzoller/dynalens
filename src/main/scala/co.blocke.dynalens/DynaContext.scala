@@ -72,8 +72,16 @@ final case class DynaContext(
   def withThisScoped[R](obj: Any, lens: Lens)(
     body: DynaContext => ZIO[RuntimeEnv, DynaLensError, R]
   ): ZIO[RuntimeEnv, DynaLensError, R] =
+    println(s"[withThisScoped] ENTER with obj=${obj} (${Option(obj).map(_.getClass.getSimpleName).getOrElse("null")}), lens=${lens.getClass.getSimpleName}, parent=${lens.parent.map(_.getClass.getSimpleName)}")
+    val effectiveLens = if (lens == null) dynaLens.topLens else lens
+    val detachedLens = effectiveLens match
+      case s: ScalarLens => s.copy(parent = None)
+      case l: ListLens   => l.copy(parent = None)
+      case m: MapLens    => m.copy(parent = None)
+      case e: EnumLens   => e.copy(parent = None)
+      case other         => other
     val previous = get("this")
-    val newCtx   = setThis(obj, lens)
+    val newCtx   = setThis(obj, detachedLens)
     body(newCtx).ensuring {
       ZIO.succeed(previous match
         case Some((v, l)) => copy(symbols = symbols + ("this" -> (v, l)), dynaLens = this.dynaLens)
@@ -89,13 +97,28 @@ final case class DynaContext(
   def withThisKeyValueScoped[R](k: Any, v: Any, keyLens: Lens, valLens: Lens)(
     body: DynaContext => ZIO[RuntimeEnv, DynaLensError, R]
   ): ZIO[RuntimeEnv, DynaLensError, R] =
+    val effKeyLens = if (keyLens == null) dynaLens.topLens else keyLens
+    val effValLens = if (valLens == null) dynaLens.topLens else valLens
+    val detachedKeyLens = effKeyLens match
+      case s: ScalarLens => s.copy(parent = None)
+      case l: ListLens   => l.copy(parent = None)
+      case m: MapLens    => m.copy(parent = None)
+      case e: EnumLens   => e.copy(parent = None)
+      case other         => other
+    val detachedValLens = effValLens match
+      case s: ScalarLens => s.copy(parent = None)
+      case l: ListLens   => l.copy(parent = None)
+      case m: MapLens    => m.copy(parent = None)
+      case e: EnumLens   => e.copy(parent = None)
+      case other         => other
+
     val prevKey = get("this_key")
     val prevVal = get("this_value")
     val prevThis = get("this")
 
     // new context includes all 3: this_key, this_value, and this
-    val newCtx = setThisKeyValue(k, v, keyLens, valLens)
-      .setThis(v, valLens)
+    val newCtx = setThisKeyValue(k, v, detachedKeyLens, detachedValLens)
+      .setThis(v, detachedValLens)
 
     body(newCtx).ensuring {
       ZIO.succeed(

@@ -3,6 +3,7 @@ package parser
 package cfn
 
 import co.blocke.dynalens.fn.*
+import co.blocke.dynalens.fn.IterThisFn
 
 
 object CConsFn extends CompileFn:
@@ -117,43 +118,71 @@ object CFilterFn extends CompileFn:
       case _ => false
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
-    args.headOption.toRight(DLCompileError(ctx.posStr, "filter() requires a predicate")).flatMap { rawPred =>
-      val elemType = Utility.rhsType(recv.fn)(using ctx) match
-        case TypeResult.Known(ListType(_, e, _, _)) => e
-        case TypeResult.Known(ft: FieldType) if ft.isOptional && ft.isInstanceOf[ListType] =>
-          ft.asInstanceOf[ListType].elementType
-        case _ => ScalarType("", "scala.Any")
-      val elemFields = elemType match
-        case c: ClassType => c.fields
-        case _ => Nil
-      val rcvr = NamedReceiver("this", elemType, recv.fn)
-      val ctxEnriched = ctx.withReceiver(rcvr).pushScope(elemFields)
-      Utility.rhsType(recv.fn)(using ctx) match
-        case TypeResult.Known(_: ListType) =>
-          Utility.rhsType(rawPred)(using ctxEnriched) match
-            case TypeResult.Known(ft) if ft.typeName == "scala.Boolean" =>
-              Right(FilterFn(recv.fn, rawPred.withReceiver(recv.fn).asInstanceOf[Fn[Any]], ctx.posStr).asInstanceOf[Fn[Any]])
-            case TypeResult.Known(ft) =>
-              Left(DLCompileError(ctx.posStr, s"filter() requires boolean predicate, got ${ft.typeName}"))
-            case TypeResult.Error(e) => Left(e)
-            case _ =>
-              Left(DLCompileError(ctx.posStr, "filter() cannot resolve predicate type"))
-        case TypeResult.Known(ft: FieldType) if ft.isOptional && ft.isInstanceOf[ListType] =>
-          Utility.rhsType(rawPred)(using ctxEnriched) match
-            case TypeResult.Known(ft) if ft.typeName == "scala.Boolean" =>
-              Right(FilterFn(recv.fn, rawPred.withReceiver(recv.fn).asInstanceOf[Fn[Any]], ctx.posStr).asInstanceOf[Fn[Any]])
-            case TypeResult.Known(ft) =>
-              Left(DLCompileError(ctx.posStr, s"filter() requires boolean predicate, got ${ft.typeName}"))
-            case TypeResult.Error(e) => Left(e)
-            case _ =>
-              Left(DLCompileError(ctx.posStr, "filter() cannot resolve predicate type"))
-        case TypeResult.Known(ft) =>
-          Left(DLCompileError(ctx.posStr, s"filter() cannot be applied to receiver of type ${ft.typeName}"))
-        case TypeResult.Error(e) =>
-          Left(e)
-        case _ =>
-          Left(DLCompileError(ctx.posStr, "filter() cannot resolve receiver type"))
-    }
+    args.headOption match
+      case None =>
+        Left(DLCompileError(ctx.posStr, "filter() requires a predicate"))
+
+      case Some(pred) =>
+        // Get element type from the receiver list
+        val elemType = Utility.rhsType(recv.fn)(using ctx) match
+          case TypeResult.Known(listT: ListType) => listT.elementType
+          case TypeResult.Known(ft: FieldType) if ft.isOptional && ft.isInstanceOf[ListType] =>
+            ft.asInstanceOf[ListType].elementType
+          case _ => ScalarType("", "scala.Any", false)
+        val elemFields = elemType match
+          case c: ClassType => c.fields
+          case _ => Nil
+
+        // Insert IterThisFn for 'this' or receiver field in predicate (recursive)
+        println("--z-- BEFORE"+pred)
+        def replaceIterThis(fn: Fn[Any], depth: Int = 0): Fn[Any] = {
+          println("[TRACE] " + "  " * depth + s"Visiting ${fn.getClass.getSimpleName}: $fn")
+          fn match
+            case g: GetFn if g.path == "this" =>
+              println("[TRACE] " + "  " * depth + s"Matched GetFn('this'): replacing with IterThisFn")
+              println("[TRACE] " + "  " * depth + s"Returning: $IterThisFn")
+              IterThisFn
+            case f =>
+              // Check and maybe replace recv
+              val recvReplaced = f.recv match
+                case fn1: GetFn if fn1.path == "this" =>
+                  println("[TRACE] " + "  " * (depth+1) + s"Matched recv GetFn('this') in ${f.getClass.getSimpleName}: replacing with IterThisFn")
+                  f.replaceRecv(IterThisFn)
+                case recvFn =>
+                  // Only recurse if not null and not already IterThisFn
+                  if recvFn != null && recvFn != f && recvFn != IterThisFn then
+                    println("[TRACE] " + "  " * (depth+1) + s"Recursing into recv of ${f.getClass.getSimpleName}")
+                  f
+              // Scan arguments too
+              val result = f.args.zipWithIndex.foldLeft(recvReplaced) { case (currFn, (a, i)) =>
+                val patched = a match
+                  case fn1: GetFn if fn1.path == "this" =>
+                    println("[TRACE] " + "  " * (depth+1) + s"Matched arg[$i] GetFn('this') in ${f.getClass.getSimpleName}: replacing with IterThisFn")
+                    IterThisFn
+                  case _ =>
+                    println("[TRACE] " + "  " * (depth+1) + s"Recursing into arg[$i] of ${f.getClass.getSimpleName}")
+                    replaceIterThis(a, depth + 2)
+                val replaced = currFn.replaceArg(i, patched)
+                if (patched ne a)
+                  println("[TRACE] " + "  " * (depth+1) + s"Replaced arg[$i] in ${f.getClass.getSimpleName}")
+                replaced
+              }
+              println("[TRACE] " + "  " * depth + s"Returning: $result")
+              result
+        }
+
+        val fixedPred = replaceIterThis(pred)
+        println("------> Fixed: " + fixedPred)
+
+        // Validate predicate returns Boolean
+        Utility.rhsType(fixedPred)(using ctx.withReceiver(NamedReceiver("this", elemType, recv.fn)).pushScope(elemFields)) match
+          case TypeResult.Known(ft) if ft.typeName == "scala.Boolean" =>
+            Right(FilterFn(recv.fn, fixedPred, ctx.posStr).asInstanceOf[Fn[Any]])
+          case TypeResult.Known(ft) =>
+            Left(DLCompileError(ctx.posStr, s"filter() requires boolean predicate, got ${ft.typeName}"))
+          case TypeResult.Error(e) => Left(e)
+          case _ =>
+            Left(DLCompileError(ctx.posStr, "filter() cannot resolve predicate type"))
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match
@@ -400,6 +429,7 @@ object CLenFn extends CompileFn:
       case _ => Right(())
 
 
+/*
 // --------------------------------------------------
 // mapTo()
 // --------------------------------------------------
@@ -458,6 +488,7 @@ object CMapFromFn extends CompileFn:
           case TypeResult.Error(e) => Left(e)
           case _ => Left(DLCompileError(ctx.posStr, "mapFrom() cannot determine receiver type"))
       case _ => Right(())
+      */
 
 
 // --------------------------------------------------
