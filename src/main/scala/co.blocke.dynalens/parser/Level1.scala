@@ -52,8 +52,26 @@ trait Level1 extends Level0 {
   private def segmentFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
     // Match a plain path segment ONLY if it is *not* immediately followed by a method call "("
     // This lets `pathFn` stop before a method name so that `methodChain` can parse `.foo(...)`.
-    P(Index ~ identifier.! ~ ! (WS0 ~ "(") ).map { (pos,name) =>
-      Right(GetFn(name, Utility.isPathOptional(name, ctx), RootFn, ctx.posStrFrom(pos)))
+    P(Index ~ identifier.! ~ !(WS0 ~ "(")).map { (pos, path) =>
+      // Try to determine field type from the current schema context
+      val ftypeOpt: Option[FieldType] = ctx.schema match
+        case c: ClassType =>
+          // ClassType should expose fields as a List[FieldType]
+          c.fields.find(_.name == path)
+        case _ => None
+
+      val pathIsOptional = Schema.resolvePath(ctx.schema, path).exists {
+        case ResolvedType(ft, _) => ft.isOptional
+      }
+      Right(
+        GetFn(
+          path,
+          pathIsOptional,
+          RootFn,
+          ctx.posStrFrom(pos),
+          ftypeOpt // include known type if available
+        )
+      )
     }
 
   def pathFn[$: P](using ctx: ExprContext): P[ParseFnResult] =
@@ -103,12 +121,11 @@ trait Level1 extends Level0 {
   // Parses: "." ident "(" args ")"
   private def methodCall[$: P](using ctx: ExprContext): P[Either[(DLCompileError, String, Int), (String, List[Fn[Any]], Int)]] =
     P(
-      Index ~ // capture offset *before* the dot
-        WS0 ~ "." ~ identifier.! ~
-        "(" ~/ WS0 ~
+      WS0 ~ "." ~ identifier.! ~ Index ~ // capture offset *after* method name, before '('
+        WS0 ~ "(" ~/ WS0 ~
         (!")" ~ valueExpr).rep(sep = "," ~/ WS0) ~
         WS0 ~ ")"
-    ).map { case (off, name, argsRaw) =>
+    ).map { case (name, off, argsRaw) =>
       println(s"[methodCall args] $argsRaw")
       val (errs, oks) = argsRaw.partitionMap(identity)
 

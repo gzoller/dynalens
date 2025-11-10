@@ -188,15 +188,20 @@ object Utility:
       case f: Fn[?] =>
         TypeResult.Known(f.resultType)
 
-
-  def isPathOptional(path: String, ctx: ExprContext): Boolean =
-    Schema.resolvePath(ctx.schema, path).exists {
-      case ResolvedType(ft, _) => ft.isOptional
-    }
-
   def addThisType(cleanPath: String, ctx: ExprContext): Either[DLCompileError, ExprContext] =
     ctx.withReceiverFromPath(cleanPath) match
-      case Right(withRecv) => Right(withRecv)
+      case Right(ec) =>
+        ec.receiver match
+          case Some(nr @ NamedReceiver(_, ft, g: GetFn)) =>
+            g.maybeType match
+              case None =>
+                // Ensure the path GetFn is typed so downstream rhsType sees a Known type
+                val g2 = g.copy(maybeType = Some(ft))
+                Right(ec.copy(receiver = Some(nr.copy(fn = g2))))
+              case Some(_) =>
+                Right(ec)
+          case _ =>
+            Right(ec)
       case Left(err) => Left(err)
 
   def containsThis(fn: Fn[?], seen: Set[Int] = Set.empty)(using ctx: ExprContext): Boolean = {

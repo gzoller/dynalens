@@ -263,7 +263,9 @@ object CollectionFnSpec extends ZIOSpecDefault {
      *───────────────────────────*/
     test("clean() removes nulls and None") {
       val ctx = buildCtx("root", List("x", None, "y", null))
-      val fn = CleanFn(GetFn("root", false, RootFn, "pos"), "pos")
+      val recv = GetFn("root", false, RootFn, "pos")
+      val resultType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]", false)
+      val fn = CleanFn(recv, resultType, "pos")
 
       for (v, _) <- fn.resolve(ctx)
         yield assertTrue(v == List("x", "y"))
@@ -567,7 +569,10 @@ object CollectionFnSpec extends ZIOSpecDefault {
 
     test("clean() on empty list returns empty list") {
       val ctx = buildCtx("root", List.empty[String])
-      val fn  = CleanFn(GetFn("root", false, RootFn, "pos"), "pos")
+      val recv = GetFn("root", false, RootFn, "pos")
+      val resultType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]", false)
+      val fn = CleanFn(recv, resultType, "pos")
+
       for (v, _) <- fn.resolve(ctx)
         yield assertTrue(v == Nil)
     },

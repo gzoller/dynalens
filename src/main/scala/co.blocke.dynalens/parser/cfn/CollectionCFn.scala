@@ -342,7 +342,19 @@ object CCleanFn extends CompileFn:
 
   def build(recv: Receiver, args: List[Fn[Any]])(using ctx: ExprContext) =
     if args.nonEmpty then Left(DLCompileError(ctx.posStr, "clean() takes no arguments"))
-    else Right(CleanFn(recv.fn, ctx.posStr).asInstanceOf[Fn[Any]])
+    else
+      // Instrumentation: log the raw recv.fieldType
+      val recvType = Utility.rhsType(recv.fn)(using ctx)
+
+      val resultType = recvType match
+        case TypeResult.Known(listT: ListType) =>
+          // Preserve the element type accurately
+          ListType(listT.name, listT.elementType, listT.typeName, false)
+        case TypeResult.Known(ft) =>
+          ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]", false)
+        case _ =>
+          ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]", false)
+      Right(CleanFn(recv.fn, resultType, ctx.posStr).asInstanceOf[Fn[Any]])
 
   override def validate(fn: Fn[?])(using ctx: ExprContext) =
     fn match

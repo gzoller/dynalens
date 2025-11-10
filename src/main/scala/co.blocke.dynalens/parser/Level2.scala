@@ -271,7 +271,7 @@ trait Level2 extends Level1 with ValueExprModule:
 
   private def baseExprWithFieldType[$: P](using ctx: ExprContext): P[ParseFnResult] =
     baseExprRaw.map {
-      case g@GetFn(path, isThis, recv, pos, _) =>
+      case g@GetFn(path, isOptional, recv, pos, _) =>
         // 1) Try local val or symbol scope
         val fromSymbols: Option[FieldType] =
           ctx.symbols.collectFirst {
@@ -289,7 +289,7 @@ trait Level2 extends Level1 with ValueExprModule:
             case ft: FieldType => ft
         }
 
-        Right(GetFn(path, isThis, recv, pos, Some(fieldT)))
+        Right(GetFn(path, isOptional, recv, pos, Some(fieldT)))
 
       case other => Right(other)
     }

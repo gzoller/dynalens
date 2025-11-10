@@ -79,7 +79,7 @@ case class ExprContext(
       case Left(msg) =>
         Left(DLCompileError(posStr, msg))
       case Right(ft) =>
-        val fn = co.blocke.dynalens.fn.GetFn(path, ft.isOptional, co.blocke.dynalens.fn.RootFn, posStr)
+        val fn = GetFn(path, ft.isOptional, RootFn, posStr)
         Right(copy(receiver = Some(NamedReceiver(path, ft, fn))))        
 
   /** Directly set a receiver object. */

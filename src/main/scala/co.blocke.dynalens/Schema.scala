@@ -75,9 +75,13 @@ object Schema:
 
 
   private def resolveList(l: ListType, tail: List[String], optDepth: Int): Option[ResolvedType] =
-    l.elementType match
-      case c: ClassType => resolvePath(c, tail, optDepth)
-      case other        => if tail.isEmpty then Some(ResolvedType(other, optDepth)) else None
+    tail match
+      case Nil =>
+        Some(ResolvedType(l, optDepth))
+      case _ =>
+        l.elementType match
+          case c: ClassType => resolvePath(c, tail, optDepth)
+          case other => if tail.isEmpty then Some(ResolvedType(other, optDepth)) else None
 
   private def resolveMap(m: MapType, tail: List[String], optDepth: Int): Option[ResolvedType] =
     tail match

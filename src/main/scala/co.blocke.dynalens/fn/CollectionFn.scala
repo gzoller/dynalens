@@ -350,37 +350,31 @@ case class ReverseFn(recv: Fn[Any], posStr: String)
 /*---------------------------------------------
   clean()
 ---------------------------------------------*/
-case class CleanFn(recv: Fn[Any], posStr: String)
-  extends UnaryFn[List[Any]]:
-
-  def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
+case class CleanFn(recv: Fn[Any], resultType: FieldType, posStr: String) extends UnaryFn[Any]:
+  def rebuild(kids: List[Fn[?]]): Fn[Any] =
     copy(
       recv = kids.head.asInstanceOf[Fn[Any]],
+      resultType = resultType,
       posStr = posStr
     )
-  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
 
-  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
-    recv.resolve(ctx).flatMap {
-      case (None | null, vLens) =>
-        ZIO.succeed((Nil, vLens))
+  def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
+    recv.resolve(ctx).map { case (resolved, lLens) =>
+      println("!!! RECV: "+recv)
+      println("!!! RESOLVED: "+resolved)
+      val cleaned = resolved match
+        case null | None => Nil
+        case xs: Iterable[_] =>
+          xs.filter(e => e != null && e != None).toList
+        case Some(iterable: Iterable[_]) =>
+          val cleaned = iterable.filterNot(e => e == null || e == None)
+          Some(cleaned)
+        case x =>
+          println("HOOO "+x)
+          Nil
 
-      case (Some(xs: Iterable[?]), vLens) =>
-        val cleaned = xs.collect {
-          case Some(v) => Some(v)
-          case v if v != null && v != None => v
-        }.toList
-        ZIO.succeed((cleaned, vLens))
-
-      case (xs: Iterable[?], vLens) =>
-        val cleaned = xs.collect {
-          case Some(v) => Some(v)
-          case v if v != null && v != None => v
-        }.toList
-        ZIO.succeed((cleaned, vLens))
-
-      case (other, _) =>
-        ZIO.fail(DynaLensError(posStr, s"clean() requires List receiver, got ${other.getClass.getSimpleName}"))
+      println("!!! CLEANED: "+cleaned)
+      (cleaned, lLens)
     }
 
 /*---------------------------------------------

@@ -75,6 +75,7 @@ final case class ClassLens(
         yield result
 
   override def update(path: List[PathElement], value: Any, obj: Any): ZIO[Any, DynaLensError, Any] =
+    println(s"[Lens.update] elements=$path, value=$value, target before=$obj")
     path match
       case Nil =>
         ZIO.succeed(value)
@@ -158,7 +159,10 @@ final case class ClassLens(
               yield newObj
 
           result <- if isOptional then ZIO.succeed(Some(updatedBase)) else ZIO.succeed(updatedBase)
-        yield result
+        yield {
+          println(s"[Lens.update] target after=$result")
+          result
+        }
 
 
 final case class ListLens(
@@ -191,18 +195,9 @@ final case class ListLens(
   override def update(path: List[PathElement], value: Any, obj: Any): ZIO[Any, DynaLensError, Any] =
     path match
       case Nil =>
-        if isOptional then
-          obj match
-            case None => ZIO.succeed(Nil)
-            case Some(list: List[?]) =>
-              if list.isEmpty then ZIO.succeed(Nil)
-              else ZIO.succeed(list)
-            case other =>
-              ZIO.succeed(other)
-        else
-          obj match
-            case None => ZIO.fail(DynaLensError("", s"Required list '$name' cannot be None"))
-            case _ => ZIO.succeed(obj)
+        // Setting the entire list value. We simply return the provided value here;
+        // optional wrapping and type checks are handled by the parent ClassLens.
+        ZIO.succeed(value)
 
       case PathElement(_, indexOpt) :: rest =>
         val listZ = ReflectUtil.unwrapOptionList(obj, isOptional)

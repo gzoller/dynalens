@@ -378,12 +378,37 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String, updateFie
                       println(s"[updateStmt] Proceeding with update for path=$path")
                       val (parent, parentLens, lastElem) = (parentObj0, parentLens0, lastElem0)
                       val ctxForRhs = ctx.bind("this", parent, parentLens)
+                      // --- DEBUG: Before valueFn.resolve
+                      println(s"[UpdateStmt] About to resolve valueFn for path='$path'")
+                      println(s"[UpdateStmt] ctxForRhs.this-binding: ${ctxForRhs.get("this")}")
+                      println(s"[UpdateStmt] valueFn: $valueFn")
+                      println(s"[UpdateStmt] Using ctxForRhs.this-binding: ${ctxForRhs.get("this")}")
                       for {
-                        res <- valueFn.resolve(ctxForRhs).catchAll { e1 =>
-                          valueFn.resolve(ctxWithThis).catchAll { _ => ZIO.fail(e1) }
-                        }
+                        res <-
+                          valueFn.resolve(ctxForRhs)
+                            .catchAll { e1 =>
+                              println(s"[UpdateStmt] Fallback ctxWithThis.this-binding: ${ctxWithThis.get("this")}")
+                              println(s"[UpdateStmt] valueFn.resolve(ctxForRhs) failed: $e1, trying ctxWithThis")
+                              valueFn.resolve(ctxWithThis).catchAll { e2 =>
+                                println(s"[UpdateStmt] valueFn.resolve(ctxWithThis) also failed: $e2")
+                                ZIO.fail(e1)
+                              }
+                            }
                         (newValue, _) = res
-                        updatedObj <- performUpdate(rootLens, rootObj, elements, newValue, posStr, path)
+                        updatedObj <- {
+                          // --- DEBUG: After valueFn.resolve
+                          println(s"[UpdateStmt] valueFn.resolve result for path='$path': newValue=${newValue} (${if newValue == null then "null" else newValue.getClass.getName})")
+                          newValue match
+                            case c: Iterable[?] =>
+                              println(s"[UpdateStmt] newValue is Iterable, size=${c.size}, type=${c.getClass.getName}")
+                            case arr: Array[?] =>
+                              println(s"[UpdateStmt] newValue is Array, length=${arr.length}, type=${arr.getClass.getName}")
+                            case other =>
+                              println(s"[UpdateStmt] newValue is type=${if other == null then "null" else other.getClass.getName}")
+                          // --- DEBUG: Before performUpdate
+                          println(s"[UpdateStmt] About to call performUpdate for path='$path' with newValue=${newValue}")
+                          performUpdate(rootLens, rootObj, elements, newValue, posStr, path)
+                        }
                       } yield updatedObj
                     case null =>
                       println(s"[updateStmt] walkToParent returned null for path=$path")

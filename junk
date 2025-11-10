@@ -1,0 +1,23 @@
+Places GetFn is created
+
+./src/main/scala/co.blocke.dynalens/parser/ExprContext.scala:64:            GetFn(path, mapType.keyType.isOptional, fn, posStr)
+./src/main/scala/co.blocke.dynalens/parser/ExprContext.scala:70:            GetFn(path, mapType.valueType.isOptional, fn, posStr)
+./src/main/scala/co.blocke.dynalens/parser/ExprContext.scala:74:        GetFn(path, false, RootFn, posStr)
+src/main/scala/co.blocke.dynalens/parser/ExprContext.scala:82:        val fn = co.blocke.dynalens.fn.GetFn(path, ft.isOptional, co.blocke.dynalens.fn.RootFn, posStr)
+./src/main/scala/co.blocke.dynalens/parser/Level2.scala:292:        Right(GetFn(path, isThis, recv, pos, Some(fieldT)))
+./src/main/scala/co.blocke.dynalens/parser/cfn/StringCFn.scala:73:              .map(v => v -> GetFn(v, isOptional = false, ConstantFn(""), ctx.posStr))
+
+Places NamedReceiver is created
+
+./src/main/scala/co.blocke.dynalens/parser/Level1.scala:149:              val recv = NamedReceiver("anon", Utility.rhsType(current).toKnownType, current)
+./src/main/scala/co.blocke.dynalens/parser/Level1.scala:186:                  NamedReceiver(
+./src/main/scala/co.blocke.dynalens/parser/ExprContext.scala:83:        Right(copy(receiver = Some(NamedReceiver(path, ft, fn))))
+./src/main/scala/co.blocke.dynalens/parser/Level2.scala:88:                .build(NamedReceiver("||", ScalarType("", "scala.Boolean"), acc.asInstanceOf[Fn[Any]]), List(next))
+./src/main/scala/co.blocke.dynalens/parser/Level2.scala:115:                .build(NamedReceiver("&&", ScalarType("", "scala.Boolean"), acc.asInstanceOf[Fn[Any]]), List(next))
+./src/main/scala/co.blocke.dynalens/parser/Level2.scala:134:                NamedReceiver("!", ScalarType("", "scala.Boolean"), NoOpFn),
+./src/main/scala/co.blocke.dynalens/parser/Level2.scala:170:            .build(NamedReceiver(op, ScalarType("", "scala.Boolean"), left), List(right))
+./src/main/scala/co.blocke.dynalens/parser/Level2.scala:213:                      .build(NamedReceiver(op, recvType, acc), List(r))
+./src/main/scala/co.blocke.dynalens/parser/Level2.scala:248:                      .build(NamedReceiver(op, recvType, acc), List(r))
+./src/main/scala/co.blocke.dynalens/parser/Level2.scala:311:            built <- CMinusFn.build(NamedReceiver("-", ScalarType("", "scala.Double"), NoOpFn), List(fn))
+./src/main/scala/co.blocke.dynalens/parser/cfn/CollectionCFn.scala:129:      val rcvr = NamedReceiver("this", elemType, recv.fn)
+./src/main/scala/co.blocke.dynalens/parser/cfn/CollectionCFn.scala:402:          case TypeResult.Known(r) if accepts(NamedReceiver("this", r, co.blocke.dynalens.fn.RootFn)) => Right(())
