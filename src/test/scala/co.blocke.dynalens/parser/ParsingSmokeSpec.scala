@@ -4,7 +4,6 @@ package parser
 import zio.*
 import zio.test.*
 import DynaLens.*
-import CtxStrings.*
 import co.blocke.testkit.ZioTestKit.*
 
 
@@ -33,7 +32,7 @@ object ParsingSmokeSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(
         updated == inst,
         resultStr == expectedResult,
@@ -60,7 +59,7 @@ object ParsingSmokeSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(
         updated == Item("abc", 2, 10),
         resultStr == expectedResult,

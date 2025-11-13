@@ -148,7 +148,7 @@ case class FilterFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
     case l: ListType => l.copy(isOptional = false) // preserve element type, normalize optional
     case _ =>
       ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
-      
+
   def rebuild(kids: List[Fn[?]]): Fn[List[Any]] =
     copy(
       recv = kids.head.asInstanceOf[Fn[Any]],
@@ -159,24 +159,44 @@ case class FilterFn(recv: Fn[Any], arg: Fn[Any], posStr: String)
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
     recv.resolve(ctx).flatMap {
       case (None | null, vLens) => ZIO.succeed((Nil, vLens))
-      case (Some(lst: Iterable[?]), vLens) => applyFilter(lst.asInstanceOf[Iterable[Any]], vLens, ctx)
-      case (lst: Iterable[?], vLens) => applyFilter(lst.asInstanceOf[Iterable[Any]], vLens, ctx)
+      case (Some(lst: Iterable[?]), vLens) => applyFilter(lst, vLens, ctx)
+      case (lst: Iterable[?], vLens) => applyFilter(lst, vLens, ctx)
       case (other, _) => ZIO.fail(DynaLensError(posStr, s"filter() requires List receiver, got ${other.getClass.getSimpleName}"))
     }
 
   private def applyFilter(lst: Iterable[Any], vLens: Lens, ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
     vLens match
       case ll: ListLens =>
-        val elemLens = ll.elementLens
-        ZIO.foreach(lst.toList) { elem =>
+        val elemLens = withParent(ll.elementLens, vLens)
+        ZIO.foreach(lst.toList.zipWithIndex) { case (elem, i) =>
+          println(s"[TRACE filter] ENTER elem[$i] = $elem")
+//          println(s"[TRACE filter] lens.parent = ${elemLens.parent.map(_.getClass.getSimpleName)} top=${ctx.get("top").map(_._2)}")
+          // Bind `this` to the element, but anchor name lookups at the list lens (vLens)
           ctx.withThisScoped(elem, elemLens) { scoped =>
-            arg.resolve(scoped).map(_._1)
+//            println(s"[TRACE filter]  resolving arg for elem[$i] = $elem")
+            arg.resolve(scoped)
+              .tapError(e => ZIO.succeed(println(s"[TRACE filter]  ERROR for elem[$i]: $e")))
+              .map { case (res, _) =>
+//                println(s"[TRACE filter]  result for elem[$i] = $res")
+                res
+              }
           }.either
         }.map { results =>
           val zipped = lst.toList.zip(results)
           val filtered = zipped.collect { case (x, Right(true)) => x }
+          println(s"[TRACE filter] final filtered = $filtered")
           (filtered, vLens)
         }
+//        ZIO.foreach(lst.toList) { elem =>
+//          ctx.withThisScoped(elem, elemLens) { scoped =>
+//            arg.resolve(scoped).map(_._1)
+//          }.either
+//        }.map { results =>
+//          val zipped = lst.toList.zip(results)
+//          val filtered = zipped.collect { case (x, Right(true)) => x }
+//          println("BOOM! "+filtered)
+//          (filtered, vLens)
+//        }
       case _ =>
         ZIO.fail(DynaLensError(posStr, s"filter() requires List receiver with ListLens, got ${vLens.getClass.getSimpleName}"))
 

@@ -10,6 +10,7 @@ sealed trait Lens {
 
   def get(path: List[PathElement], obj: Any): ZIO[Any, DynaLensError, Any]
   def update(path: List[PathElement], value: Any, obj: Any): ZIO[Any, DynaLensError, Any]
+  def copyWithParent(newParent: Option[Lens]): Lens
 }
 
 
@@ -37,6 +38,21 @@ final case class ClassLens(
                             _update: (String, Any, Any) => ZIO[Any, DynaLensError, Any],
                             schema: ClassType
                           ) extends Lens:
+
+  println(
+    s"""[BUILD_TRACE ClassLens ${name}]
+       |  parent=${parent.map(_.name)}
+       |  fields:
+       |    ${
+      fields.map { case (k, v) =>
+        s"$k -> (lens=${v.getClass.getSimpleName}, parent=${v.parent.map(_.name)})"
+      }.mkString("\n    ")
+    }
+       |""".stripMargin
+  )
+
+  def copyWithParent(newParent: Option[Lens]): Lens =
+    this.copy(parent = newParent)
 
   override def get(path: List[PathElement], obj: Any): ZIO[Any, DynaLensError, Any] =
     path match
@@ -171,6 +187,8 @@ final case class ListLens(
                            elementLens: Lens,
                            parent: Option[Lens]
                          ) extends Lens:
+  def copyWithParent(newParent: Option[Lens]): Lens =
+    this.copy(parent = newParent)
 
   override def get(path: List[PathElement], obj: Any): ZIO[Any, DynaLensError, Any] =
     path match
@@ -230,6 +248,8 @@ final case class MapLens(
   valueLens: Lens,
   parent: Option[Lens]
 ) extends Lens:
+  def copyWithParent(newParent: Option[Lens]): Lens =
+    this.copy(parent = newParent)
 
   override def get(path: List[PathElement], obj: Any): ZIO[Any, DynaLensError, Any] =
     path match
@@ -316,6 +336,8 @@ final case class ScalarLens(
   isOptional: Boolean,
   parent: Option[Lens]
 ) extends Lens:
+  def copyWithParent(newParent: Option[Lens]): Lens =
+    this.copy(parent = newParent)
 
   override def get(path: List[PathElement], obj: Any): ZIO[Any, DynaLensError, Any] =
     path match
@@ -338,6 +360,9 @@ final case class EnumLens(
                            enumClassName: String,
                            parent: Option[Lens]
                          ) extends Lens:
+  def copyWithParent(newParent: Option[Lens]): Lens =
+    this.copy(parent = newParent)
+
   override def get(path: List[PathElement], obj: Any): ZIO[Any, DynaLensError, Any] =
     path match
       case Nil =>
@@ -358,3 +383,12 @@ final case class EnumLens(
   private def convertStringToEnum(s: String): Any =
     val enumClass = Class.forName(enumClassName)
     enumClass.getMethod("valueOf", classOf[String]).invoke(null, s)
+
+
+object LensDebug:
+  @volatile private var counter = 0
+  def nextId(): Int =
+    counter += 1
+    counter
+  def log(id: Int, msg: String): Unit =
+    println(f"[LENS_TRACE #$id%03d] $msg")

@@ -330,129 +330,167 @@ case class UpdateStmt[R](path: String, valueFn: Fn[R], posStr: String, updateFie
   ): ZIO[Any, DynaLensError, Any] =
     val coerced = coerceNumericIfNeeded(newValue)
     println(s"[performUpdate] coercing ${newValue} -> ${if coerced == null then "null" else coerced.getClass.getName}")
-    ZIO
-      .attempt(rootLens.update(
-        elements.filterNot(pe =>
-          pe.name.contains("this") ||
-          pe.name.contains("this_key") ||
-          pe.name.contains("this_value")
-        ),
-        coerced,
-        rootObj
-      ))
-      .flatten
-      .mapError {
-        case _: ClassCastException =>
-          DynaLensError(
-            posStr,
-            s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
-          )
-        case e =>
-          DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
+    // --- DEBUG instrumentation before rootLens.update
+    println(s"[performUpdate] rootObj class: ${if rootObj == null then "null" else rootObj.getClass.getName}")
+    println(s"[performUpdate] elements: ${elements.map(_.name.getOrElse("<none>")).mkString(",")}")
+    println(s"[performUpdate] lens: ${rootLens.name}")
+    // Guard: If rootObj is a Map, warn and extract value from "top" key if it exists, else fail
+    val safeRootObjZIO: ZIO[Any, DynaLensError, Any] =
+      rootObj match {
+        case m: scala.collection.Map[?, ?] =>
+          println(s"[performUpdate] WARNING: rootObj is a Map (${m.getClass.getName}), attempting to extract value from 'top' key")
+          m.asInstanceOf[scala.collection.Map[Any, Any]].get("top") match {
+            case Some(actualValue) =>
+              println(s"[performUpdate] Extracted value for 'top' key: class=${if actualValue == null then "null" else actualValue.getClass.getName}")
+              ZIO.succeed(actualValue)
+            case None =>
+              println(s"[performUpdate] ERROR: Map rootObj does not contain 'top' key")
+              ZIO.fail(DynaLensError(posStr, s"rootObj is a Map but does not contain 'top' key (likely context error, e.g. Map$$Map1 → Person class cast issue)"))
+          }
+        case _ =>
+          ZIO.succeed(rootObj)
       }
+    safeRootObjZIO.flatMap { safeRootObj =>
+      // Unwrap (value, lens) tuple if present
+      val realRootObj = safeRootObj match {
+        case (v, _: Lens) =>
+          println(s"[performUpdate] Unwrapped (value,lens) tuple, using ${if v == null then "null" else v.getClass.getName}")
+          v
+        case other =>
+          other
+      }
+      println(s"[performUpdate] realRootObj class: ${if realRootObj == null then "null" else realRootObj.getClass.getName}")
+      ZIO
+        .attempt(rootLens.update(
+          elements.filterNot(pe =>
+            pe.name.contains("this") ||
+            pe.name.contains("this_key") ||
+            pe.name.contains("this_value")
+          ),
+          coerced,
+          realRootObj
+        ))
+        .flatten
+        .mapError {
+          case _: ClassCastException =>
+            DynaLensError(
+              posStr,
+              s"Type mismatch: cannot assign value of type ${newValue.getClass.getName} to path '$path'"
+            )
+          case e =>
+            DynaLensError(posStr, s"Unexpected update error: ${e.getMessage}")
+        }
+    }
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, DynaContext] =
-    ctx.get("top") match
-      case None =>
-        ZIO.fail(DynaLensError(posStr, "Missing 'top' in context for update statement"))
-      case Some((rootObj, rootLens)) =>
-        if rootObj == null then
-          ZIO.fail(DynaLensError(posStr, "Receiver object is null — cannot update"))
-        else
-          val elements0 = Path.parsePath(path)
-          val (startsWithThis, elements) = elements0 match
-            case PathElement(Some("this"), None) :: rest => (true, rest)
-            case _ => (false, elements0)
-          for
-            ctxWithThis <- ZIO.succeed(ctx.bind("this", rootObj, rootLens))
-            updatedObj <-
-              if elements.isEmpty then
-                ZIO.fail(DynaLensError(posStr, "Assignment to `this` is not allowed"))
-              else if !startsWithThis then
-                if elements.lengthCompare(1) > 0 then
-                  walkToParent(rootLens, rootObj, elements).flatMap {
-                    case (None, parentLens, lastElem) if parentLens.isOptional =>
-                      println(s"[updateStmt] Early return: optional parent missing for path=$path")
-                      ZIO.succeed(rootObj)
-                    case (parentObj0, parentLens0, lastElem0) =>
-                      println(s"[updateStmt] Proceeding with update for path=$path")
-                      val (parent, parentLens, lastElem) = (parentObj0, parentLens0, lastElem0)
-                      val ctxForRhs = ctx.bind("this", parent, parentLens)
-                      // --- DEBUG: Before valueFn.resolve
-                      println(s"[UpdateStmt] About to resolve valueFn for path='$path'")
-                      println(s"[UpdateStmt] ctxForRhs.this-binding: ${ctxForRhs.get("this")}")
-                      println(s"[UpdateStmt] valueFn: $valueFn")
-                      println(s"[UpdateStmt] Using ctxForRhs.this-binding: ${ctxForRhs.get("this")}")
-                      for {
-                        res <-
-                          valueFn.resolve(ctxForRhs)
-                            .catchAll { e1 =>
-                              println(s"[UpdateStmt] Fallback ctxWithThis.this-binding: ${ctxWithThis.get("this")}")
-                              println(s"[UpdateStmt] valueFn.resolve(ctxForRhs) failed: $e1, trying ctxWithThis")
-                              valueFn.resolve(ctxWithThis).catchAll { e2 =>
-                                println(s"[UpdateStmt] valueFn.resolve(ctxWithThis) also failed: $e2")
-                                ZIO.fail(e1)
-                              }
-                            }
-                        (newValue, _) = res
-                        updatedObj <- {
-                          // --- DEBUG: After valueFn.resolve
-                          println(s"[UpdateStmt] valueFn.resolve result for path='$path': newValue=${newValue} (${if newValue == null then "null" else newValue.getClass.getName})")
-                          newValue match
-                            case c: Iterable[?] =>
-                              println(s"[UpdateStmt] newValue is Iterable, size=${c.size}, type=${c.getClass.getName}")
-                            case arr: Array[?] =>
-                              println(s"[UpdateStmt] newValue is Array, length=${arr.length}, type=${arr.getClass.getName}")
-                            case other =>
-                              println(s"[UpdateStmt] newValue is type=${if other == null then "null" else other.getClass.getName}")
-                          // --- DEBUG: Before performUpdate
-                          println(s"[UpdateStmt] About to call performUpdate for path='$path' with newValue=${newValue}")
-                          performUpdate(rootLens, rootObj, elements, newValue, posStr, path)
-                        }
-                      } yield updatedObj
-                    case null =>
-                      println(s"[updateStmt] walkToParent returned null for path=$path")
-                      ZIO.dieMessage("walkToParent returned unexpected tuple")
-                  }
-                else
-                  rootObj match
-                    case None if rootLens.isOptional =>
-                      ZIO.succeed(rootObj)
-                    case None =>
-                      ZIO.fail(DynaLensError(posStr, s"Cannot update '$path': parent is missing"))
-                    case _ =>
-                      for {
-                        res <- valueFn.resolve(ctxWithThis)
-                        (newValue, _) = res
-                        updatedObj <- performUpdate(rootLens, rootObj, elements, newValue, posStr, path)
-                      } yield updatedObj
-              else
-                elements match
-                  case lastElem :: Nil =>
-                    rootObj match
-                      case None =>
-                        ZIO.succeed(rootObj)
-                      case _ =>
-                        for {
-                          res <- valueFn.resolve(ctxWithThis)
-                          (newValue, _) = res
-                          updatedObj <- performUpdate(rootLens, rootObj, List(lastElem), newValue, posStr, path)
-                        } yield updatedObj
-                  case _ =>
-                    walkToParent(rootLens, rootObj, elements).flatMap {
-                      case (None, parentLens, lastElem) =>
-                        ZIO.succeed(rootObj)
-                      case (Some(parent), parentLens, lastElem) =>
-                        val ctxForRhs = ctx.bind("this", parent, parentLens)
-                        for {
-                          res <- valueFn.resolve(ctxForRhs).catchAll { e1 =>
-                            valueFn.resolve(ctxWithThis).catchAll { _ => ZIO.fail(e1) }
+    val rootObj = ctx.rootObj
+    val rootLens = ctx.rootLens
+    if rootObj == null then
+      ZIO.fail(DynaLensError(posStr, "Receiver object is null — cannot update"))
+    else
+      val elements0 = Path.parsePath(path)
+      val (startsWithThis, elements) = elements0 match
+        case PathElement(Some("this"), None) :: rest => (true, rest)
+        case _ => (false, elements0)
+      for
+        ctxWithThis <- ZIO.succeed(ctx.bind("this", rootObj, rootLens))
+        updatedObj <-
+          if elements.isEmpty then
+            ZIO.fail(DynaLensError(posStr, "Assignment to `this` is not allowed"))
+          else if !startsWithThis then
+            if elements.lengthCompare(1) > 0 then
+              val unwrappedRootObj = rootObj match {
+                case (v, _: Lens) =>
+                  println(s"[resolve] Unwrapped (value,lens) tuple before walkToParent → ${v.getClass.getName}")
+                  v
+                case other => other
+              }
+              walkToParent(rootLens, unwrappedRootObj, elements).flatMap {
+                case (None, parentLens, lastElem) if parentLens.isOptional =>
+                  println(s"[updateStmt] Early return: optional parent missing for path=$path")
+                  ZIO.succeed(unwrappedRootObj)
+                case (parentObj0, parentLens0, lastElem0) =>
+                  println(s"[updateStmt] Proceeding with update for path=$path")
+                  val (parent, parentLens, lastElem) = (parentObj0, parentLens0, lastElem0)
+                  val ctxForRhs = ctx.bind("this", parent, parentLens)
+                  // --- DEBUG: Before valueFn.resolve
+                  println(s"[UpdateStmt] About to resolve valueFn for path='$path'")
+                  println(s"[UpdateStmt] ctxForRhs.this-binding: ${ctxForRhs.get("this")}")
+                  println(s"[UpdateStmt] valueFn: $valueFn")
+                  println(s"[UpdateStmt] Using ctxForRhs.this-binding: ${ctxForRhs.get("this")}")
+                  for {
+                    res <-
+                      valueFn.resolve(ctxForRhs)
+                        .catchAll { e1 =>
+                          println(s"[UpdateStmt] Fallback ctxWithThis.this-binding: ${ctxWithThis.get("this")}")
+                          println(s"[UpdateStmt] valueFn.resolve(ctxForRhs) failed: $e1, trying ctxWithThis")
+                          valueFn.resolve(ctxWithThis).catchAll { e2 =>
+                            println(s"[UpdateStmt] valueFn.resolve(ctxWithThis) also failed: $e2")
+                            ZIO.fail(e1)
                           }
-                          (newValue, _) = res
-                          updatedObj <- performUpdate(rootLens, rootObj, elements, newValue, posStr, path)
-                        } yield updatedObj
-                      case _ =>
-                        ZIO.dieMessage("walkToParent returned unexpected tuple")
+                        }
+                    (newValue, _) = res
+                    updatedObj <- {
+                      // --- DEBUG: After valueFn.resolve
+                      println(s"[UpdateStmt] valueFn.resolve result for path='$path': newValue=${newValue} (${if newValue == null then "null" else newValue.getClass.getName})")
+                      newValue match
+                        case c: Iterable[?] =>
+                          println(s"[UpdateStmt] newValue is Iterable, size=${c.size}, type=${c.getClass.getName}")
+                        case arr: Array[?] =>
+                          println(s"[UpdateStmt] newValue is Array, length=${arr.length}, type=${arr.getClass.getName}")
+                        case other =>
+                          println(s"[UpdateStmt] newValue is type=${if other == null then "null" else other.getClass.getName}")
+                      // --- DEBUG: Before performUpdate
+                      println(s"[UpdateStmt] About to call performUpdate for path='$path' with newValue=${newValue}")
+                      performUpdate(rootLens, rootObj, elements, newValue, posStr, path)
                     }
-            updatedCtx = ctx.bind("top", updatedObj, rootLens)
-          yield updatedCtx.unbind("this")
+                  } yield updatedObj
+                case null =>
+                  println(s"[updateStmt] walkToParent returned null for path=$path")
+                  ZIO.dieMessage("walkToParent returned unexpected tuple")
+              }
+            else
+              rootObj match
+                case None if rootLens.isOptional =>
+                  ZIO.succeed(rootObj)
+                case None =>
+                  ZIO.fail(DynaLensError(posStr, s"Cannot update '$path': parent is missing"))
+                case _ =>
+                  for {
+                    res <- valueFn.resolve(ctxWithThis)
+                    (newValue, _) = res
+                    updatedObj <- performUpdate(rootLens, rootObj, elements, newValue, posStr, path)
+                  } yield updatedObj
+          else
+            elements match
+              case lastElem :: Nil =>
+                rootObj match
+                  case None =>
+                    ZIO.succeed(rootObj)
+                  case _ =>
+                    for {
+                      res <- valueFn.resolve(ctxWithThis)
+                      (newValue, _) = res
+                      updatedObj <- performUpdate(rootLens, rootObj, List(lastElem), newValue, posStr, path)
+                    } yield updatedObj
+              case _ =>
+                walkToParent(rootLens, rootObj, elements).flatMap {
+                  case (None, parentLens, lastElem) =>
+                    ZIO.succeed(rootObj)
+                  case (Some(parent), parentLens, lastElem) =>
+                    val ctxForRhs = ctx.bind("this", parent, parentLens)
+                    for {
+                      res <- valueFn.resolve(ctxForRhs).catchAll { e1 =>
+                        valueFn.resolve(ctxWithThis).catchAll { _ => ZIO.fail(e1) }
+                      }
+                      (newValue, _) = res
+                      updatedObj <- performUpdate(rootLens, rootObj, elements, newValue, posStr, path)
+                    } yield updatedObj
+                  case _ =>
+                    ZIO.dieMessage("walkToParent returned unexpected tuple")
+                }
+        updatedCtx = ctx.copy(
+          rootObj = updatedObj,
+          symbols = ctx.symbols + ("this" -> (updatedObj, ctx.rootLens))
+        )
+      yield updatedCtx.unbind("this")

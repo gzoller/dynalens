@@ -123,51 +123,77 @@ trait Level1 extends Level0 {
 //      else Right(oks.toList)
 //    }
 
-  // Parse a comma-separated list of full expressions as args.
+  // Parse a comma-separated list of full expressions as args, allowing zero args.
   private def parseArgs[$: P](using ctx: ExprContext): P[Either[DLCompileError, List[Fn[Any]]]] =
-    P(WS0 ~ "(" ~/ WS0 ~ valueExpr.rep(sep = WS0 ~ "," ~ WS0) ~ WS0 ~ ")").map { args =>
-      val (errs, oks) = args.partitionMap(identity)
-      if errs.nonEmpty then Left(errs.head)
-      else Right(oks.map(_.asInstanceOf[Fn[Any]]).toList)
-    }
+    P(
+      WS0 ~ "(" ~/
+      WS0 ~ (
+        // zero-arg fast path: immediately see ')'
+        P(")").map(_ => Right(Nil))
+        |
+        // one or more args
+        (valueExpr.rep(sep = WS0 ~ "," ~ WS0) ~ WS0 ~ ")").map { args =>
+          val (errs, oks) = args.partitionMap(identity)
+          if errs.nonEmpty then Left(errs.head)
+          else Right(oks.map(_.asInstanceOf[Fn[Any]]).toList)
+        }
+      )
+    )
 
   def methodChain[$: P](base: Fn[Any])(using ctx: ExprContext): P[ParseFnResult] =
-    def loop(current: Fn[Any]): P[Either[DLCompileError, Fn[Any]]] =
-      // first, just get the method name; do not parse args yet
+    def loop(current: Fn[Any]): P[Either[DLCompileError, Fn[Any]]] = {
+      println(s"[methodChain.loop] ENTER current=${current}")
       P(methodNameOnly).flatMap { case (name, off) =>
+        println(s"[methodChain] Found method name=$name off=$off for current=${current}")
         CompileFnRegistry.lookup(name) match
           case None =>
+            println(s"[methodChain] Unknown method: $name")
             P(Pass(Left(DLCompileError(ctx.posStrFrom(off), s"Unknown method: $name"))))
 
           case Some(cfn) =>
             val recvType = Utility.rhsType(current).toKnownType
+            println(s"[methodChain] Receiver type: ${recvType}")
             val elemTypeForThis =
               recvType match
                 case lt: ListType => lt.elementType
                 case mt: MapType  => mt.valueType
                 case other        => other
+            println(s"[methodChain] elemTypeForThis=$elemTypeForThis")
 
             // introduce the given *inside its own block* after elemTypeForThis is known
             {
-              given ExprContext =
-                ctx.copy(pos = off, receiver = Some(NamedReceiver("this", elemTypeForThis, current)))
+              val newCtx = ctx.copy(pos = off, receiver = Some(NamedReceiver("this", elemTypeForThis, current)))
+              given ExprContext = newCtx
+              println(s"[methodChain] Parsing args for $name with ctx receiver=${newCtx.receiver}")
 
               // now parse "( ... )" with the correct receiver context
-              parseArgs.flatMap {
-                case Left(err) => P(Pass(Left(err)))
-                case Right(args) =>
-                  val recvType = Utility.rhsType(current).toKnownType
-                  cfn.build(NamedReceiver("anon", recvType, current), args) match
-                    case Left(e) => P(Pass(Left(e)))
-                    case Right(b) => loop(b) // continue chaining on the built fn
+              parseArgs.flatMap { args =>
+                args match {
+                  case Left(err) => P(Pass(Left(err)))
+                  case Right(argsList) =>
+                    println(s"[methodChain] Parsed args count=${argsList.size}")
+                    val recvType = Utility.rhsType(current).toKnownType
+                    cfn.build(NamedReceiver("anon", recvType, current), argsList) match
+                      case Left(e) =>
+                        println(s"[methodChain] Build error: ${e}")
+                        P(Pass(Left(e)))
+                      case Right(b) =>
+                        println(s"[methodChain] Built function: ${b}")
+                        loop(b) // continue chaining on the built fn
+                }
               }
             }
       } | P(Pass(Right(current)))
+    }
 
-    // keep index after chain: foo.do()[3]
+    println(s"[methodChain] Starting chain with base=${base}")
     loop(base).flatMap {
-      case Left(err) => P(Pass(Left(err)))
-      case Right(fn0) => maybeIndex(fn0)
+      case Left(err) =>
+        println(s"[methodChain] Chain error: ${err}")
+        P(Pass(Left(err)))
+      case Right(fn0) =>
+        println(s"[methodChain] Chain success fn0=${fn0}")
+        maybeIndex(fn0)
     }
 
   // Parses: "." ident "(" args ")"

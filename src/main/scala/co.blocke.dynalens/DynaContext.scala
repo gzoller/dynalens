@@ -2,24 +2,31 @@ package co.blocke.dynalens
 
 import zio.*
 
-
 final case class DynaContext(
                               symbols: Map[String, (Any, Lens)],
-                              dynaLens: DynaLens[?]
+                              dynaLens: DynaLens[?],
+                              rootObj: Any,
+                              rootLens: Lens,
+                              parentOpt: Option[DynaContext] = None
                             ) {
 
   // ---------------- Lookup ----------------
 
+  def resolve(sym: String): Option[(Any, Lens)] =
+    symbols.get(sym)
+
   /** Retrieve the (value, lens) pair for a symbol. */
-  def get(sym: String): Option[(Any, Lens)] = symbols.get(sym)
+  def get(sym: String): Option[(Any, Lens)] =
+    println(s"[CTX TRACE] lookup '$sym' in ctx (locals=${symbols.keys.mkString(", ")}, parent?=${parentOpt.nonEmpty})")
+    resolve(sym)
 
   def getSymbol(sym: String): Option[(Any, Lens)] = get(sym)
 
   /** Retrieve only the value for a symbol. */
-  def getValue(sym: String): Option[Any] = symbols.get(sym).map(_._1)
+  def getValue(sym: String): Option[Any] = get(sym).map(_._1)
 
   /** Retrieve only the lens for a symbol. */
-  def getLens(sym: String): Option[Lens] = symbols.get(sym).map(_._2)
+  def getLens(sym: String): Option[Lens] = get(sym).map(_._2)
 
 
   // ---------------- Updates ----------------
@@ -60,34 +67,37 @@ final case class DynaContext(
 
   /** Retrieve top-level target object */
   def getTop: Option[(Any, Lens)] =
-    get("top")
+    Some((rootObj, rootLens))
 
 
   // ---------------- Scoped Helpers ----------------
+
+  /** Detect whether the new lens shares ancestry with an existing lens chain to prevent cycles */
+  private def sharesAncestry(newLens: Lens, ancestor: Lens): Boolean =
+    var cur = Option(ancestor)
+    while cur.nonEmpty do
+      if cur.contains(newLens) then return true
+      cur = cur.flatMap(_.parent)
+    false
+
+  private def detach(lens: Lens): Lens =
+    lens.copyWithParent(None)
+
+  private inline def child(extra: (String, (Any, Lens))*): DynaContext =
+    copy(symbols = symbols ++ extra, parentOpt = Some(this))
 
   /**
    * Executes a scoped block with a temporary 'this' binding.
    * The previous binding is automatically restored.
    */
-  def withThisScoped[R](obj: Any, lens: Lens)(
+  def withThisScoped[R](obj: Any, thisLens: Lens)(
     body: DynaContext => ZIO[RuntimeEnv, DynaLensError, R]
   ): ZIO[RuntimeEnv, DynaLensError, R] =
-    println(s"[withThisScoped] ENTER with obj=${obj} (${Option(obj).map(_.getClass.getSimpleName).getOrElse("null")}), lens=${lens.getClass.getSimpleName}, parent=${lens.parent.map(_.getClass.getSimpleName)}")
-    val effectiveLens = if (lens == null) dynaLens.topLens else lens
-    val detachedLens = effectiveLens match
-      case s: ScalarLens => s.copy(parent = None)
-      case l: ListLens   => l.copy(parent = None)
-      case m: MapLens    => m.copy(parent = None)
-      case e: EnumLens   => e.copy(parent = None)
-      case other         => other
-    val previous = get("this")
-    val newCtx   = setThis(obj, detachedLens)
-    body(newCtx).ensuring {
-      ZIO.succeed(previous match
-        case Some((v, l)) => copy(symbols = symbols + ("this" -> (v, l)), dynaLens = this.dynaLens)
-        case None         => copy(symbols = symbols - "this", dynaLens = this.dynaLens)
-      )
-    }
+    // Inherit existing 'top' via child(); never rebind 'top' here.
+    val newCtx = child(
+      "this" -> (obj, thisLens)
+    )
+    body(newCtx)
 
 
   /**
@@ -97,76 +107,57 @@ final case class DynaContext(
   def withThisKeyValueScoped[R](k: Any, v: Any, keyLens: Lens, valLens: Lens)(
     body: DynaContext => ZIO[RuntimeEnv, DynaLensError, R]
   ): ZIO[RuntimeEnv, DynaLensError, R] =
+    println(s"[CTX TRACE] withThisKeyValueScoped ENTER")
+    println(s"[CTX TRACE] keyLens=${Option(keyLens).map(_.getClass.getSimpleName)} valLens=${Option(valLens).map(_.getClass.getSimpleName)}")
     val effKeyLens = if (keyLens == null) dynaLens.topLens else keyLens
     val effValLens = if (valLens == null) dynaLens.topLens else valLens
-    val detachedKeyLens = effKeyLens match
-      case s: ScalarLens => s.copy(parent = None)
-      case l: ListLens   => l.copy(parent = None)
-      case m: MapLens    => m.copy(parent = None)
-      case e: EnumLens   => e.copy(parent = None)
-      case other         => other
-    val detachedValLens = effValLens match
-      case s: ScalarLens => s.copy(parent = None)
-      case l: ListLens   => l.copy(parent = None)
-      case m: MapLens    => m.copy(parent = None)
-      case e: EnumLens   => e.copy(parent = None)
-      case other         => other
+    println(s"[CTX TRACE] effKeyLens.parent=${effKeyLens.parent.map(_.getClass.getSimpleName)} effValLens.parent=${effValLens.parent.map(_.getClass.getSimpleName)}")
+    val detachedKeyLens = detach(effKeyLens)
+    val detachedValLens = detach(effValLens)
+    println(s"[CTX TRACE] detachedKeyLens.parent=${detachedKeyLens.parent.map(_.getClass.getSimpleName)} detachedValLens.parent=${detachedValLens.parent.map(_.getClass.getSimpleName)}")
+    println(s"[CTX TRACE] parentOpt=${parentOpt.map(_ => "exists").getOrElse("none")}")
 
-    val prevKey = get("this_key")
-    val prevVal = get("this_value")
-    val prevThis = get("this")
-
-    // new context includes all 3: this_key, this_value, and this
-    val newCtx = setThisKeyValue(k, v, detachedKeyLens, detachedValLens)
-      .setThis(v, detachedValLens)
-
-    body(newCtx).ensuring {
-      ZIO.succeed(
-        copy(symbols =
-          symbols
-            ++ prevKey.map("this_key"   -> _)
-            ++ prevVal.map("this_value" -> _)
-            ++ prevThis.map("this"      -> _),
-          dynaLens = this.dynaLens
-        )
-      )
+    // Anchor `this` at the owning ClassLens (not the element lens nor the ListLens)
+    val ownerAnchor = {
+      val base = if (valLens == null) dynaLens.topLens else valLens
+      def climbToClass(l: Lens): Lens =
+        l match
+          case cl: ClassLens => cl
+          case other => other.parent.map(climbToClass).getOrElse(dynaLens.topLens)
+      climbToClass(base)
     }
+    val safeAnchorForThis = detach(ownerAnchor)
+    // Use the existing top object value when available, otherwise fall back to element value
+    val topVal: Any = this.getTop.map(_._1).getOrElse(v)
+
+    val newCtx = child(
+      "this_key"   -> (k, detachedKeyLens),
+      "this_value" -> (v, detachedValLens),
+      // IMPORTANT: `this` is the element value `v`, but its lens is the CONTAINER anchor
+      // so symbol lookups (e.g., `nums`) start from the collection, not the scalar element.
+      "this"       -> (topVal, safeAnchorForThis)
+    )
+    println(s"[CTX TRACE] child context created with symbols=${newCtx.symbols.keys.mkString(", ")}")
+    newCtx.symbols.foreach { case (sym, (_, lens)) =>
+      println(s"[CTX TRACE]   symbol=$sym lens=${lens.getClass.getSimpleName} parent=${lens.parent.map(_.getClass.getSimpleName)}")
+    }
+    body(newCtx)
+
+  override def toString: String = {
+    val rows = symbols.toSeq.sortBy(_._1).map { case (k, (v, l)) =>
+      val lensInfo = s"[${l.getClass.getSimpleName}:${Option(l.name).getOrElse("")}]"
+      f"$k%-10s -> ${Option(v).fold("null")(_.toString)} $lensInfo"
+    }
+    (Seq(s"ROOT -> ${rootObj.toString} [${rootLens.getClass.getSimpleName}:${rootLens.name}]") ++ rows)
+      .mkString("\n")
+  }
 }
 
 
 object DynaContext:
   def apply(target: Any, lens: DynaLens[?]): DynaContext =
-    DynaContext(
-      symbols = Map(
-        "top" -> (target, lens.topLens),
-        "this" -> (target, lens.topLens)
-      ),
-      dynaLens = lens
-    )
+    val topLens = lens.topLens.copyWithParent(None)
+    DynaContext(Map.empty, lens, target, topLens)
 
   def empty(lens: DynaLens[?]): DynaContext =
-    DynaContext(Map.empty, lens)
-
-
-
-object CtxStrings:
-  /** Pretty-print ctx. Ephemeral keys (`this`, `name[]`) are hidden by default. */
-  def toStringCtx(ctx: DynaContext, includeEphemeral: Boolean = false): String = {
-    inline def isEphemeral(k: String): Boolean = k == "this" || k == "this_key" || k == "this_value"
-
-    // (key, valueOnly) sequence, filtered
-    val base: Seq[(String, Any)] =
-      ctx.symbols.iterator
-        .filterNot { case (k, _) => !includeEphemeral && isEphemeral(k) }
-        .map { case (k, (v, _)) => (k, v) }
-        .toSeq
-
-    // order: "top" first, then alpha
-    val ordered =
-      base.sortBy { case (k, _) => if k == "top" then "\u0000" else k }
-
-    // match your test snapshots: "key -> value.toString"
-    ordered
-      .map { case (k, v) => s"$k -> ${Option(v).fold("null")(_.toString)}" }
-      .mkString("", "\n", "\n")
-  }
+    DynaContext(Map.empty, lens, null, lens.topLens.copyWithParent(None))

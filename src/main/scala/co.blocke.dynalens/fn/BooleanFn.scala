@@ -124,15 +124,14 @@ case class IsDefinedFn(recv: Fn[Any], posStr: String)
   val resultType: FieldType = ScalarType("", "scala.Boolean", false)
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
+
     for
       (v, lens) <- recv.resolve(ctx)
       result = v match {
-        case null       => false
-        case None       => false
-        case Some(_)    => true
-        case m: Map[?, ?]   => m.nonEmpty
-        case i: Iterable[?] => i.nonEmpty
-        case _          => true
+        case Nil         => false           // empty list treated like None
+        case None        => false
+        case null        => false
+        case _           => true
       }
     yield (result, lens)
 
@@ -210,28 +209,39 @@ object ContainsFn {
                                ctx: DynaContext,
                                posStr: String,
                                lens: Lens
-                             ): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] =
+                             ): ZIO[RuntimeEnv, DynaLensError, (Boolean, Lens)] = {
+    println(s"[TRACE containsDynamic] ENTER: hay=${Option(hay).map(_.getClass.getSimpleName).getOrElse("null")}, needle=${needle.getClass.getSimpleName}, posStr=$posStr")
+
     hay match {
 
       // ---- Option unwraps ----
-      case null        => ZIO.succeed((false, lens))
-      case None        => ZIO.succeed((false, lens))
-      case Some(inner) => containsDynamic(inner, needle, ctx, posStr, lens)
+      case null =>
+        println("[TRACE containsDynamic] -> null/None, returning false")
+        ZIO.succeed((false, lens))
+      case None =>
+        println("[TRACE containsDynamic] -> null/None, returning false")
+        ZIO.succeed((false, lens))
+      case Some(inner) =>
+        println(s"[TRACE containsDynamic] -> unwrapping Some(${Option(inner).map(_.getClass.getSimpleName).getOrElse("null")})")
+        containsDynamic(inner, needle, ctx, posStr, lens)
 
       // ---- String: substring ----
       case cs: CharSequence =>
+        println(s"[TRACE containsDynamic] -> CharSequence hay='${cs.toString}'")
         for {
           (ndlAny, ndlLens) <- needle.resolve(ctx)
         } yield (cs.toString.contains(Option(ndlAny).fold("null")(_.toString)), lens)
 
       // ---- Map: key presence (needle evaluated once) ----
       case m: Map[?, ?] =>
+        println(s"[TRACE containsDynamic] -> Map keys=${m.size}")
         for {
           (ndlVal, ndlLens) <- needle.resolve(ctx)
         } yield (m.asInstanceOf[Map[Any, Any]].contains(ndlVal), lens)
 
       // ---- Iterable: supports predicate OR value check ----
       case it: Iterable[?] =>
+        println(s"[TRACE containsDynamic] -> Iterable size=${it.size}")
         needle match {
           case pred: BooleanFn =>
             def loop(
@@ -265,11 +275,25 @@ object ContainsFn {
           case _ =>
             for {
               (ndlVal, _) <- needle.resolve(ctx)
-            } yield (it.exists(_ == ndlVal), lens)
+            } yield {
+              val haystack = it.asInstanceOf[Iterable[Any]]
+              val matchFound = haystack.exists { elem =>
+                (elem, ndlVal) match
+                  // handle Scala boxed/unboxed equality across Int/Long/Double
+                  case (a: Number, b: Number) => a.doubleValue() == b.doubleValue()
+                  // handle Option flattening symmetry
+                  case (Some(a), b) => a == b
+                  case (a, Some(b)) => a == b
+                  // fallback to safe equals
+                  case (a, b) => a == b
+              }
+              (matchFound, lens)
+            }
         }
 
       // ---- Unsupported receiver types ----
       case other =>
+        println(s"[TRACE containsDynamic] -> Unsupported type ${other.getClass.getSimpleName}")
         ZIO.fail(
           DynaLensError(
             posStr,
@@ -277,6 +301,7 @@ object ContainsFn {
           )
         )
     }
+  }
 }
 
 

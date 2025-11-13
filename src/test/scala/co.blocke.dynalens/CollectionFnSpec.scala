@@ -52,43 +52,78 @@ object CollectionFnSpec extends ZIOSpecDefault {
         case other =>
           throw RuntimeException(s"Unhandled type in test helper: ${other.getClass.getName}")
 
-    DynaContext(Map(rootName -> (data, lens)), chosenDL.getOrElse(TestHelpers.emptyDL))
+    DynaContext(
+      symbols = Map(rootName -> (data, lens)),
+      dynaLens = chosenDL.getOrElse(TestHelpers.emptyDL),
+      rootObj = data,
+      rootLens = lens
+    )
   }
 
   // Helpers for Option[List[_]] and Option[Map[_, _]] roots
   def buildOptListCtx(rootName: String, dataOpt: Option[List[Any]]): DynaContext = {
     val lens = ListLens(rootName, true, ScalarLens("elem", false, None), None)
-    DynaContext(Map(rootName -> (dataOpt, lens)), TestHelpers.emptyDL)
+    DynaContext(
+      symbols = Map(rootName -> (dataOpt, lens)),
+      dynaLens = TestHelpers.emptyDL,
+      rootObj = dataOpt,
+      rootLens = lens
+    )
   }
 
   def buildOptMapCtx(rootName: String, dataOpt: Option[Map[Any, Any]]): DynaContext = {
     val lens = MapLens(rootName, true, MapKeyKind.StringKey, ScalarLens("value", false, None), None)
-    DynaContext(Map(rootName -> (dataOpt, lens)), TestHelpers.emptyDL)
+    DynaContext(
+      symbols = Map(rootName -> (dataOpt, lens)),
+      dynaLens = TestHelpers.emptyDL,
+      rootObj = dataOpt,
+      rootLens = lens
+    )
   }
 
   // --- Real-lens builders for Foo collections ---
   def buildFooListCtx(rootName: String, data: List[Foo]): DynaContext = {
     val dl = DynaLens.into[Foo]
     val lens = ListLens(rootName, false, dl.topLens.asInstanceOf[ClassLens], Some(dl.topLens))
-    DynaContext(Map(rootName -> (data, lens)), dl)
+    DynaContext(
+      symbols = Map(rootName -> (data, lens)),
+      dynaLens = dl,
+      rootObj = data,
+      rootLens = lens
+    )
   }
 
   def buildOptFooListCtx(rootName: String, dataOpt: Option[List[Foo]]): DynaContext = {
     val dl = DynaLens.into[Foo]
     val lens = ListLens(rootName, true, dl.topLens.asInstanceOf[ClassLens], Some(dl.topLens))
-    DynaContext(Map(rootName -> (dataOpt, lens)), dl)
+    DynaContext(
+      symbols = Map(rootName -> (dataOpt, lens)),
+      dynaLens = dl,
+      rootObj = dataOpt,
+      rootLens = lens
+    )
   }
 
   def buildFooMapCtx(rootName: String, data: Map[String, Foo]): DynaContext = {
     val dl = DynaLens.into[Foo]
     val lens = MapLens(rootName, false, MapKeyKind.StringKey, dl.topLens, Some(dl.topLens))
-    DynaContext(Map(rootName -> (data, lens)), dl)
+    DynaContext(
+      symbols = Map(rootName -> (data, lens)),
+      dynaLens = dl,
+      rootObj = data,
+      rootLens = lens
+    )
   }
 
   def buildOptFooMapCtx(rootName: String, dataOpt: Option[Map[String, Foo]]): DynaContext = {
     val dl = DynaLens.into[Foo]
     val lens = MapLens(rootName, true, MapKeyKind.StringKey, dl.topLens, Some(dl.topLens))
-    DynaContext(Map(rootName -> (dataOpt, lens)), dl)
+    DynaContext(
+      symbols = Map(rootName -> (dataOpt, lens)),
+      dynaLens = dl,
+      rootObj = dataOpt,
+      rootLens = lens
+    )
   }
 
   def spec = suite("CollectionFn Tests") (

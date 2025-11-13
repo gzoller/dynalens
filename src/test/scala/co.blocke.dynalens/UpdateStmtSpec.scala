@@ -41,25 +41,25 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = Person("Greg", 51)
       val stmt = UpdateStmt("age", ConstantFn(42), "<pos>", ScalarType("", "scala.Any", false))
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, lens)), dynalensPerson))
-        updatedPerson = updated.getValue("top").get.asInstanceOf[Person]
-      yield assertTrue(updatedPerson.age == 42)
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, lens)), dynalensPerson, rootObj = p, rootLens = lens))
+        result = updated.rootObj.asInstanceOf[Person]
+      yield assertTrue(result.age == 42)
     },
 
     test("Simple scalar update at top — modify String field") {
       val p = Person("Greg", 51)
       val stmt = UpdateStmt("name", ConstantFn("Bob"), "<pos>", ScalarType("", "scala.Any", false))
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, lens)), dynalensPerson))
-        updatedPerson = updated.getValue("top").get.asInstanceOf[Person]
-      yield assertTrue(updatedPerson.name == "Bob")
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, lens)), dynalensPerson, rootObj = p, rootLens = lens))
+        result = updated.rootObj.asInstanceOf[Person]
+      yield assertTrue(result.name == "Bob")
     },
 
     test("Update missing field fails for required update") {
       val p = Person("Greg", 51)
       val stmt = UpdateStmt("bogus", ConstantFn("X"), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, lens)), dynalensPerson)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, lens)), dynalensPerson, rootObj = p, rootLens = lens)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -67,7 +67,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p: Person = null.asInstanceOf[Person]
       val stmt = UpdateStmt("age", ConstantFn(99), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, lens)), dynalensPerson)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, lens)), dynalensPerson, rootObj = p, rootLens = lens)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -75,7 +75,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = Person("Greg", 51)
       val stmt = UpdateStmt("age", ConstantFn("nope"), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, lens)), dynalensPerson)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, lens)), dynalensPerson, rootObj = p, rootLens = lens)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -83,8 +83,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = UpdatePerson1("Greg", 51, UpdateAddress1("Main", "Dallas"))
       val stmt = UpdateStmt("address.city", ConstantFn("Austin"), "<pos>", ScalarType("", "scala.Any", false))
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, lens2)), dynalensUpdatePerson1))
-        result = updated.getValue("top").get.asInstanceOf[UpdatePerson1]
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, lens2)), dynalensUpdatePerson1, rootObj = p, rootLens = lens2))
+        result = updated.rootObj.asInstanceOf[UpdatePerson1]
       yield assertTrue(result.address.city == "Austin")
     },
 
@@ -92,7 +92,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = UpdatePerson1("Greg", 51, UpdateAddress1("Main", "Dallas"))
       val stmt = UpdateStmt("address.bogus", ConstantFn("X"), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, lens2)), dynalensUpdatePerson1)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, lens2)), dynalensUpdatePerson1, rootObj = p, rootLens = lens2)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -100,7 +100,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = UpdatePerson1("Greg", 51, null.asInstanceOf[UpdateAddress1])
       val stmt = UpdateStmt("address.city", ConstantFn("Anywhere"), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, lens2)), dynalensUpdatePerson1)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, lens2)), dynalensUpdatePerson1, rootObj = p, rootLens = lens2)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -108,8 +108,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = UpdatePersonOpt("Greg", Some(UpdateAddress2("Main", "Dallas")))
       val stmt = UpdateStmt("address.city", ConstantFn("Austin"), "<pos>", ScalarType("", "scala.Any", false))
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, lensOpt)), dynalensUpdatePersonOpt))
-        result = updated.getValue("top").get.asInstanceOf[UpdatePersonOpt]
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, lensOpt)), dynalensUpdatePersonOpt, rootObj = p, rootLens = lensOpt))
+        result = updated.rootObj.asInstanceOf[UpdatePersonOpt]
       yield assertTrue(result.address.get.city == "Austin")
     },
 
@@ -117,7 +117,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = UpdatePersonOpt("Greg", None)
       val stmt = UpdateStmt("address.city", ConstantFn("Austin"), "<pos>", ScalarType("", "scala.Any", false))
       for
-        updateResult <- stmt.resolve(DynaContext(Map("top" -> (p, lensOpt)), dynalensUpdatePersonOpt)).either
+        updateResult <- stmt.resolve(DynaContext(Map("this" -> (p, lensOpt)), dynalensUpdatePersonOpt, rootObj = p, rootLens = lensOpt)).either
       yield assertTrue(updateResult.isRight) // path not applied, but no crash
     },
 
@@ -125,7 +125,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = UpdatePerson1("Greg", 51, UpdateAddress1("Main", "Dallas"))
       val stmt = UpdateStmt("address.city", ConstantFn(123), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, lens2)), dynalensUpdatePerson1)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, lens2)), dynalensUpdatePerson1, rootObj = p, rootLens = lens2)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -133,8 +133,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = UpdatePersonOpt("Greg", Some(UpdateAddress2("Main", "Dallas")))
       val stmt = UpdateStmt("address", ConstantFn(None), "<pos>", ScalarType("", "scala.Any", false))
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, lensOpt)), dynalensUpdatePersonOpt))
-        result = updated.getValue("top").get.asInstanceOf[UpdatePersonOpt]
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, lensOpt)), dynalensUpdatePersonOpt, rootObj = p, rootLens = lensOpt))
+        result = updated.rootObj.asInstanceOf[UpdatePersonOpt]
       yield assertTrue(result.address.isEmpty)
     },
 
@@ -142,8 +142,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithList(List(UpdateItem("aaa", 1)))
       val stmt = UpdateStmt("items[0].qty", ConstantFn(5), "<pos>", ScalarType("", "scala.Any", false))
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, listLens)), dynalensWithList))
-        result = updated.getValue("top").get.asInstanceOf[WithList]
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, listLens)), dynalensWithList, rootObj = p, rootLens = listLens))
+        result = updated.rootObj.asInstanceOf[WithList]
       yield assertTrue(result.items.head.qty == 5)
     },
 
@@ -151,7 +151,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithList(List(UpdateItem("aaa", 1)))
       val stmt = UpdateStmt("items[2].qty", ConstantFn(99), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, listLens)), dynalensWithList)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, listLens)), dynalensWithList, rootObj = p, rootLens = listLens)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -159,7 +159,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithListOpt(None)
       val stmt = UpdateStmt("items[0].qty", ConstantFn(7), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, listOptLens)), dynalensWithListOpt)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, listOptLens)), dynalensWithListOpt, rootObj = p, rootLens = listOptLens)).either
       yield assertTrue(result.isRight) // ignored path, remains None
     },
 
@@ -167,7 +167,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithList(List(UpdateItem("aaa", 1)))
       val stmt = UpdateStmt("items[0].qty", ConstantFn("nope"), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, listLens)), dynalensWithList)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, listLens)), dynalensWithList, rootObj = p, rootLens = listLens)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -177,8 +177,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithMap(Map("one" -> UpdateItem("aaa", 1)))
       val stmt = UpdateStmt("things[one].qty", ConstantFn(10), "<pos>", ScalarType("", "scala.Any", false))
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, mapLens)), dynalensWithMap))
-        result = updated.getValue("top").get.asInstanceOf[WithMap]
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, mapLens)), dynalensWithMap, rootObj = p, rootLens = mapLens))
+        result = updated.rootObj.asInstanceOf[WithMap]
       yield assertTrue(result.things("one").qty == 10)
     },
 
@@ -186,7 +186,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithMap(Map("one" -> UpdateItem("aaa", 1)))
       val stmt = UpdateStmt("things[two].qty", ConstantFn(99), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, mapLens)), dynalensWithMap)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, mapLens)), dynalensWithMap, rootObj = p, rootLens = mapLens)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -194,7 +194,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithMapOpt(None)
       val stmt = UpdateStmt("things[one].qty", ConstantFn(10), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, mapOptLens)), dynalensWithMapOpt)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, mapOptLens)), dynalensWithMapOpt, rootObj = p, rootLens = mapOptLens)).either
       yield assertTrue(result.isRight)
     },
 
@@ -202,7 +202,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithMap(Map("one" -> UpdateItem("aaa", 1)))
       val stmt = UpdateStmt("things[one].qty", ConstantFn("bad"), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, mapLens)), dynalensWithMap)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, mapLens)), dynalensWithMap, rootObj = p, rootLens = mapLens)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -211,8 +211,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithMap(Map("one" -> UpdateItem("aaa", 1)))
       val stmt = UpdateStmt("things[two]", ConstantFn(UpdateItem("bbb", 2)), "<pos>", ScalarType("", "scala.Any", false))
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, mapLens)), dynalensWithMap))
-        result = updated.getValue("top").get.asInstanceOf[WithMap]
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, mapLens)), dynalensWithMap, rootObj = p, rootLens = mapLens))
+        result = updated.rootObj.asInstanceOf[WithMap]
       yield assertTrue(result.things("two") == UpdateItem("bbb", 2))
     },
 
@@ -220,7 +220,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithMapOpt(None)
       val stmt = UpdateStmt("things[two]", ConstantFn(UpdateItem("bbb", 2)), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, mapOptLens)), dynalensWithMapOpt)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, mapOptLens)), dynalensWithMapOpt, rootObj = p, rootLens = mapOptLens)).either
       yield assertTrue(result.isRight) // ignored, stays None
     },
 
@@ -228,7 +228,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithMap(Map("one" -> UpdateItem("aaa", 1)))
       val stmt = UpdateStmt("things[two].qty", ConstantFn(7), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, mapLens)), dynalensWithMap)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, mapLens)), dynalensWithMap, rootObj = p, rootLens = mapLens)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -236,7 +236,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithList(List(UpdateItem("aaa", 1)))
       val stmt = UpdateStmt("items[2]", ConstantFn(UpdateItem("bbb", 2)), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, listLens)), dynalensWithList)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, listLens)), dynalensWithList, rootObj = p, rootLens = listLens)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -244,7 +244,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = WithList(List(UpdateItem("aaa", 1)))
       val stmt = UpdateStmt("items[2].qty", ConstantFn(5), "<pos>", ScalarType("", "scala.Any", false))
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, listLens)), dynalensWithList)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, listLens)), dynalensWithList, rootObj = p, rootLens = listLens)).either
       yield assertTrue(result.isLeft)
     },
 
@@ -252,8 +252,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val p = Person("Greg", 51)
       val stmt = UpdateStmt("this.age", ConstantFn(33), "<pos>", ScalarType("", "scala.Any", false))
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, lens)), dynalensPerson))
-        result = updated.getValue("top").get.asInstanceOf[Person]
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, lens)), dynalensPerson, rootObj = p, rootLens = lens))
+        result = updated.rootObj.asInstanceOf[Person]
       yield assertTrue(result.age == 33)
     },
 
@@ -271,8 +271,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
         ScalarType("", "scala.Any", false)
       )
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, listLens)), dynalensWithList))
-        result = updated.getValue("top").get.asInstanceOf[WithList]
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, listLens)), dynalensWithList, rootObj = p, rootLens = listLens))
+        result = updated.rootObj.asInstanceOf[WithList]
       yield assertTrue(result.items(1).qty == 12)
     },
 
@@ -289,8 +289,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
         ScalarType("", "scala.Any", false)
       )
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, lens2)), dynalensUpdatePerson1))
-        result = updated.getValue("top").get.asInstanceOf[UpdatePerson1]
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, lens2)), dynalensUpdatePerson1, rootObj = p, rootLens = lens2))
+        result = updated.rootObj.asInstanceOf[UpdatePerson1]
       yield assertTrue(result.address.city == "Dallas - TX")
     },
 
@@ -307,7 +307,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
         ScalarType("", "scala.Any", false)
       )
       for
-        updateResult <- stmt.resolve(DynaContext(Map("top" -> (p, lensOpt)), dynalensUpdatePersonOpt)).either
+        updateResult <- stmt.resolve(DynaContext(Map("this" -> (p, lensOpt)), dynalensUpdatePersonOpt, rootObj = p, rootLens = lensOpt)).either
       yield assertTrue(updateResult.isRight)
     },
     test("Map → List nested update — success") {
@@ -319,8 +319,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val stmt = UpdateStmt("lm[a].items[0].qty", ConstantFn(9), "<pos>", ScalarType("", "scala.Any", false))
 
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, rootLens)), dynalens))
-        result = updated.getValue("top").get.asInstanceOf[OuterMap]
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, rootLens)), dynalens, rootObj = p, rootLens = rootLens))
+        result = updated.rootObj.asInstanceOf[OuterMap]
       yield assertTrue(result.lm("a").items(0).qty == 9)
     },
     test("Map → List nested update — missing key fails") {
@@ -332,7 +332,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val stmt = UpdateStmt("lm[b].items[0].qty", ConstantFn(9), "<pos>", ScalarType("", "scala.Any", false))
 
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, rootLens)), dynalens)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, rootLens)), dynalens, rootObj = p, rootLens = rootLens)).either
       yield assertTrue(result.isLeft)
     },
     test("Map → List nested update — index OOB fails") {
@@ -344,7 +344,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val stmt = UpdateStmt("lm[a].items[3].qty", ConstantFn(9), "<pos>", ScalarType("", "scala.Any", false))
 
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, rootLens)), dynalens)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, rootLens)), dynalens, rootObj = p, rootLens = rootLens)).either
       yield assertTrue(result.isLeft)
     },
     test("List → Map nested update — success") {
@@ -356,8 +356,8 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val stmt = UpdateStmt("lm[0].things[x].qty", ConstantFn(17), "<pos>", ScalarType("", "scala.Any", false))
 
       for
-        updated <- stmt.resolve(DynaContext(Map("top" -> (p, rootLens)), dynalens))
-        result = updated.getValue("top").get.asInstanceOf[OuterList]
+        updated <- stmt.resolve(DynaContext(Map("this" -> (p, rootLens)), dynalens, rootObj = p, rootLens = rootLens))
+        result = updated.rootObj.asInstanceOf[OuterList]
       yield assertTrue(result.lm(0).things("x").qty == 17)
     },
     test("List → Map nested update — missing key fails") {
@@ -369,7 +369,7 @@ object UpdateStmtSpec extends ZIOSpecDefault {
       val stmt = UpdateStmt("lm[0].things[z].qty", ConstantFn(17), "<pos>", ScalarType("", "scala.Any", false))
 
       for
-        result <- stmt.resolve(DynaContext(Map("top" -> (p, rootLens)), dynalens)).either
+        result <- stmt.resolve(DynaContext(Map("this" -> (p, rootLens)), dynalens, rootObj = p, rootLens = rootLens)).either
       yield assertTrue(result.isLeft)
     }
   ).provide(

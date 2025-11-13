@@ -13,10 +13,13 @@ object BooleanFnSpec extends ZIOSpecDefault:
 
   val dynalens = DynaLens.into[Foo]
   val fooLens = dynalens.topLens
-  def buildCtx =
+  def buildCtx: DynaContext =
     DynaContext(
-      Map("foo" -> (foo, fooLens)),
-      dynalens
+      symbols = Map.empty,
+      dynaLens = dynalens,
+      rootObj = foo,
+      rootLens = fooLens,
+      parentOpt = None
     )
 
   def G(path: String): GetFn = GetFn(path, false, RootFn, "pos")
@@ -41,13 +44,13 @@ object BooleanFnSpec extends ZIOSpecDefault:
     // IF
     // --------------------
     test("IfFn true path") {
-      val fn = IfFn(AndFn(G("foo.flag"), B(true), ""), C("yes"), C("no"), "")
+      val fn = IfFn(AndFn(G("flag"), B(true), ""), C("yes"), C("no"), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v == "yes")
     },
 
     test("IfFn false path") {
-      val fn = IfFn(AndFn(G("foo.flag"), B(false), ""), C("yes"), C("no"), "")
+      val fn = IfFn(AndFn(G("flag"), B(false), ""), C("yes"), C("no"), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v == "no")
     },
@@ -56,7 +59,7 @@ object BooleanFnSpec extends ZIOSpecDefault:
     // AND
     // --------------------
     test("AndFn both true") {
-      val fn = AndFn(G("foo.flag"), B(true), "")
+      val fn = AndFn(G("flag"), B(true), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v)
     },
@@ -68,7 +71,7 @@ object BooleanFnSpec extends ZIOSpecDefault:
     },
 
     test("AndFn invalid left type errors") {
-      val fn = AndFn(G("foo.s"), B(true), "")
+      val fn = AndFn(G("s"), B(true), "")
       for result <- fn.resolve(buildCtx).exit
         yield assertTrue(result.isFailure)
     },
@@ -89,7 +92,7 @@ object BooleanFnSpec extends ZIOSpecDefault:
     },
 
     test("OrFn invalid right type errors") {
-      val fn = OrFn(B(false), G("foo.n"), "")
+      val fn = OrFn(B(false), G("n"), "")
       for result <- fn.resolve(buildCtx).exit
         yield assertTrue(result.isFailure)
     },
@@ -98,13 +101,13 @@ object BooleanFnSpec extends ZIOSpecDefault:
     // NOT
     // --------------------
     test("NotFn negates boolean") {
-      val fn = NotFn(G("foo.flag"), "")
+      val fn = NotFn(G("flag"), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(!v)
     },
 
     test("NotFn error on non-boolean") {
-      val fn = NotFn(G("foo.s"), "")
+      val fn = NotFn(G("s"), "")
       for result <- fn.resolve(buildCtx).exit
         yield assertTrue(result.isFailure)
     },
@@ -113,21 +116,21 @@ object BooleanFnSpec extends ZIOSpecDefault:
     // ISDEFINED
     // --------------------
     test("IsDefinedFn Some true") {
-      val fn = IsDefinedFn(G("foo.opt"), "")
+      val fn = IsDefinedFn(G("opt"), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v)
     },
 
     test("IsDefinedFn None false") {
-      val ctx = buildCtx.copy(symbols = buildCtx.symbols.updated("foo", (foo.copy(opt=None), fooLens)))
-      val fn = IsDefinedFn(GetFn("foo.opt", true, RootFn, "pos"), "")
+      val ctx = buildCtx.copy(rootObj = foo.copy(opt = None))
+      val fn = IsDefinedFn(GetFn("opt", true, RootFn, "pos"), "")
       for (v, _) <- fn.resolve(ctx)
         yield assertTrue(!v)
     },
 
     test("IsDefinedFn empty List false") {
-      val ctx = buildCtx.copy(symbols = buildCtx.symbols.updated("foo", (foo.copy(items=Nil), fooLens)))
-      val fn = IsDefinedFn(G("foo.items"), "")
+      val ctx = buildCtx.copy(rootObj = foo.copy(items = Nil))
+      val fn = IsDefinedFn(G("items"), "")
       for (v, _) <- fn.resolve(ctx)
         yield assertTrue(!v)
     },
@@ -136,13 +139,13 @@ object BooleanFnSpec extends ZIOSpecDefault:
     // STARTSWITH / ENDSWITH
     // --------------------
     test("StartsWithFn success") {
-      val fn = StartsWithFn(G("foo.s"), C("Hello"), "")
+      val fn = StartsWithFn(G("s"), C("Hello"), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v)
     },
 
     test("EndsWithFn success") {
-      val fn = EndsWithFn(G("foo.s"), C("world"), "")
+      val fn = EndsWithFn(G("s"), C("world"), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v)
     },
@@ -151,20 +154,20 @@ object BooleanFnSpec extends ZIOSpecDefault:
     // CONTAINS
     // --------------------
     test("Contains string substring") {
-      val fn = ContainsFn(G("foo.s"), C("world"), "")
+      val fn = ContainsFn(G("s"), C("world"), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v)
     },
 
     test("Contains list value") {
-      val fn = ContainsFn(G("foo.items"), C(2), "")
+      val fn = ContainsFn(G("items"), C(2), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v)
     },
 
     test("Contains list predicate (>=2)") {
       val pred = GreaterThanFn(G("this"), C(1), "")
-      val fn = ContainsFn(G("foo.items"), pred.asInstanceOf[Fn[Any]], "")
+      val fn = ContainsFn(G("items"), pred.asInstanceOf[Fn[Any]], "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v)
     },
@@ -177,7 +180,7 @@ object BooleanFnSpec extends ZIOSpecDefault:
     },
 
     test("Contains unsupported type errors") {
-      val fn = ContainsFn(G("foo.n"), C(1), "")
+      val fn = ContainsFn(G("n"), C(1), "")
       for result <- fn.resolve(buildCtx).exit
         yield assertTrue(result.isFailure)
     },
@@ -186,7 +189,7 @@ object BooleanFnSpec extends ZIOSpecDefault:
     // EqualsIgnoreCase
     // --------------------
     test("EqualsIgnoreCaseFn match") {
-      val fn = EqualsIgnoreCaseFn(G("foo.s"), C("hello WORLD"), "")
+      val fn = EqualsIgnoreCaseFn(G("s"), C("hello WORLD"), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v)
     },
@@ -195,7 +198,7 @@ object BooleanFnSpec extends ZIOSpecDefault:
     // MatchesRegex
     // --------------------
     test("MatchesRegexFn success") {
-      val fn = MatchesRegexFn(G("foo.s"), C("Hello.*"), "")
+      val fn = MatchesRegexFn(G("s"), C("Hello.*"), "")
       for (v, _) <- fn.resolve(buildCtx)
         yield assertTrue(v)
     }

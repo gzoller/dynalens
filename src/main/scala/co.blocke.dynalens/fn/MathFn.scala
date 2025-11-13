@@ -75,7 +75,8 @@ case class SumFn(recv: Fn[Any], posStr: String) extends UnaryFn[Any]:
       rawResult <- recv.resolve(ctx).either
       (valueOpt, lens) <- rawResult match
         case Right((v, l)) => ZIO.succeed((Some(v), l))
-        case Left(_: DynaLensError) if recv.isOptional => ZIO.succeed((None, ScalarLens("sum", false, None)))
+        case Left(_: DynaLensError) if recv.isOptional =>
+          ZIO.succeed((None, ScalarLens("sum", true, None)))
         case Left(e) => ZIO.fail(e)
       box <- valueOpt match
         case None    => ZIO.succeed(emptyBox)

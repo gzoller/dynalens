@@ -4,7 +4,6 @@ package parser
 import zio.*
 import zio.test.*
 import DynaLens.*
-import CtxStrings.*
 import co.blocke.testkit.ZioTestKit.*
 
 object ParsingBooleanSpec extends ZIOSpecDefault {
@@ -33,7 +32,7 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(
         resultStr == expectedResult,
         compiled.toString == expectedCompiled
@@ -60,7 +59,7 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(resultStr == expectedResult, compiled.toString == expectedCompiled)
     },
 
@@ -84,7 +83,7 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(resultStr == expectedResult, compiled.toString == expectedCompiled)
     },
 
@@ -108,7 +107,7 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(resultStr == expectedResult, compiled.toString == expectedCompiled)
     },
 
@@ -133,7 +132,7 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(
         resultStr == expectedResult,
         compiled.toString == expectedCompiled
@@ -161,7 +160,7 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
         compiled <- Script.compile(script, lens)
         _ <- ZIO.succeed(println("!!! "+compiled))
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(resultStr == expectedResult, compiled.toString == expectedCompiled)
     },
 
@@ -185,7 +184,7 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(resultStr == expectedResult, compiled.toString == expectedCompiled)
     },
 
@@ -209,7 +208,7 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(resultStr == expectedResult, compiled.toString == expectedCompiled)
     },
 
@@ -233,7 +232,7 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(resultStr == expectedResult, compiled.toString == expectedCompiled)
     },
 
@@ -257,7 +256,7 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(resultStr == expectedResult, compiled.toString == expectedCompiled)
     },
 
@@ -281,7 +280,7 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(resultStr == expectedResult, compiled.toString == expectedCompiled)
     }
   ) @@ ziotestkit

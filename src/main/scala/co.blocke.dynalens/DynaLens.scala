@@ -76,11 +76,14 @@ object DynaLens:
 
   // ----------------------- Lens + Registry Builders -------------------------
 
-  private def fieldPairsWithParent(cls: ScalaClassRef[?], parentE: Expr[Lens])(using Quotes): Expr[List[(String, Lens)]] =
+  // Build field pairs without wiring parent; parent links are patched in after construction
+  private def fieldPairsNoParent(cls: ScalaClassRef[?])(using Quotes): Expr[List[(String, Lens)]] =
     val pairs: List[Expr[(String, Lens)]] =
       cls.fields.map { f =>
         val nameE = Expr(f.name)
-        val lensE = lensForField(f.fieldRef, f.name, parent = Some(parentE))
+        // Build field lenses without a parent; we will attach the correct parent
+        // after the owning ClassLens instance (`self`) is fully constructed.
+        val lensE = lensForField(f.fieldRef, f.name, parent = None)
         '{ ($nameE -> $lensE) }
       }
     Expr.ofList(pairs)
@@ -95,11 +98,40 @@ object DynaLens:
     val nameExpr = Expr(cls.typedName.toString)
     val parentOptExpr = parent.map(p => '{ Some($p) }).getOrElse('{ None })
 
-    // Build ClassLens with a lazy self, so children can reference `self` as their parent
+    // Build ClassLens with a lazy self, so we can refer to `self` as the owner
     val classSchemaExpr: Expr[ClassType] = Expr(Schema.build(cls))
     val classLensExpr: Expr[ClassLens] = '{
+      // Helper to recursively attach parent relationships at runtime,
+      // once we have the real owning ClassLens instance.
+      def attachParent(owner: ClassLens, lens: Lens): Lens =
+        lens match
+          case cl: ClassLens =>
+            // First set this class lens's parent to the owner
+            val patchedSelf = cl.copy(parent = Some(owner))
+            // Recurse into its fields, using the patched self as the new owner
+            val patchedFields: Map[String, Lens] =
+              patchedSelf.fields.view.mapValues(ch => attachParent(patchedSelf, ch)).toMap
+            patchedSelf.copy(fields = patchedFields)
+
+          case sl: ScalarLens =>
+            sl.copy(parent = Some(owner))
+
+          case ll: ListLens =>
+            val elPatched = attachParent(owner, ll.elementLens)
+            ll.copy(parent = Some(owner), elementLens = elPatched)
+
+          case ml: MapLens =>
+            val vPatched = attachParent(owner, ml.valueLens)
+            ml.copy(parent = Some(owner), valueLens = vPatched)
+
+          case el: EnumLens =>
+            el.copy(parent = Some(owner))
+
+          case other =>
+            other
+
       var self: ClassLens = null.asInstanceOf[ClassLens]
-      // First create a non-null shell so children can safely capture parent = Some(self)
+      // First create a non-null shell so we can refer to `self` as the owner
       self = ClassLens(
         name = $nameExpr,
         isOptional = false,
@@ -109,11 +141,17 @@ object DynaLens:
         _update = $updFn,
         schema = $classSchemaExpr
       )
-      // Now that self is non-null, build children with parent = Some(self)
-      val fieldPairs: List[(String, Lens)] = ${ fieldPairsWithParent(cls, '{ self }) }
-      val fields: Map[String, Lens] = Map.from(fieldPairs)
-      // Finalize by injecting the real fields map
-      self = self.copy(fields = fields)
+
+      // Build children with no parent wiring at macro-time
+      val fieldPairs: List[(String, Lens)] = ${ fieldPairsNoParent(cls) }
+      val rawFields: Map[String, Lens] = Map.from(fieldPairs)
+
+      // Now that `self` is fully materialized, attach parent links
+      val patchedFields: Map[String, Lens] =
+        rawFields.view.mapValues(ch => attachParent(self, ch)).toMap
+
+      // Finalize by injecting the real, parent-aware fields map
+      self = self.copy(fields = patchedFields)
       self
     }
 
@@ -128,30 +166,32 @@ object DynaLens:
     import quotes.reflect.*
 
     def scalar(name: String, isOpt: Boolean): Expr[ScalarLens] =
-      '{ ScalarLens(name = ${ Expr(name) }, isOptional = ${ Expr(isOpt) }, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+      // Build scalars without a parent; parent will be attached later by attachParent(...)
+      '{ ScalarLens(name = ${ Expr(name) }, isOptional = ${ Expr(isOpt) }, parent = None) }
 
     ref match
       // ----- Option[...] -----
       case o: OptionRef[?] =>
         o.optionParamType match
           case s: SeqRef[?] =>
-            val elLens = lensForElement(s.elementRef, parent = parent)
-            '{ ListLens(name = ${ Expr(fieldName) }, isOptional = true, elementLens = $elLens, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+            val elLens = lensForElement(s.elementRef, parent = None)
+            '{ ListLens(name = ${ Expr(fieldName) }, isOptional = true, elementLens = $elLens, parent = None) }
 
           case m: MapRef[?] =>
             val keyKindOpt = determineMapKey(m.elementRef)
             keyKindOpt match
               case Some(keyKind) =>
-                val vLens = lensForElement(m.elementRef2, parent = parent)
-                '{ MapLens(name = ${ Expr(fieldName) }, isOptional = true, keyKind = ${ Expr(keyKind) }, valueLens = $vLens, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+                val vLens = lensForElement(m.elementRef2, parent = None)
+                '{ MapLens(name = ${ Expr(fieldName) }, isOptional = true, keyKind = ${ Expr(keyKind) }, valueLens = $vLens, parent = None) }
               case None =>
                 report.errorAndAbort(s"Unsupported Map key type for field '$fieldName'")
 
           case e: ScalaEnumRef[?] =>
             val enumNameExpr = Expr(e.typedName.toString)
-            '{ EnumLens(name = ${Expr(fieldName)}, isOptional = true, enumClassName = $enumNameExpr, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None })}) }
+            '{ EnumLens(name = ${Expr(fieldName)}, isOptional = true, enumClassName = $enumNameExpr, parent = None) }
           case scr: ScalaClassRef[?] if scr.isCaseClass =>
-            val (child, _) = buildClassLensAndRegistry(scr, parent = parent)
+            // Build the child class lens without parent; attachParent will wire it later
+            val (child, _) = buildClassLensAndRegistry(scr, parent = None)
             // Optional class field is represented as a class lens with isOptional=true
             '{ $child.copy(isOptional = true) }
 
@@ -161,8 +201,8 @@ object DynaLens:
 
       // ----- Seq[...] -----
       case s: SeqRef[?] =>
-        val elLens = lensForElement(s.elementRef, parent = parent)
-        '{ ListLens(name = ${ Expr(fieldName) }, isOptional = false, elementLens = $elLens, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+        val elLens = lensForElement(s.elementRef, parent = None)
+        '{ ListLens(name = ${ Expr(fieldName) }, isOptional = false, elementLens = $elLens, parent = None) }
 
       // ----- Map[K,V] -----
       case m: MapRef[?] =>
@@ -172,22 +212,22 @@ object DynaLens:
             val vLens = m.elementRef2 match
               case e: ScalaEnumRef[?] =>
                 val enumNameExpr = Expr(e.typedName.toString)
-                '{ EnumLens(name = ${Expr(fieldName)}, isOptional = false, enumClassName = $enumNameExpr, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None })}) }
+                '{ EnumLens(name = ${Expr(fieldName)}, isOptional = false, enumClassName = $enumNameExpr, parent = None) }
               case _ =>
-                lensForField(m.elementRef2, fieldName, parent)
-            '{ MapLens(name = ${ Expr(fieldName) }, isOptional = false, keyKind = ${ Expr(keyKind) }, valueLens = $vLens, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+                lensForField(m.elementRef2, fieldName, parent = None)
+            '{ MapLens(name = ${ Expr(fieldName) }, isOptional = false, keyKind = ${ Expr(keyKind) }, valueLens = $vLens, parent = None) }
           case None =>
             report.errorAndAbort(s"Unsupported Map key type for field '$fieldName'")
 
       // ----- Direct case class -----
       case scr: ScalaClassRef[?] if scr.isCaseClass =>
-        val (child, _) = buildClassLensAndRegistry(scr, parent = parent)
+        val (child, _) = buildClassLensAndRegistry(scr, parent = None)
         child
 
       // ----- Enum -----
       case e: ScalaEnumRef[?] =>
         val enumNameExpr = Expr(e.typedName.toString)
-        '{ EnumLens(name = ${Expr(fieldName)}, isOptional = ${Expr(false)}, enumClassName = $enumNameExpr, parent = ${parent.map(p => '{ Some($p) }).getOrElse('{ None })}) }
+        '{ EnumLens(name = ${Expr(fieldName)}, isOptional = ${Expr(false)}, enumClassName = $enumNameExpr, parent = None) }
 
       // ----- Scalar -----
       case _ =>
@@ -198,45 +238,45 @@ object DynaLens:
 
     ref match
       case scr: ScalaClassRef[?] if scr.isCaseClass =>
-        val (child, _) = buildClassLensAndRegistry(scr, parent = parent)
+        val (child, _) = buildClassLensAndRegistry(scr, parent = None)
         child
       case s: SeqRef[?] =>
-        val el = lensForElement(s.elementRef, parent = parent)
-        '{ ListLens(name = "element", isOptional = false, elementLens = $el, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+        val el = lensForElement(s.elementRef, parent = None)
+        '{ ListLens(name = "element", isOptional = false, elementLens = $el, parent = None) }
       case m: MapRef[?] =>
         val keyKindOpt = determineMapKey(m.elementRef)
         keyKindOpt match
           case Some(keyKind) =>
-            val v = lensForElement(m.elementRef2, parent = parent)
-            '{ MapLens(name = "element", isOptional = false, keyKind = ${ Expr(keyKind) }, valueLens = $v, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+            val v = lensForElement(m.elementRef2, parent = None)
+            '{ MapLens(name = "element", isOptional = false, keyKind = ${ Expr(keyKind) }, valueLens = $v, parent = None) }
           case None =>
             report.errorAndAbort("Unsupported Map key type for element")
       case e: ScalaEnumRef[?] =>
         val enumNameExpr = Expr(e.typedName.toString)
-        '{ EnumLens(name = "element", isOptional = false, enumClassName = $enumNameExpr, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+        '{ EnumLens(name = "element", isOptional = false, enumClassName = $enumNameExpr, parent = None) }
       case o: OptionRef[?] =>
         o.optionParamType match
           case scr: ScalaClassRef[?] if scr.isCaseClass =>
-            val (child, _) = buildClassLensAndRegistry(scr, parent = parent)
+            val (child, _) = buildClassLensAndRegistry(scr, parent = None)
             '{ $child.copy(isOptional = true) }
           case s: SeqRef[?] =>
-            val el = lensForElement(s.elementRef, parent = parent)
-            '{ ListLens(name = "element", isOptional = true, elementLens = $el, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+            val el = lensForElement(s.elementRef, parent = None)
+            '{ ListLens(name = "element", isOptional = true, elementLens = $el, parent = None) }
           case m: MapRef[?] =>
             val keyKindOpt = determineMapKey(m.elementRef)
             keyKindOpt match
               case Some(keyKind) =>
-                val v = lensForElement(m.elementRef2, parent = parent)
-                '{ MapLens(name = "element", isOptional = true, keyKind = ${ Expr(keyKind) }, valueLens = $v, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+                val v = lensForElement(m.elementRef2, parent = None)
+                '{ MapLens(name = "element", isOptional = true, keyKind = ${ Expr(keyKind) }, valueLens = $v, parent = None) }
               case None =>
                 report.errorAndAbort("Unsupported Map key type for element")
           case e: ScalaEnumRef[?] =>
             val enumNameExpr = Expr(e.typedName.toString)
-            '{ EnumLens(name = "element", isOptional = true, enumClassName = $enumNameExpr, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+            '{ EnumLens(name = "element", isOptional = true, enumClassName = $enumNameExpr, parent = None) }
           case _ =>
-            '{ ScalarLens(name = "element", isOptional = true, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+            '{ ScalarLens(name = "element", isOptional = true, parent = None) }
       case _ =>
-        '{ ScalarLens(name = "element", isOptional = false, parent = ${ parent.map(p => '{ Some($p) }).getOrElse('{ None }) }) }
+        '{ ScalarLens(name = "element", isOptional = false, parent = None) }
 
   // ------------------------- Registry collection ----------------------------
 

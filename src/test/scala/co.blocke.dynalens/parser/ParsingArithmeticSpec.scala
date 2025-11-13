@@ -4,7 +4,6 @@ package parser
 import zio.*
 import zio.test.*
 import DynaLens.*
-import CtxStrings.*
 import co.blocke.testkit.ZioTestKit.*
 
 object ParsingArithmeticSpec extends ZIOSpecDefault {
@@ -33,7 +32,7 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(
         updated == inst,
         resultStr == expectedResult,
@@ -61,7 +60,7 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(
         updated == inst,
         resultStr == expectedResult,
@@ -90,7 +89,7 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(
         updated == Item(4,5,1),
         resultStr == expectedResult,
@@ -118,7 +117,7 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(
         updated == inst,
         resultStr == expectedResult,
@@ -146,7 +145,7 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
-        resultStr = toStringCtx(ctx)
+        resultStr = ctx.toString
       } yield assertTrue(
         updated == inst,
         resultStr == expectedResult,

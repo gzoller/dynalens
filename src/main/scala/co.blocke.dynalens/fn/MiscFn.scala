@@ -104,19 +104,10 @@ case class BlockFn[R](statements: Seq[Statement], finalFn: Fn[R], posStr: String
 
   // Execute statements in order, threading the DynaContext; return the value of the final Fn.
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (R, Lens)] = {
-    val ctxWithTop: DynaContext =
-      ctx.getTop match
-        case Some(_) => ctx
-        case None =>
-          ctx.getThis match
-            case Some((obj, lens)) => ctx.bind("top", obj, lens)
-            case None =>
-              // Fallback: use RootFn's unit object and lens as synthetic top
-              ctx.bind("top", (), ScalarLens("<root>", false, None))
-
+    // The context is assumed to already have rootObj and rootLens set.
     val staged: ZIO[RuntimeEnv, DynaLensError, DynaContext] =
       statements.foldLeft(
-        ZIO.succeed(ctxWithTop): ZIO[RuntimeEnv, DynaLensError, DynaContext]
+        ZIO.succeed(ctx): ZIO[RuntimeEnv, DynaLensError, DynaContext]
       ) { (accZ, stmt) =>
         accZ.flatMap { accCtx =>
           stmt match
@@ -129,6 +120,7 @@ case class BlockFn[R](statements: Seq[Statement], finalFn: Fn[R], posStr: String
                     accCtx.bind(symPath, coerced, existingLens)
                   }
                 case _ =>
+                  // UpdateStmt resolves with the context model; no need to bind "top"
                   u.resolve(accCtx)
             case other =>
               other.resolve(accCtx).as(accCtx)
@@ -296,6 +288,11 @@ case class GetFn(
       case r :: Nil => copy(recv = r.asInstanceOf[Fn[Any]])
       case _        => this
 
+  private inline def getStructuralThis(ctx: DynaContext): Option[(Any, Lens)] =
+    ctx.get("this").filter { case (_, l) =>
+      l.isInstanceOf[ClassLens] || l.isInstanceOf[MapLens] || l.isInstanceOf[ListLens]
+    }
+
   // ------------------------------------------------------------------
   // Core resolve: lens-first, no reflection fallback
   // ------------------------------------------------------------------
@@ -310,7 +307,7 @@ case class GetFn(
         case None =>
           return ZIO.fail(DynaLensError(posStr, s"No this binding found for '$path'"))
 
-    // Decide anchor: symbol -> this -> top, including index anchors
+    // Decide anchor: symbol -> this -> root, including index anchors
     val anchored: Option[(Any, Lens, List[PathElement])] = parts match
       // Symbol anchor + index
       case PathElement(Some(firstName), Some(idxStr)) :: rest =>
@@ -319,37 +316,37 @@ case class GetFn(
             val idxElem = PathElement(None, Some(idxStr))
             Some((v, l, idxElem :: rest))
           case None =>
-            ctx.get("this") match
-              case Some((v, l)) => Some((v, l, parts))
-              case None =>
-                ctx.get("top").map { case (v, l) => (v, l, parts) }
+            getStructuralThis(ctx)
+              .map { case (v, l) => (v, l, parts) }
+              .orElse(Some((ctx.rootObj, ctx.rootLens, parts)))
 
       // Symbol anchor (no index)
       case PathElement(Some(firstName), None) :: rest =>
         ctx.get(firstName) match
           case Some((v, l)) => Some((v, l, rest))
           case None =>
-            ctx.get("this") match
-              case Some((v, l)) => Some((v, l, parts))
-              case None =>
-                ctx.get("top").map { case (v, l) => (v, l, parts) }
+            getStructuralThis(ctx)
+              .map { case (v, l) => (v, l, parts) }
+              .orElse(Some((ctx.rootObj, ctx.rootLens, parts)))
 
-      // Index-only first segment: try this/top
+      // Index-only first segment: try this/root
       case PathElement(None, Some(_)) :: _ =>
-        ctx.get("this")
+        getStructuralThis(ctx)
           .map { case (v, l) => (v, l, parts) }
-          .orElse(ctx.get("top").map { case (v, l) => (v, l, parts) })
+          .orElse(Some((ctx.rootObj, ctx.rootLens, parts)))
 
-      // No usable anchor, fall back to this/top
+      // No usable anchor, fall back to this/root
       case _ =>
-        ctx.get("this")
+        getStructuralThis(ctx)
           .map { case (v, l) => (v, l, parts) }
-          .orElse(ctx.get("top").map { case (v, l) => (v, l, parts) })
+          .orElse(Some((ctx.rootObj, ctx.rootLens, parts)))
 
     anchored match
       case None =>
-        if isOptional then ZIO.succeed((None, ScalarLens("<get>", true, None)))
-        else ZIO.fail(DynaLensError(posStr, s"No anchor found for path '$path' (missing symbol/this/top)"))
+        if isOptional then
+          ZIO.succeed((None, ScalarLens("<get>", true, None)))
+        else
+          ZIO.fail(DynaLensError(posStr, s"No anchor found for path '$path' (missing symbol/this/root)"))
 
       case Some((baseVal, baseLens, tail)) =>
         if baseLens == null then
@@ -357,59 +354,88 @@ case class GetFn(
             ZIO.succeed((None, ScalarLens("<get>", true, None)))
           else
             ZIO.fail(DynaLensError(posStr, s"Missing lens for required path '$path'"))
-        else if baseVal == null then
-          if isOptional then
-            ZIO.succeed((None, baseLens))
-          else
-            ZIO.fail(DynaLensError(posStr, s"Receiver for '$path' is null"))
-        else baseVal match
-          case None =>
+        else
+          if baseVal == null then
             if isOptional then
               ZIO.succeed((None, baseLens))
-            else {
-              val z = resolveWithLens(None, baseLens, tail)
-              z.map { case (v, l) =>
-                (v, l)
-              }
-            }
-          case Some(inner) =>
-            if inner == null && isOptional then
-              ZIO.succeed((None, baseLens))
-            else {
-              val z = resolveWithLens(inner, baseLens, tail)
-              z.map { case (v, l) =>
-                (v, l)
-              }
-            }
-          case nonOpt =>
-            if tail.isEmpty then
-              ZIO.succeed((nonOpt, baseLens))
-            else {
-              val z = resolveWithLens(nonOpt, baseLens, tail)
-              z.map { case (v, l) =>
-                (v, l)
-              }
-            }
+            else
+              ZIO.fail(DynaLensError(posStr, s"Receiver for '$path' is null"))
+          else baseVal match
+            case None =>
+              if isOptional then
+                ZIO.succeed((None, baseLens))
+              else
+                val z = resolveWithLens(None, baseLens, tail)
+                z.map { case (v, l) =>
+                  (v, l)
+                }
+            case Some(inner) =>
+              if inner == null && isOptional then
+                ZIO.succeed((None, baseLens))
+              else
+                val z = resolveWithLens(inner, baseLens, tail)
+                z.map { case (v, l) =>
+                  (v, l)
+                }
+            case nonOpt =>
+              if tail.isEmpty then
+                ZIO.succeed((nonOpt, baseLens))
+              else
+                val z = resolveWithLens(nonOpt, baseLens, tail)
+                z.map { case (v, l) =>
+                  (v, l)
+                }
 
   // Derive the terminal lens by walking the entire remaining path
   @tailrec
   private def deriveTerminalLens(start: Lens, tail: List[PathElement]): Lens =
+    // Helper to avoid self-parent duplication
+    val parentForChild =
+      (field: String) =>
+        start match
+          case _: Lens => Some(start)
+          case _ => start.parent.collect { case l: Lens => l }
+//    val parentForChild =
+//      (field: String) =>
+//        if start.name == field then start.parent else Some(start)
     tail match
       case Nil => start
       case PathElement(Some(field), _) :: rest =>
-        val next: Lens = start match
-          case cl: ClassLens =>
-            cl.fields.getOrElse(field, ScalarLens(field, isOptional = false, cl.parent))
-          case ll: ListLens =>
-            ll.elementLens match
-              case cl: ClassLens => cl.fields.getOrElse(field, ScalarLens(field, isOptional = false, cl.parent))
-              case _              => ScalarLens(field, isOptional = false, ll.elementLens.parent)
-          case ml: MapLens =>
-            ml.valueLens match
-              case cl: ClassLens => cl.fields.getOrElse(field, ScalarLens(field, isOptional = false, cl.parent))
-              case _              => ScalarLens(field, isOptional = false, ml.valueLens.parent)
-          case other =>
-            ScalarLens(field, isOptional = false, other.parent)
+        val next: Lens =
+          start match
+            case cl: ClassLens =>
+              cl.fields.get(field) match
+                case Some(child) =>
+                  // KEEP existing parent if present, otherwise set to start
+                  child.copyWithParent(child.parent.orElse(Some(start)))
+                case None =>
+                  ScalarLens(field, isOptional = false, Some(start))
+
+            case ll: ListLens =>
+              ll.elementLens match
+                case cl: ClassLens =>
+                  cl.fields.get(field) match
+                    case Some(child) =>
+                      child.copyWithParent(child.parent.orElse(Some(start)))
+                    case None =>
+                      ScalarLens(field, isOptional = false, Some(start))
+                case _ =>
+                  ScalarLens(field, isOptional = false, Some(start))
+
+            case ml: MapLens =>
+              ml.valueLens match
+                case cl: ClassLens =>
+                  cl.fields.get(field) match
+                    case Some(child) =>
+                      child.copyWithParent(child.parent.orElse(Some(start)))
+                    case None =>
+                      ScalarLens(field, isOptional = false, Some(start))
+                case _ =>
+                  ScalarLens(field, isOptional = false, Some(start))
+
+            case other =>
+              ScalarLens(field, isOptional = false, Some(start))
+
         deriveTerminalLens(next, rest)
 
       case PathElement(None, Some(_)) :: rest =>
@@ -426,64 +452,118 @@ case class GetFn(
         )
 
   // Drive resolution using the provided lens; no reflection fallback.
-  private def resolveWithLens(base: Any, lens: Lens, tail: List[PathElement])
-  : ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
-    val resultZ: ZIO[Any, DynaLensError, Any] =
-      if tail.isEmpty then ZIO.succeed(base)
-      else lens.get(tail, base)
+  private def resolveWithLens(base: Any, lens: Lens, tail: List[PathElement]): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
+    // 1. LensDebug log: entering resolveWithLens
+    val _debugId1 = LensDebug.nextId()
+    LensDebug.log(_debugId1, s"resolveWithLens ENTER: lens='${lens.name}' (${lens.getClass.getSimpleName}), tail=$tail, parent=${lens.parent.map(_.name)}")
 
-    val widened: ZIO[RuntimeEnv, DynaLensError, Any] = resultZ.mapError(e => e)
+    // Compute effectiveTail: skip redundant self-segment if matches anchor lens name
+    val effectiveTail =
+      if tail.nonEmpty && tail.head.name.exists(_ == lens.name) then
+        tail.tail
+      else
+        tail
+    // 2. LensDebug log: after computing effectiveTail
+    val _debugId2 = LensDebug.nextId()
+    LensDebug.log(_debugId2, s"resolveWithLens: base lens='${lens.name}', effectiveTail=$effectiveTail")
 
-    // Normalize null / nested Option cases into a clean Option
-    def normalize(v: Any): Any = v match
-      case null            => None
-      case None            => None
-      case Some(null)      => None
-      case Some(None)      => None
-      case Some(v2)        => Some(v2)
-      case other           => Some(other)
-
-    if isOptional then
-      widened.fold(
-        _ =>
-          (None, ScalarLens("<get>", true, None): Lens), // Optional swallow
-        { raw =>
-          val normVal = normalize(raw)
-          val outLens = deriveTerminalLens(lens, tail)
-          // DEBUG: show lens chaining for optional branch
-          // println(s"[GetFn DEBUG] optional=true baseLens=${lens.getClass.getSimpleName} tail=${tail} -> outLens=${outLens.getClass.getSimpleName}(${outLens.name})")
-          (normVal, outLens)
-        }
-      )
+    if effectiveTail.isEmpty then
+      val finalValue =
+        if (lens.isOptional && !base.isInstanceOf[Option[?]])
+          Some(base)
+        else base
+      // 5. LensDebug log: exit with finalValue and lens
+      val _debugId5 = LensDebug.nextId()
+      LensDebug.log(_debugId5, s"resolveWithLens EXIT (no tail): base lens='${lens.name}', outLens='${lens.name}' (${lens.getClass.getSimpleName}), parent=${lens.parent.map(_.name)}")
+      ZIO.succeed((finalValue, lens))
     else
-      widened.flatMap {
-        case null =>
-          ZIO.fail(DynaLensError(posStr, s"Null encountered for required access"))
-        case None =>
-          val outLens = deriveTerminalLens(lens, tail)
-          if tail.isEmpty then
-            ZIO.succeed((None, outLens))
-          else
-            ZIO.fail(DynaLensError(posStr, s"Required map key missing"))
-        case Some(null) =>
-          ZIO.fail(DynaLensError(posStr, s"Required map value is null"))
-        case Some(None) =>
-          val outLens = deriveTerminalLens(lens, tail)
-          if tail.isEmpty then
-            ZIO.succeed((None, outLens))
-          else
-            ZIO.fail(DynaLensError(posStr, s"Required map key missing"))
-        case Some(v) =>
-          val outLens = deriveTerminalLens(lens, tail)
-          // DEBUG: show lens chaining for required branch
-          // println(s"[GetFn DEBUG] optional=false baseLens=${lens.getClass.getSimpleName} tail=${tail} -> outLens=${outLens.getClass.getSimpleName}(${outLens.name})")
-          ZIO.succeed((v, outLens))
-        case other =>
-          val outLens = deriveTerminalLens(lens, tail)
-          // DEBUG: show lens chaining for required branch (non-option)
-          // println(s"[GetFn DEBUG] optional=false baseLens=${lens.getClass.getSimpleName} tail=${tail} -> outLens=${outLens.getClass.getSimpleName}(${outLens.name})")
-          ZIO.succeed((other, outLens))
-      }
+      val resultZ: ZIO[Any, DynaLensError, Any] =
+        if effectiveTail.isEmpty then ZIO.succeed(base)
+        else lens.get(effectiveTail, base)
+
+      val widened: ZIO[RuntimeEnv, DynaLensError, Any] = resultZ.mapError(e => e)
+
+      // Normalize null / nested Option cases into a clean Option
+      def normalize(v: Any): Any = v match
+        case null            => None
+        case None            => None
+        case Some(null)      => None
+        case Some(None)      => None
+        case Some(v2)        => Some(v2)
+        case other           => Some(other)
+
+      // 3. LensDebug log: before computing rawOutLens
+      val _debugId3 = LensDebug.nextId()
+      LensDebug.log(_debugId3, s"resolveWithLens: computing rawOutLens from base lens='${lens.name}', effectiveTail=$effectiveTail")
+
+      // --- Improved parent linkage: avoid self-parent duplication ---
+      val rawOutLens = deriveTerminalLens(lens, effectiveTail)
+      // 4. LensDebug log: after computing rawOutLens
+      val _debugId4 = LensDebug.nextId()
+      LensDebug.log(_debugId4, s"resolveWithLens: rawOutLens='${rawOutLens.name}' (${rawOutLens.getClass.getSimpleName}), parent=${rawOutLens.parent.map(_.name)}")
+
+      val safeParent = lens match
+        case _: Lens => Some(lens)
+        case _       => None
+      val outLens = rawOutLens match
+        case s: ScalarLens if s.parent.isEmpty && s.name != lens.name =>
+          s.copyWithParent(safeParent)
+        case c: ClassLens if c.parent.isEmpty && c.name != lens.name =>
+          c.copyWithParent(safeParent)
+        case l => l
+      // 4b. LensDebug log: after computing outLens
+      val _debugId4b = LensDebug.nextId()
+      LensDebug.log(_debugId4b, s"resolveWithLens: outLens='${outLens.name}' (${outLens.getClass.getSimpleName}), parent=${outLens.parent.map(_.name)}")
+
+      if isOptional then
+        widened.fold(
+          { _ =>
+            // 5. LensDebug log: exit on optional error
+            val _debugId5 = LensDebug.nextId()
+            LensDebug.log(_debugId5, s"resolveWithLens EXIT (optional/error): base lens='${lens.name}', outLens='${outLens.name}'")
+            (None, outLens)
+          },
+          { raw =>
+            val normVal = normalize(raw)
+            // 5. LensDebug log: exit on optional success
+            val _debugId5 = LensDebug.nextId()
+            LensDebug.log(_debugId5, s"resolveWithLens EXIT (optional/success): base lens='${lens.name}', outLens='${outLens.name}'")
+            (normVal, outLens)
+          }
+        )
+      else
+        widened.flatMap {
+          case null =>
+            ZIO.fail(DynaLensError(posStr, s"Null encountered for required access"))
+          case None =>
+            if tail.isEmpty then
+              // 5. LensDebug log: exit on required/None
+              val _debugId5 = LensDebug.nextId()
+              LensDebug.log(_debugId5, s"resolveWithLens EXIT (required/None): base lens='${lens.name}', outLens='${outLens.name}'")
+              ZIO.succeed((None, outLens))
+            else
+              ZIO.fail(DynaLensError(posStr, s"Required map key missing"))
+          case Some(null) =>
+            ZIO.fail(DynaLensError(posStr, s"Required map value is null"))
+          case Some(None) =>
+            if tail.isEmpty then
+              // 5. LensDebug log: exit on required/Some(None)
+              val _debugId5 = LensDebug.nextId()
+              LensDebug.log(_debugId5, s"resolveWithLens EXIT (required/Some(None)): base lens='${lens.name}', outLens='${outLens.name}'")
+              ZIO.succeed((None, outLens))
+            else
+              ZIO.fail(DynaLensError(posStr, s"Required map key missing"))
+          case Some(v) =>
+            // 5. LensDebug log: exit on required/Some(v)
+            val _debugId5 = LensDebug.nextId()
+            LensDebug.log(_debugId5, s"resolveWithLens EXIT (required/Some(v)): base lens='${lens.name}', outLens='${outLens.name}'")
+            ZIO.succeed((v, outLens))
+          case other =>
+            // 5. LensDebug log: exit on required/other
+            val _debugId5 = LensDebug.nextId()
+            LensDebug.log(_debugId5, s"resolveWithLens EXIT (required/other): base lens='${lens.name}', outLens='${outLens.name}'")
+            ZIO.succeed((other, outLens))
+        }
 
 
 object NoOpFn extends Fn[Any]:
@@ -618,7 +698,7 @@ case class IndexFn(recv: Fn[Any], index: Fn[Any], pos: String) extends Fn[Any] {
 }
 
 
-case object IterThisFn extends Fn[Any]:
+object IterThisFn extends Fn[Any]:
   override val recv: Fn[Any] = RootFn
   override val args: List[Fn[Any]] = Nil
   val resultType: FieldType = ScalarType("<iter-this>", "scala.Any", false)

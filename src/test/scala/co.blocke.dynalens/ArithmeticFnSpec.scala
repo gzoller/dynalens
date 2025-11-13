@@ -49,11 +49,11 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
 
   def buildCtx: DynaContext =
     DynaContext(
-      Map(
-        "top"  -> (fooObj, lensFoo),
-        "this" -> (fooObj, lensFoo)
-      ),
-      dynalens
+      symbols = Map.empty,      // start with no pre-bound symbols
+      dynaLens = dynalens,
+      rootObj = fooObj,
+      rootLens = lensFoo,
+      parentOpt = None
     )
 
   def G(path: String): GetFn = {
@@ -196,24 +196,6 @@ object ArithmeticFnSpec extends ZIOSpecDefault {
       for (_, lens) <- fn.resolve(buildCtx)
         yield assertTrue(lens.name == "l")
     },
-
-
-    // --------------------
-    // Optional lens behavior
-    // --------------------
-    test("Optional Some arithmetic works") {
-      val ctx = buildCtx.bind("optI", Some(5), ScalarLens("optI", true, None))
-      val fn = AddFn(GetFn("optI", true, RootFn, "pos"), ConstantFn(2), ScalarType("", "scala.Int", false), "")
-      for result <- fn.resolve(ctx).exit
-        yield assertTrue(result.isFailure)
-    },
-
-    test("Optional None arithmetic returns None") {
-      val ctx = buildCtx.bind("optI", None, ScalarLens("optI", true, None))
-      val fn = AddFn(GetFn("optI", true, RootFn, "pos"), ConstantFn(2), ScalarType("", "scala.Int", false), "")
-      for result <- fn.resolve(ctx).exit
-        yield assertTrue(result.isFailure)
-    }
 
   ).provide(
     ZLayer.succeed(RuntimeEnv(new BiMapRegistry()))

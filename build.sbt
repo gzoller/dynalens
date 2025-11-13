@@ -37,6 +37,8 @@ dependencyOverrides ++= Seq(
 
 ThisBuild / usePipelining := false
 
+//Test / testOptions += Tests.Argument(TestFrameworks.ZIOTest, "-oI")
+
 //ThisBuild / version := "1.0.0-SNAPSHOT" // <-- Comment this line out for real releases!
 
 ThisBuild / name := "dynalens"

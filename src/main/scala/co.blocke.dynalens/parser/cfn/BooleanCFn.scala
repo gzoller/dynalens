@@ -3,7 +3,7 @@ package parser
 package cfn
 
 import scala.annotation.tailrec
-import co.blocke.dynalens.fn.*
+import fn.*
 
 
 // ---------------------- IF ----------------------
