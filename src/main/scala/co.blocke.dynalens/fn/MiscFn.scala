@@ -705,6 +705,7 @@ object IterThisFn extends Fn[Any]:
   override val methodName: String = "<iter-this>"
   override val posStr: String = "<iter-this>"
   override def rebuild(kids: List[Fn[?]]): Fn[Any] = this
+  override def toString: String = "IterThisFn"
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (Any, Lens)] =
     ctx.get("this") match

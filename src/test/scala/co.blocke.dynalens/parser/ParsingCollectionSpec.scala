@@ -25,16 +25,13 @@ object ParsingCollectionSpec extends ZIOSpecDefault {
       val inst = Wrap(Nil, Map("a" -> 1, "b" -> 2), Nil, Nil)
 
       val expectedResult =
-        """top -> Wrap(List(),Map(a -> 1, b -> 2),List(),List())
-          |ks -> List(a, b)
-          |""".stripMargin
+        """ROOT -> Wrap(List(),Map(a -> 1, b -> 2),List(),List()) [ClassLens:co.blocke.dynalens.parser.ParsingCollectionSpec$.Wrap]
+          |ks         -> List(a, b) [ScalarLens:key]""".stripMargin
 
       for {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
         resultStr = ctx.toString
-        _ <- ZIO.succeed(println("XX---> "+compiled))
-        _ <- ZIO.succeed(println("----1> "+resultStr))
       } yield assertTrue(
         updated == inst,
         resultStr == expectedResult,
@@ -53,9 +50,8 @@ object ParsingCollectionSpec extends ZIOSpecDefault {
 
       val inst = Wrap(Nil, Map("a" -> 1, "b" -> 2), Nil, Nil)
       val expectedResult =
-        """top -> Wrap(List(),Map(a -> 1, b -> 2),List(),List())
-          |vs -> List(1, 2)
-          |""".stripMargin
+        """ROOT -> Wrap(List(),Map(a -> 1, b -> 2),List(),List()) [ClassLens:co.blocke.dynalens.parser.ParsingCollectionSpec$.Wrap]
+          |vs         -> List(1, 2) [ScalarLens:value]""".stripMargin
 
       for {
         compiled <- Script.compile(script, lens)
@@ -79,8 +75,7 @@ object ParsingCollectionSpec extends ZIOSpecDefault {
 
       val inst = Wrap(Nil, Map(), List(1, 3, 2, 5), Nil)
       val expectedResult =
-        """top -> Wrap(List(),Map(),List(3, 5),List())
-          |""".stripMargin
+        """ROOT -> Wrap(List(),Map(),List(3, 5),List()) [ClassLens:co.blocke.dynalens.parser.ParsingCollectionSpec$.Wrap]""".stripMargin
 
       for {
         compiled <- Script.compile(script, lens)
@@ -104,8 +99,7 @@ object ParsingCollectionSpec extends ZIOSpecDefault {
 
       val inst = Wrap(Nil, Map(), List(1, 7, 5, 2, 6, 9), Nil)
       val expectedResult =
-        """top -> Wrap(List(),Map(),List(1, 2),List())
-          |""".stripMargin // actual order not critical; focus on substitution correctness
+        """ROOT -> Wrap(List(),Map(),List(1, 2),List()) [ClassLens:co.blocke.dynalens.parser.ParsingCollectionSpec$.Wrap]""".stripMargin // actual order not critical; focus on substitution correctness
 
       for {
         compiled <- Script.compile(script, lens)
@@ -125,12 +119,11 @@ object ParsingCollectionSpec extends ZIOSpecDefault {
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(nums,ReverseFn(GetFn(nums,false,RootFn,[2,11],Some(ListType(nums,ScalarType(,scala.Int,false),scala.List[Int]))),[2,11]),[2,11],ListType(nums,ScalarType(,scala.Int,false),scala.List[Int]))))"""
+        """BlockStmt(List(UpdateStmt(nums,ReverseFn(GetFn(nums,false,RootFn,[2,10],Some(ListType(nums,ScalarType(nums,scala.Int,false),scala.collection.immutable.List[scala.Int],false))),[2,22]),[2,10],ListType(nums,ScalarType(nums,scala.Int,false),scala.collection.immutable.List[scala.Int],false))))"""
 
       val inst = Wrap(Nil, Map(), List(1,2,3), Nil)
       val expectedResult =
-        """top -> Wrap(List(),Map(),List(3, 2, 1),List())
-          |""".stripMargin
+        """ROOT -> Wrap(List(),Map(),List(3, 2, 1),List()) [ClassLens:co.blocke.dynalens.parser.ParsingCollectionSpec$.Wrap]""".stripMargin
 
       for {
         compiled <- Script.compile(script, lens)
@@ -150,12 +143,11 @@ object ParsingCollectionSpec extends ZIOSpecDefault {
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(nested,CleanFn(GetFn(nested,false,RootFn,[2,12],Some(ListType(nested,ScalarType(nested,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],false))),ListType(nested,ScalarType(nested,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],false),[1,1]),[2,12],ListType(nested,ScalarType(nested,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],false))))"""
+        """BlockStmt(List(UpdateStmt(nested,CleanFn(GetFn(nested,false,RootFn,[2,12],Some(ListType(nested,ScalarType(nested,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],false))),ListType(nested,ScalarType(nested,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],false),[2,24]),[2,12],ListType(nested,ScalarType(nested,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],false))))"""
 
       val inst = Wrap(Nil, Map(), Nil, List(Some(5), None, null, Some(9)))
       val expectedResult =
-        """top -> Wrap(List(),Map(),List(),List(Some(5), Some(9)))
-          |""".stripMargin
+        """ROOT -> Wrap(List(),Map(),List(),List(Some(5), Some(9))) [ClassLens:co.blocke.dynalens.parser.ParsingCollectionSpec$.Wrap]""".stripMargin
 
       for {
         compiled <- Script.compile(script, lens)
@@ -175,14 +167,13 @@ object ParsingCollectionSpec extends ZIOSpecDefault {
           |""".stripMargin
 
       val expectedCompiled =
-        """BlockStmt(List(UpdateStmt(optnums,CleanFn(GetFn(optnums,true,RootFn,[2,13],Some(ListType(optnums,ScalarType(optnums,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],true))),ListType(optnums,ScalarType(optnums,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],false),[1,1]),[2,13],ListType(optnums,ScalarType(optnums,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],true))))"""
+        """BlockStmt(List(UpdateStmt(optnums,CleanFn(GetFn(optnums,true,RootFn,[2,13],Some(ListType(optnums,ScalarType(optnums,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],true))),ListType(optnums,ScalarType(optnums,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],false),[2,26]),[2,13],ListType(optnums,ScalarType(optnums,scala.Int,true),scala.collection.immutable.List[scala.Option[scala.Int]],true))))"""
 
       case class WrapOpt(list: List[Any], map: Map[String,Int], nums: List[Int], optnums: Option[List[Option[Int]]])
       val inst = WrapOpt(Nil, Map(), Nil, Some(List(Some(5), None, null, Some(9))))
       val lens = into[WrapOpt]
       val expectedResult =
-        """top -> WrapOpt(List(),Map(),List(),Some(List(Some(5), Some(9))))
-          |""".stripMargin
+        """ROOT -> WrapOpt(List(),Map(),List(),Some(List(Some(5), Some(9)))) [ClassLens:co.blocke.dynalens.parser.ParsingCollectionSpec$._$WrapOpt]""".stripMargin
 
       for {
         compiled <- Script.compile(script, lens)

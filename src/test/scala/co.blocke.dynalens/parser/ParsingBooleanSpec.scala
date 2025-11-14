@@ -58,8 +58,6 @@ object ParsingBooleanSpec extends ZIOSpecDefault {
         compiled <- Script.compile(script, lens)
         (updated, ctx) <- lens.run(compiled, inst)
         resultStr = ctx.toString
-        _ <- ZIO.succeed(println("XX---> "+compiled))
-        _ <- ZIO.succeed(println("----1> "+resultStr))
       } yield assertTrue(resultStr == expectedResult, compiled.toString == expectedCompiled)
     },
 

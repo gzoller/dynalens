@@ -360,7 +360,10 @@ case class ReverseFn(recv: Fn[Any], posStr: String)
       recv = kids.head.asInstanceOf[Fn[Any]],
       posStr = posStr
     )
-  val resultType: FieldType = ListType("", ScalarType("", "scala.Any", false), "scala.List[Any]")
+  override val resultType: FieldType =
+    recv.resultType match
+      case l: ListType => l.copy(isOptional = false)
+      case other       => other
 
   def resolve(ctx: DynaContext): ZIO[RuntimeEnv, DynaLensError, (List[Any], Lens)] =
     recv.resolve(ctx).flatMap {

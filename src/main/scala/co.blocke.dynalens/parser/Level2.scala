@@ -68,20 +68,19 @@ trait Level2 extends Level1 with ValueExprModule:
               Left(e.copy(posStr = ctx.posStrFrom(off)))
     }
 
-  /** booleanExpr := booleanAnd ('||' booleanAnd)* */
+  /** booleanExpr := booleanAnd ('||' booleanAnd)+ */
   def booleanExpr[$: P](using ctx: ExprContext): P[ParseBoolResult] =
-    P(Index ~ booleanAnd.rep(sep = WS0 ~ "||" ~ WS0)).map { (off,terms) =>
+    P(Index ~ booleanAnd ~ (WS0 ~ "||" ~ WS0 ~ booleanAnd).rep).map { (off, head, tail) =>
       given ExprContext = ctx.copy(pos = off)
+      val terms = head :: tail.toList
       if terms.isEmpty then Left(DLCompileError(ctx.posStr, "Empty boolean expression"))
       else {
-        val oks = terms.collect { case Right(fn) => fn }
-        if oks.isEmpty then terms.head
-        else if oks.size == 1 then Right(oks.head.asInstanceOf[BooleanFn])
-        else {
+        val oks = terms.collect { case Right(fn: BooleanFn) => fn }
+        val combined = {
           val lhs = oks.head.asInstanceOf[Fn[Any]]
           val rhs = oks.tail.map(_.asInstanceOf[Fn[Any]])
           // build OR chain left-associatively
-          val combined = rhs.foldLeft[Either[DLCompileError, BooleanFn]](Right(lhs.asInstanceOf[BooleanFn])) {
+          rhs.foldLeft[Either[DLCompileError, BooleanFn]](Right(lhs.asInstanceOf[BooleanFn])) {
             case (Left(e), _) => Left(e)
             case (Right(acc), next) =>
               COrFn
@@ -90,25 +89,31 @@ trait Level2 extends Level1 with ValueExprModule:
                   COrFn.validate(built).map(_ => built.asInstanceOf[BooleanFn])
                 }
           }
-          combined
         }
+        if oks.isEmpty then
+          terms.head match
+            case Left(e) => Left(e)
+            case Right(b) => Right(b.asInstanceOf[BooleanFn])
+        else if oks.size == 1 then
+          Right(oks.head.asInstanceOf[BooleanFn])
+        else
+          combined
       }
     }
 
-  /** booleanAnd := booleanNot ('&&' booleanNot)* */
+  /** booleanAnd := booleanNot ('&&' booleanNot)+ */
   private def booleanAnd[$: P](using ctx: ExprContext): P[ParseBoolResult] =
-    P(Index ~ booleanNot.rep(sep = WS0 ~ "&&" ~ WS0)).map { (off,terms) =>
+    P(Index ~ booleanNot ~ (WS0 ~ "&&" ~ WS0 ~ booleanNot).rep).map { (off, head, tail) =>
       given ExprContext = ctx.copy(pos = off)
+      val terms = head :: tail.toList
       if terms.isEmpty then Left(DLCompileError(ctx.posStr, "Empty boolean expression"))
       else {
-        val oks = terms.collect { case Right(fn) => fn }
-        if oks.isEmpty then terms.head
-        else if oks.size == 1 then Right(oks.head.asInstanceOf[BooleanFn])
-        else {
+        val oks = terms.collect { case Right(fn: BooleanFn) => fn }
+        val combined = {
           val lhs = oks.head.asInstanceOf[Fn[Any]]
           val rhs = oks.tail.map(_.asInstanceOf[Fn[Any]])
           // build AND chain left-associatively so each build has one rhs
-          val combined = rhs.foldLeft[Either[DLCompileError, BooleanFn]](Right(lhs.asInstanceOf[BooleanFn])) {
+          rhs.foldLeft[Either[DLCompileError, BooleanFn]](Right(lhs.asInstanceOf[BooleanFn])) {
             case (Left(e), _) => Left(e)
             case (Right(acc), next) =>
               CAndFn
@@ -117,8 +122,15 @@ trait Level2 extends Level1 with ValueExprModule:
                   CAndFn.validate(built).map(_ => built.asInstanceOf[BooleanFn])
                 }
           }
-          combined
         }
+        if oks.isEmpty then
+          terms.head match
+            case Left(e) => Left(e)
+            case Right(b) => Right(b.asInstanceOf[BooleanFn])
+        else if oks.size == 1 then
+          Right(oks.head.asInstanceOf[BooleanFn])
+        else
+          combined
       }
     }
 
@@ -177,13 +189,11 @@ trait Level2 extends Level1 with ValueExprModule:
 
   // arithmeticExpr := arithmeticTerm (('+'|'-') arithmeticTerm)*
   private def arithmeticExpr[$: P](using ctx: ExprContext): P[ParseFnResult] =
-    P(Index ~ arithmeticTerm ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticTerm).rep ~
-      (WS0 ~ StringIn("==", "!=", ">=", "<=", ">", "<").! ~ WS0 ~ arithmeticTerm).?).map {
-      case (off, first, addSubs, maybeComp) =>
+    P(Index ~ arithmeticTerm ~ (WS0 ~ CharIn("+\\-").! ~ WS0 ~ arithmeticTerm).rep).map {
+      case (off, first, addSubs) =>
         given ExprContext = ctx.copy(pos = off)
 
-        // Fold any + or - first (normal arithmetic chain)
-        val sumExpr: ParseFnResult = addSubs.foldLeft(first) {
+        addSubs.foldLeft(first) {
           case (Left(e), _) => Left(e)
           case (Right(acc), (op, rightE)) =>
             rightE.flatMap { r =>
@@ -193,29 +203,11 @@ trait Level2 extends Level1 with ValueExprModule:
               val recvType = Utility.rhsType(acc) match
                 case TypeResult.Known(ft) => ft
                 case _                    => ScalarType("", "scala.Any")
-              cfn.build(NamedReceiver(op, recvType, acc), List(r))
+              cfn
+                .build(NamedReceiver(op, recvType, acc), List(r))
                 .flatMap(fn => cfn.validate(fn)(using ctx).map(_ => fn))
             }
         }
-
-        // Then, if a comparison follows (>, <, ==, etc.), build that BooleanFn
-        maybeComp match
-          case None => sumExpr
-          case Some((op, rhsExpr)) =>
-            (sumExpr, rhsExpr) match
-              case (Right(lhsFn), Right(rhsFn)) =>
-                val cfn: CompileFn = op match
-                  case ">"  => CGreaterThanFn
-                  case ">=" => CGreaterThanOrEqualFn
-                  case "<"  => CLessThanFn
-                  case "<=" => CLessThanOrEqualFn
-                  case "==" => CEqualFn
-                  case "!=" => CNotEqualFn
-                cfn
-                  .build(NamedReceiver(op, ScalarType("", "scala.Boolean"), lhsFn), List(rhsFn))
-                  .flatMap(fn => cfn.validate(fn)(using ctx).map(_ => fn))
-              case (Left(err), _) => Left(err)
-              case (_, Left(err)) => Left(err)
     }
 
   // Utility for 'this' enforcement in arithmetic
@@ -396,12 +388,14 @@ trait Level2 extends Level1 with ValueExprModule:
       ifFn |
         blockFn |
         mapExpr |
-        consExpr | // arithmetic, path, etc.
+        consExpr |
+//        comparisonExpr |
+        booleanExpr |
         primaryExpr |
-        booleanExpr
+        arithmeticExpr
     ).flatMap {
-      case Left(err) => P(Pass.map(_ => Left(err)))
-      case Right(base) => maybeCaseTail(base.asInstanceOf[Fn[Any]])
+      case Left(err)       => P(Pass.map(_ => Left(err)))
+      case Right(base)     => maybeCaseTail(base.asInstanceOf[Fn[Any]])
     }
 
   def statementSeq[$: P](using ctx0: ExprContext): P[List[ParseStmtResult]] = {
