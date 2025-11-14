@@ -38,19 +38,6 @@ final case class ClassLens(
                             _update: (String, Any, Any) => ZIO[Any, DynaLensError, Any],
                             schema: ClassType
                           ) extends Lens:
-
-  println(
-    s"""[BUILD_TRACE ClassLens ${name}]
-       |  parent=${parent.map(_.name)}
-       |  fields:
-       |    ${
-      fields.map { case (k, v) =>
-        s"$k -> (lens=${v.getClass.getSimpleName}, parent=${v.parent.map(_.name)})"
-      }.mkString("\n    ")
-    }
-       |""".stripMargin
-  )
-
   def copyWithParent(newParent: Option[Lens]): Lens =
     this.copy(parent = newParent)
 

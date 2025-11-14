@@ -32,7 +32,6 @@ object ComparisonFnSpec extends ZIOSpecDefault:
     )
 
   override def spec = suite("ComparisonFnSpec")(
-    /*
     suite("Basic comparisons")(
       test("< Int < Int") {
         val ctx = buildCtx("x" -> 5, "y" -> 10)
@@ -146,7 +145,6 @@ object ComparisonFnSpec extends ZIOSpecDefault:
     ).provide(
       ZLayer.succeed(RuntimeEnv(new BiMapRegistry()))
     ) @@ziotestkit,
-    */
 
     suite("Lens propagation")(
       test("Lens from recv is returned") {
@@ -192,7 +190,7 @@ object ComparisonFnSpec extends ZIOSpecDefault:
             case _ =>
               assertTrue(false)
         }
-      } @@only,
+      },
 
       test("Lens from recv via GetFn resolves") {
         val ctx = DynaContext(

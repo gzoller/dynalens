@@ -22,9 +22,8 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
         """BlockStmt(List(ValStmt(z,AddFn(ConstantFn(2),ConstantFn(3),ScalarType(,scala.Int,false),[2,11]))))"""
 
       val expectedResult =
-        """top -> Item(5,10,2)
-          |z -> 5
-          |""".stripMargin
+        """ROOT -> Item(5,10,2) [ClassLens:co.blocke.dynalens.parser.ParsingArithmeticSpec$.Item]
+          |z          -> 5 [ScalarLens:<const>]""".stripMargin
 
       val inst = Item(5, 10, 2)
       val lens = into[Item]
@@ -50,9 +49,8 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
         """BlockStmt(List(ValStmt(x,SubtractFn(AddFn(ConstantFn(10),ConstantFn(5),ScalarType(,scala.Int,false),[2,11]),ConstantFn(3),ScalarType(,scala.Int,false),[2,11]))))"""
 
       val expectedResult =
-        """top -> Item(1,2,3)
-          |x -> 12
-          |""".stripMargin
+        """ROOT -> Item(1,2,3) [ClassLens:co.blocke.dynalens.parser.ParsingArithmeticSpec$.Item]
+          |x          -> 12 [ScalarLens:<const>]""".stripMargin
 
       val inst = Item(1, 2, 3)
       val lens = into[Item]
@@ -79,9 +77,8 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
         """BlockStmt(List(ValStmt(a,DivideFn(MultiplyFn(ConstantFn(8),ConstantFn(2),ScalarType(,scala.Int,false),[2,11]),ConstantFn(4),ScalarType(,scala.Double,false),[2,11])), UpdateStmt(qty,GetFn(a,false,RootFn,[3,9],Some(ScalarType(a,scala.Double,false))),[3,9],ScalarType(qty,scala.Int,false))))"""
 
       val expectedResult =
-        """top -> Item(4,5,1)
-          |a -> 4.0
-          |""".stripMargin
+        """ROOT -> Item(4,5,1) [ClassLens:co.blocke.dynalens.parser.ParsingArithmeticSpec$.Item]
+          |a          -> 4.0 [ScalarLens:<const>]""".stripMargin
 
       val inst = Item(19, 5, 1)
       val lens = into[Item]
@@ -107,9 +104,8 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
         """BlockStmt(List(ValStmt(n,MultiplyFn(AddFn(ConstantFn(2),ConstantFn(3),ScalarType(,scala.Int,false),[2,12]),ConstantFn(4),ScalarType(,scala.Int,false),[2,11]))))"""
 
       val expectedResult =
-        """top -> Item(0,0,0)
-          |n -> 20
-          |""".stripMargin
+        """ROOT -> Item(0,0,0) [ClassLens:co.blocke.dynalens.parser.ParsingArithmeticSpec$.Item]
+          |n          -> 20 [ScalarLens:<const>]""".stripMargin
 
       val inst = Item(0, 0, 0)
       val lens = into[Item]
@@ -135,9 +131,8 @@ object ParsingArithmeticSpec extends ZIOSpecDefault {
         """BlockStmt(List(ValStmt(total,AddFn(MultiplyFn(GetFn(qty,false,RootFn,[2,15],Some(ScalarType(qty,scala.Int,false))),GetFn(price,false,RootFn,[2,21],Some(ScalarType(price,scala.Int,false))),ScalarType(,scala.Int,false),[2,15]),GetFn(tax,false,RootFn,[2,29],Some(ScalarType(tax,scala.Int,false))),ScalarType(,scala.Int,false),[2,15]))))"""
 
       val expectedResult =
-        """top -> Item(2,5,3)
-          |total -> 13
-          |""".stripMargin
+        """ROOT -> Item(2,5,3) [ClassLens:co.blocke.dynalens.parser.ParsingArithmeticSpec$.Item]
+          |total      -> 13 [ScalarLens:qty]""".stripMargin
 
       val inst = Item(2, 5, 3)
       val lens = into[Item]

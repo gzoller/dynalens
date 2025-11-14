@@ -22,9 +22,9 @@ object ParsingSmokeSpec extends ZIOSpecDefault {
         """BlockStmt(List(ValStmt(x,ConstantFn(42)), ValStmt(y,AddFn(GetFn(x,false,RootFn,[3,11],Some(ScalarType(x,scala.Int,false))),ConstantFn(8),ScalarType(,scala.Int,false),[3,11]))))"""
 
       val expectedResult =
-        """top -> Item(abc,2,5)
-          |x -> 42
-          |y -> 50""".stripMargin + "\n"
+        """ROOT -> Item(abc,2,5) [ClassLens:co.blocke.dynalens.parser.Item]
+          |x          -> 42 [ScalarLens:<const>]
+          |y          -> 50 [ScalarLens:<const>]""".stripMargin
 
       val inst = Item("abc", 2, 5)
       val lens = into[Item]
@@ -50,8 +50,7 @@ object ParsingSmokeSpec extends ZIOSpecDefault {
         """BlockStmt(List(UpdateStmt(num,MultiplyFn(GetFn(num,false,RootFn,[2,9],Some(ScalarType(num,scala.Int,false))),ConstantFn(2),ScalarType(,scala.Int,false),[2,9]),[2,9],ScalarType(num,scala.Int,false))))"""
 
       val expectedResult =
-        """top -> Item(abc,2,10)
-          |""".stripMargin
+        """ROOT -> Item(abc,2,10) [ClassLens:co.blocke.dynalens.parser.Item]"""
 
       val inst = Item("abc", 2, 5)
       val lens = into[Item]

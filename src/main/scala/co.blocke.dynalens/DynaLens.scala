@@ -89,13 +89,18 @@ object DynaLens:
     Expr.ofList(pairs)
 
   /** Returns (classLens, registryPairs) where registryPairs is a List[(String, Lens)] keyed by class type name */
-  private def buildClassLensAndRegistry(cls: ScalaClassRef[?], parent: Option[Expr[Lens]])(using Quotes): (Expr[ClassLens], Expr[List[(String, Lens)]]) =
+  private def buildClassLensAndRegistry(
+                                         cls: ScalaClassRef[?],
+                                         parent: Option[Expr[Lens]],
+                                         lensName: Option[String] = None
+                                       )(using Quotes): (Expr[ClassLens], Expr[List[(String, Lens)]]) =
+//  private def buildClassLensAndRegistry(cls: ScalaClassRef[?], parent: Option[Expr[Lens]])(using Quotes): (Expr[ClassLens], Expr[List[(String, Lens)]]) =
 
     // Macro-generated _get / _update
     val getFn = generateGetLambdaForRef(cls)
     val updFn = generateUpdateLambdaForRef(cls)
 
-    val nameExpr = Expr(cls.typedName.toString)
+    val nameExpr = Expr(lensName.getOrElse(cls.typedName.toString))
     val parentOptExpr = parent.map(p => '{ Some($p) }).getOrElse('{ None })
 
     // Build ClassLens with a lazy self, so we can refer to `self` as the owner
@@ -191,10 +196,8 @@ object DynaLens:
             '{ EnumLens(name = ${Expr(fieldName)}, isOptional = true, enumClassName = $enumNameExpr, parent = None) }
           case scr: ScalaClassRef[?] if scr.isCaseClass =>
             // Build the child class lens without parent; attachParent will wire it later
-            val (child, _) = buildClassLensAndRegistry(scr, parent = None)
-            // Optional class field is represented as a class lens with isOptional=true
-            '{ $child.copy(isOptional = true) }
-
+            val (child, _) = buildClassLensAndRegistry(scr, parent = None, lensName = Some(fieldName))
+              '{ $child.copy(isOptional = true) }
           case _ =>
             // Optional scalar
             scalar(fieldName, isOpt = true)
@@ -221,7 +224,7 @@ object DynaLens:
 
       // ----- Direct case class -----
       case scr: ScalaClassRef[?] if scr.isCaseClass =>
-        val (child, _) = buildClassLensAndRegistry(scr, parent = None)
+        val (child, _) = buildClassLensAndRegistry(scr, parent = None, lensName = Some(fieldName))
         child
 
       // ----- Enum -----
@@ -238,7 +241,7 @@ object DynaLens:
 
     ref match
       case scr: ScalaClassRef[?] if scr.isCaseClass =>
-        val (child, _) = buildClassLensAndRegistry(scr, parent = None)
+        val (child, _) = buildClassLensAndRegistry(scr, parent = None, lensName = Some("element"))
         child
       case s: SeqRef[?] =>
         val el = lensForElement(s.elementRef, parent = None)
@@ -257,7 +260,7 @@ object DynaLens:
       case o: OptionRef[?] =>
         o.optionParamType match
           case scr: ScalaClassRef[?] if scr.isCaseClass =>
-            val (child, _) = buildClassLensAndRegistry(scr, parent = None)
+            val (child, _) = buildClassLensAndRegistry(scr, parent = None, lensName = Some("element"))
             '{ $child.copy(isOptional = true) }
           case s: SeqRef[?] =>
             val el = lensForElement(s.elementRef, parent = None)
